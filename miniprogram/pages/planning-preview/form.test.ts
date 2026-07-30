@@ -100,4 +100,33 @@ describe('planning preview form submission', () => {
       }
     }]);
   });
+
+  it('submits an explicit no-training choice without a training payload', async () => {
+    const { caller, requests } = recordingCaller();
+    const result = await submitPlanningForm({
+      ...emptyForm,
+      ageYears: '30',
+      heightCm: '175',
+      weightKg: '70',
+      sexCode: '0',
+      activityIndex: 1,
+      goalIndex: 1,
+      trainingIndex: 1,
+      healthScopeConfirmed: true
+    }, caller);
+
+    expect(result.kind).toBe('response');
+    expect(requests).toEqual([{
+      action: 'previewDailyEnergy',
+      payload: {
+        ageYears: 30,
+        sexCode: 0,
+        heightCm: 175,
+        weightKg: 70,
+        healthScopeConfirmed: true,
+        nonTrainingActivity: 'light',
+        goal: 'maintain'
+      }
+    }]);
+  });
 });
