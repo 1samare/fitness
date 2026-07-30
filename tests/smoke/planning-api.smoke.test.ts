@@ -1,27 +1,63 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { planningApiResponseSchema } from '../../packages/contracts/src/planning-api';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const endpoint = 'http://127.0.0.1:3131/';
+const planningApiRoot = path.join(repositoryRoot, 'cloudfunctions', 'planning-api');
+const frameworkCli = path.join(
+  planningApiRoot,
+  'node_modules',
+  '@cloudbase',
+  'functions-framework',
+  'bin',
+  'tcb-ff.js'
+);
+let endpoint = '';
+let port = 0;
 let service: ChildProcessWithoutNullStreams | undefined;
 let output = '';
+let spawnError: Error | undefined;
 
-function startService(): ChildProcessWithoutNullStreams {
-  const environment = { ...process.env, PORT: '3131' };
-  const child = process.platform === 'win32'
-    ? spawn(process.env.ComSpec ?? 'cmd.exe', [
-        '/d', '/s', '/c', 'pnpm.cmd', '--filter', '@fitness/planning-api', 'start:local'
-      ], { cwd: repositoryRoot, env: environment, shell: false, windowsHide: true })
-    : spawn('pnpm', ['--filter', '@fitness/planning-api', 'start:local'], {
-        cwd: repositoryRoot,
-        env: environment,
-        shell: false
-      });
+async function reserveAvailablePort(): Promise<number> {
+  const listener = createServer();
+  await new Promise<void>((resolve, reject) => {
+    listener.once('error', reject);
+    listener.listen(0, '127.0.0.1', resolve);
+  });
+  const address = listener.address();
+  if (address === null || typeof address === 'string') {
+    listener.close();
+    throw new Error('Could not allocate a local TCP port.');
+  }
+  await new Promise<void>((resolve, reject) => {
+    listener.close((error) => {
+      if (error === undefined) resolve();
+      else reject(error);
+    });
+  });
+  return address.port;
+}
+
+function startService(servicePort: number): ChildProcessWithoutNullStreams {
+  const environment = { ...process.env, PORT: String(servicePort) };
+  const child = spawn(process.execPath, [
+    frameworkCli,
+    '--source=dist/index.js',
+    '--target=main',
+    '--logEventContext=false',
+    '--logHeaderBody=false'
+  ], {
+    cwd: planningApiRoot,
+    env: environment,
+    shell: false,
+    windowsHide: true
+  });
   child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString('utf8'); });
   child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString('utf8'); });
+  child.once('error', (error) => { spawnError = error; });
   return child;
 }
 
@@ -37,37 +73,83 @@ async function call(request: unknown): Promise<unknown> {
 
 async function waitUntilHealthy(): Promise<void> {
   const deadline = Date.now() + 15_000;
+  const readinessMarker = `Server listening on port ${String(port)},`;
   while (Date.now() < deadline) {
+    if (spawnError !== undefined) {
+      throw new Error(`planning-api could not be started: ${spawnError.message}\n${output}`);
+    }
     if (service?.exitCode !== null && service?.exitCode !== undefined) {
       throw new Error(`planning-api exited before readiness\n${output}`);
     }
-    try {
-      const response = planningApiResponseSchema.parse(await call({ action: 'health' }));
-      if (response.success && response.data.kind === 'health') return;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 200));
+    if (output.includes(readinessMarker)) {
+      try {
+        const response = planningApiResponseSchema.parse(await call({ action: 'health' }));
+        if (response.success && response.data.kind === 'health') return;
+      } catch {
+        // The child announced readiness; allow the socket a short time to accept requests.
+      }
     }
+    await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error(`planning-api did not become healthy\n${output}`);
+  throw new Error(`planning-api did not report its own readiness and become healthy\n${output}`);
 }
 
-function stopService(): void {
-  if (service?.pid === undefined || service.exitCode !== null) return;
-  if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/pid', String(service.pid), '/t', '/f'], { windowsHide: true });
-  } else {
-    service.kill('SIGTERM');
+async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null) return;
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error('planning-api did not exit after termination.'));
+    }, 5_000);
+    const onClose = (): void => {
+      clearTimeout(timeout);
+      resolve();
+    };
+    child.once('close', onClose);
+    if (child.exitCode !== null) {
+      child.off('close', onClose);
+      onClose();
+    }
+  });
+}
+
+async function confirmPortReleased(servicePort: number): Promise<void> {
+  const listener = createServer();
+  await new Promise<void>((resolve, reject) => {
+    listener.once('error', (error) => {
+      reject(new Error(`planning-api port ${String(servicePort)} was not released: ${error.message}`));
+    });
+    listener.listen(servicePort, '127.0.0.1', resolve);
+  });
+  await new Promise<void>((resolve, reject) => {
+    listener.close((error) => {
+      if (error === undefined) resolve();
+      else reject(error);
+    });
+  });
+}
+
+async function stopService(): Promise<void> {
+  const child = service;
+  if (child?.pid !== undefined && child.exitCode === null) {
+    const exitPromise = waitForExit(child);
+    if (!child.kill('SIGTERM')) {
+      throw new Error('Failed to terminate planning-api process.');
+    }
+    await exitPromise;
   }
+  if (port !== 0) await confirmPortReleased(port);
 }
 
 describe('local planning API process', () => {
   beforeAll(async () => {
-    service = startService();
+    port = await reserveAvailablePort();
+    endpoint = `http://127.0.0.1:${String(port)}/`;
+    service = startService(port);
     await waitUntilHealthy();
   });
 
-  afterAll(() => {
-    stopService();
+  afterAll(async () => {
+    await stopService();
   });
 
   it('serves health, supported, and unsupported scenarios', async () => {

@@ -80,4 +80,10 @@ describe('calculateDailyEnergy', () => {
     }));
     expect(result).not.toHaveProperty('targetEnergyKcal');
   });
+
+  it('uses raw BMI for eligibility even when display BMI rounds to 24.00', () => {
+    const result = calculateDailyEnergy({ ...base, heightCm: 200, weightKg: 95.9996 });
+    expect(result.kind).toBe('supported');
+    if (result.kind === 'supported') expect(result.bmi).toBe(24);
+  });
 });

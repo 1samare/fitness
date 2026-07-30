@@ -1,5 +1,6 @@
-import type { PlanningApiResponse, PlanningApiRequest } from '@fitness/contracts';
+import type { PlanningApiResponse } from '@fitness/contracts';
 import { planningApiClient } from '../../services/planning-api';
+import { submitPlanningForm, type PlanningFormInput } from './form';
 
 type SuccessData = Extract<PlanningApiResponse, { success: true }>['data'];
 type SupportedResult = Extract<SuccessData, { kind: 'supported' }>;
@@ -8,22 +9,10 @@ type UnsupportedResult = Extract<SuccessData, { kind: 'unsupported' }>;
 interface TextValueEvent { readonly detail: { readonly value: string } }
 interface SwitchValueEvent { readonly detail: { readonly value: boolean } }
 
-const activityValues = ['light', 'moderate', 'heavy'] as const;
-const goalValues = ['maintain', 'fat_loss', 'muscle_gain'] as const;
-
-interface PageData {
-  ageYears: string;
-  heightCm: string;
-  weightKg: string;
-  durationMinutes: string;
-  sexCode: '0' | '1';
-  activityIndex: number;
+interface PageData extends PlanningFormInput {
   activityLabels: readonly string[];
-  goalIndex: number;
   goalLabels: readonly string[];
-  trainingIndex: number;
   trainingLabels: readonly string[];
-  healthScopeConfirmed: boolean;
   loading: boolean;
   supportedResult: SupportedResult | null;
   supportedSourceText: string;
@@ -61,17 +50,17 @@ function pickerIndex(value: string, length: number): number {
 
 Page<PageData, PageActions>({
   data: {
-    ageYears: '30',
-    heightCm: '175',
-    weightKg: '70',
-    durationMinutes: '60',
-    sexCode: '0',
+    ageYears: '',
+    heightCm: '',
+    weightKg: '',
+    durationMinutes: '',
+    sexCode: '',
     activityIndex: 0,
-    activityLabels: ['轻：久坐工作，少量通勤家务', '中：较多走动或体力家务', '重：持续体力工作'],
+    activityLabels: ['请选择', '轻：久坐工作，少量通勤家务', '中：较多走动或体力家务', '重：持续体力工作'],
     goalIndex: 0,
-    goalLabels: ['维持', '减脂', '增肌'],
+    goalLabels: ['请选择', '维持', '减脂', '增肌'],
     trainingIndex: 0,
-    trainingLabels: ['无计划训练', '多动作抗阻训练（会话 02054）'],
+    trainingLabels: ['请选择', '无计划训练', '多动作抗阻训练（会话 02054）'],
     healthScopeConfirmed: false,
     loading: false,
     supportedResult: null,
@@ -84,15 +73,20 @@ Page<PageData, PageActions>({
   onHeightInput(event) { this.setData({ heightCm: event.detail.value }); },
   onWeightInput(event) { this.setData({ weightKg: event.detail.value }); },
   onDurationInput(event) { this.setData({ durationMinutes: event.detail.value }); },
-  onSexChange(event) { this.setData({ sexCode: event.detail.value === '1' ? '1' : '0' }); },
+  onSexChange(event) {
+    const sexCode = event.detail.value === '0' || event.detail.value === '1'
+      ? event.detail.value
+      : '';
+    this.setData({ sexCode });
+  },
   onActivityChange(event) {
-    this.setData({ activityIndex: pickerIndex(event.detail.value, activityValues.length) });
+    this.setData({ activityIndex: pickerIndex(event.detail.value, this.data.activityLabels.length) });
   },
   onGoalChange(event) {
-    this.setData({ goalIndex: pickerIndex(event.detail.value, goalValues.length) });
+    this.setData({ goalIndex: pickerIndex(event.detail.value, this.data.goalLabels.length) });
   },
   onTrainingChange(event) {
-    this.setData({ trainingIndex: pickerIndex(event.detail.value, 2) });
+    this.setData({ trainingIndex: pickerIndex(event.detail.value, this.data.trainingLabels.length) });
   },
   onHealthScopeChange(event) { this.setData({ healthScopeConfirmed: event.detail.value }); },
   async onSubmit() {
@@ -104,26 +98,13 @@ Page<PageData, PageActions>({
       unsupportedReasonText: '',
       errorMessage: ''
     });
-    const activity = activityValues[this.data.activityIndex] ?? 'light';
-    const goal = goalValues[this.data.goalIndex] ?? 'maintain';
-    const training = this.data.trainingIndex === 1
-      ? { sessionCode: '02054', durationMinutes: Number(this.data.durationMinutes) }
-      : undefined;
-    const request: PlanningApiRequest = {
-      action: 'previewDailyEnergy',
-      payload: {
-        ageYears: Number(this.data.ageYears),
-        sexCode: this.data.sexCode === '0' ? 0 : 1,
-        heightCm: Number(this.data.heightCm),
-        weightKg: Number(this.data.weightKg),
-        healthScopeConfirmed: this.data.healthScopeConfirmed,
-        nonTrainingActivity: activity,
-        goal,
-        ...(training === undefined ? {} : { training })
-      }
-    };
     try {
-      const response = await planningApiClient.call(request);
+      const submission = await submitPlanningForm(this.data, planningApiClient);
+      if (submission.kind === 'invalid') {
+        this.setData({ errorMessage: submission.message });
+        return;
+      }
+      const response = submission.response;
       if (!response.success) {
         this.setData({ errorMessage: response.error.message });
       } else if (response.data.kind === 'supported') {

@@ -52,14 +52,19 @@ const healthDataSchema = z.object({
   policyVersion: z.literal('calculation-policy-v2')
 }).strict();
 
+const supportedBmiSchema = z.number().min(18.5).max(24);
+const unsupportedBmiSchema = z.number().positive().max(300);
+const positiveKcalSchema = z.number().int().positive();
+const nonNegativeKcalSchema = z.number().int().nonnegative();
+
 const supportedDataSchema = z.object({
   kind: z.literal('supported'),
-  bmi: z.number(),
-  estimatedBmrKcal: z.number(),
-  nonTrainingBaselineKcal: z.number(),
-  trainingNetKcal: z.number(),
-  estimatedMaintenanceKcal: z.number(),
-  targetEnergyKcal: z.number(),
+  bmi: supportedBmiSchema,
+  estimatedBmrKcal: positiveKcalSchema,
+  nonTrainingBaselineKcal: positiveKcalSchema,
+  trainingNetKcal: nonNegativeKcalSchema,
+  estimatedMaintenanceKcal: positiveKcalSchema,
+  targetEnergyKcal: positiveKcalSchema,
   policy: policyMetadataSchema,
   disclaimer: z.string().min(1)
 }).strict();
@@ -68,7 +73,7 @@ const unsupportedDataSchema = z.object({
   kind: z.literal('unsupported'),
   code: z.literal('unsupported_for_personalized_energy'),
   reasons: z.array(unsupportedReasonSchema).min(1),
-  bmi: z.number(),
+  bmi: unsupportedBmiSchema,
   policy: policyMetadataSchema
 }).strict();
 

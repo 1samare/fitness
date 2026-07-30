@@ -12,6 +12,8 @@ describe('reviewed MET dataset', () => {
       {
         code: '02054',
         met: 3.5,
+        originalUnit: 'MET',
+        activityCategory: 'conditioning_exercise',
         description: 'Resistance (weight) training, multiple exercises, 8-15 reps at varied resistance'
       }
     ]);

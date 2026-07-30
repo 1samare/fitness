@@ -1656,7 +1656,9 @@ Expected: FAIL with a connection error, proving the smoke test depends on a real
 
 - [x] **Step 3: Replace the RED test with the complete process lifecycle and assertions**
 
-Replace `tests/smoke/planning-api.smoke.test.ts` with:
+Review correction: the final harness allocates an ephemeral loopback port, launches the `tcb-ff.js` entry point as its direct child, waits for that child's own readiness marker before making HTTP assertions, terminates only that direct child, waits for its exit, and re-binds the same port to prove cleanup. The fixed-port/process-tree sketch below is retained only as the original implementation outline and is superseded by `tests/smoke/planning-api.smoke.test.ts`.
+
+Original implementation outline (superseded by the review correction above):
 
 ```ts
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -1778,7 +1780,7 @@ describe('local planning API process', () => {
 });
 ```
 
-This helper records exactly one child PID, never enumerates processes, retries readiness for at most 15 seconds, includes buffered output on startup failure, and terminates only its own process tree.
+The final helper records exactly one direct child PID, never enumerates processes, retries readiness for at most 15 seconds, includes buffered output on startup failure, and verifies that its dynamic port is released.
 
 - [x] **Step 4: Verify GREEN and repeatability**
 
@@ -1789,7 +1791,7 @@ pnpm.cmd smoke:api
 pnpm.cmd smoke:api
 ```
 
-Expected: both runs exit `0`; port `3131` is released between runs; the supported and unsupported assertions pass.
+Expected: both runs exit `0`; each dynamically allocated port is released; the supported and unsupported assertions pass.
 
 - [x] **Step 5: Commit the smoke harness**
 
@@ -2395,10 +2397,10 @@ git commit -m "feat: add local planning mini program"
 
 - [x] **Step 1: Update README status and local-run instructions**
 
-Change the status line to:
+Set the status line to accurately distinguish automated implementation from manual IDE acceptance:
 
 ```markdown
-> 项目状态：第一阶段本地纵向切片可运行  
+> 项目状态：第一阶段本地纵向切片已实现；微信开发者工具交互待人工验收
 ```
 
 Add a `## 第一阶段本地运行` section containing these exact commands and expected endpoints:

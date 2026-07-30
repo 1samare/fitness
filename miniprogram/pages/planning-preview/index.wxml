@@ -8,21 +8,21 @@
   <view class="card" aria-role="form" aria-label="每日能量规划输入">
     <text class="section-title">身体档案</text>
     <view class="field">
-      <text class="field-label">年龄（岁）</text>
+      <text class="field-label">年龄（岁）· 必填</text>
       <input type="number" value="{{ageYears}}" bindinput="onAgeInput" placeholder="18–45" aria-label="年龄" />
     </view>
     <view class="field-row">
       <view class="field field-half">
-        <text class="field-label">身高（厘米）</text>
+        <text class="field-label">身高（厘米）· 必填</text>
         <input type="digit" value="{{heightCm}}" bindinput="onHeightInput" placeholder="例如 175" aria-label="身高，单位厘米" />
       </view>
       <view class="field field-half">
-        <text class="field-label">体重（千克）</text>
+        <text class="field-label">体重（千克）· 必填</text>
         <input type="digit" value="{{weightKg}}" bindinput="onWeightInput" placeholder="例如 70" aria-label="体重，单位千克" />
       </view>
     </view>
     <view class="field">
-      <text class="field-label">公式性别变量</text>
+      <text class="field-label">公式性别变量 · 必选</text>
       <radio-group class="radio-group" bindchange="onSexChange" aria-label="公式性别变量">
         <label class="radio-option"><radio value="0" checked="{{sexCode === '0'}}" />男</label>
         <label class="radio-option"><radio value="1" checked="{{sexCode === '1'}}" />女</label>
@@ -32,25 +32,25 @@
 
     <text class="section-title section-spaced">目标与活动</text>
     <view class="field">
-      <text class="field-label">非训练日常活动</text>
+      <text class="field-label">非训练日常活动 · 必选</text>
       <picker range="{{activityLabels}}" value="{{activityIndex}}" bindchange="onActivityChange">
         <view class="picker-value">{{activityLabels[activityIndex]}}</view>
       </picker>
       <text class="field-help">只评价工作、通勤和家务，不包含下方明确训练。</text>
     </view>
     <view class="field">
-      <text class="field-label">健身目标</text>
+      <text class="field-label">健身目标 · 必选</text>
       <picker range="{{goalLabels}}" value="{{goalIndex}}" bindchange="onGoalChange">
         <view class="picker-value">{{goalLabels[goalIndex]}}</view>
       </picker>
     </view>
     <view class="field">
-      <text class="field-label">当日计划训练</text>
+      <text class="field-label">当日计划训练 · 必选</text>
       <picker range="{{trainingLabels}}" value="{{trainingIndex}}" bindchange="onTrainingChange">
         <view class="picker-value">{{trainingLabels[trainingIndex]}}</view>
       </picker>
     </view>
-    <view wx:if="{{trainingIndex === 1}}" class="field">
+    <view wx:if="{{trainingIndex === 2}}" class="field">
       <text class="field-label">有效训练时长（分钟）</text>
       <input type="digit" value="{{durationMinutes}}" bindinput="onDurationInput" placeholder="例如 60" aria-label="有效训练时长，单位分钟" />
     </view>
