@@ -1,5 +1,8 @@
 {
-  "pages": ["pages/planning-preview/index"],
+  "pages": [
+    "pages/planning-setup/index",
+    "pages/planning-preview/index"
+  ],
   "window": {
     "navigationBarTitleText": "Fitness 规划预览",
     "navigationBarBackgroundColor": "#ecfdf5",

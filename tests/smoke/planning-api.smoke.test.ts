@@ -42,7 +42,12 @@ async function reserveAvailablePort(): Promise<number> {
 }
 
 function startService(servicePort: number): ChildProcessWithoutNullStreams {
-  const environment = { ...process.env, PORT: String(servicePort) };
+  const environment = {
+    ...process.env,
+    PORT: String(servicePort),
+    FITNESS_RUNTIME_MODE: 'local',
+    FITNESS_LOCAL_USER_ID: 'smoke-test-user'
+  };
   const child = spawn(process.execPath, [
     frameworkCli,
     '--source=dist/index.js',
@@ -204,5 +209,67 @@ describe('local planning API process', () => {
       }
     }
     expect(JSON.stringify(unsupportedRaw)).not.toContain('targetEnergyKcal');
+
+    const profile = planningApiResponseSchema.parse(await call({
+      action: 'saveBodyProfile',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'smoke-profile-001',
+        payload: {
+          ageYears: 30,
+          sexCode: 0,
+          heightCm: 175,
+          weightKg: 70,
+          healthScopeConfirmed: true,
+          nonTrainingActivity: 'light',
+          allergens: [],
+          avoidFoods: [],
+          dietPreferences: [],
+          businessTimezone: 'Asia/Shanghai'
+        }
+      }
+    }));
+    expect(profile.success && profile.data.kind === 'body_profile_saved').toBe(true);
+
+    const goal = planningApiResponseSchema.parse(await call({
+      action: 'saveGoal',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'smoke-goal-001',
+        payload: {
+          goal: 'maintain',
+          effectiveDate: '2026-08-03',
+          targetDate: '2026-10-26'
+        }
+      }
+    }));
+    expect(goal.success && goal.data.kind === 'goal_saved').toBe(true);
+
+    const training = planningApiResponseSchema.parse(await call({
+      action: 'saveTrainingPlan',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'smoke-training-001',
+        payload: {
+          weekStartDate: '2026-08-03',
+          businessTimezone: 'Asia/Shanghai',
+          sessions: [{
+            businessDate: '2026-08-04',
+            sessionCode: '02054',
+            durationMinutes: 60
+          }]
+        }
+      }
+    }));
+    expect(training.success && training.data.kind === 'training_plan_saved').toBe(true);
+
+    const context = planningApiResponseSchema.parse(await call({ action: 'getCurrentContext' }));
+    expect(context.success && context.data.kind === 'current_context').toBe(true);
+    if (context.success && context.data.kind === 'current_context') {
+      expect(context.data.bodyProfile?.version).toBe(1);
+      expect(context.data.goal?.version).toBe(1);
+      expect(context.data.trainingPlan?.version).toBe(1);
+      expect(context.data.dailyEnergyTargets).toHaveLength(7);
+    }
   });
 });

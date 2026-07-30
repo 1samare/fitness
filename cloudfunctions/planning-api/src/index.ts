@@ -1,9 +1,9 @@
 import type { PlanningApiResponse } from '@fitness/contracts';
 import {
-  handlePlanningApi,
   type TrustedRequestContext
 } from './handler';
 import { resolveDefaultRuntimeIdentity } from './runtime-identity';
+import { createDefaultRuntimePlanningHandler } from './runtime-handler';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -40,7 +40,12 @@ export function createMain(dependencies: MainDependencies) {
   };
 }
 
+let defaultHandler: MainDependencies['handle'] | undefined;
+
 export const main = createMain({
   resolveIdentity: () => resolveDefaultRuntimeIdentity(),
-  handle: handlePlanningApi
+  handle: (input, context) => {
+    defaultHandler ??= createDefaultRuntimePlanningHandler();
+    return defaultHandler(input, context);
+  }
 });

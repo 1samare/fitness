@@ -19,6 +19,7 @@ await build({
   absWorkingDir: repositoryRoot,
   entryPoints: {
     app: 'miniprogram/app.ts',
+    'pages/planning-setup/index': 'miniprogram/pages/planning-setup/index.ts',
     'pages/planning-preview/index': 'miniprogram/pages/planning-preview/index.ts'
   },
   bundle: true,
@@ -34,6 +35,9 @@ const assets = [
   'app.json',
   'app.wxss',
   'sitemap.json',
+  'pages/planning-setup/index.json',
+  'pages/planning-setup/index.wxml',
+  'pages/planning-setup/index.wxss',
   'pages/planning-preview/index.json',
   'pages/planning-preview/index.wxml',
   'pages/planning-preview/index.wxss'

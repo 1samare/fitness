@@ -198,6 +198,54 @@ const currentContextSchema = z.object({
   dailyEnergyTargets: z.array(dailyEnergyTargetVersionSchema)
 }).strict();
 
+const storedBodyProfileVersionSchema = bodyProfileVersionSchema.extend({
+  userId: z.string().min(1)
+}).strict();
+
+const storedGoalVersionSchema = goalVersionSchema.extend({
+  userId: z.string().min(1)
+}).strict();
+
+const storedTrainingPlanVersionSchema = trainingPlanVersionSchema.extend({
+  userId: z.string().min(1)
+}).strict();
+
+const storedDailyEnergyTargetVersionSchema = dailyEnergyTargetVersionSchema.extend({
+  userId: z.string().min(1)
+}).strict();
+
+const idempotencyRecordSchema = z.discriminatedUnion('operation', [
+  z.object({
+    operation: z.literal('saveBodyProfile'),
+    key: z.string().min(1),
+    requestFingerprint: z.string().min(1),
+    resultVersionId: z.string().min(1)
+  }).strict(),
+  z.object({
+    operation: z.literal('saveGoal'),
+    key: z.string().min(1),
+    requestFingerprint: z.string().min(1),
+    resultVersionId: z.string().min(1)
+  }).strict(),
+  z.object({
+    operation: z.literal('saveTrainingPlan'),
+    key: z.string().min(1),
+    requestFingerprint: z.string().min(1),
+    resultVersionId: z.string().min(1)
+  }).strict()
+]);
+
+export const planningAggregateStateSchema = z.object({
+  bodyProfiles: z.array(storedBodyProfileVersionSchema),
+  goals: z.array(storedGoalVersionSchema),
+  trainingPlans: z.array(storedTrainingPlanVersionSchema),
+  dailyEnergyTargets: z.array(storedDailyEnergyTargetVersionSchema),
+  idempotencyRecords: z.array(idempotencyRecordSchema),
+  activeBodyProfileVersionId: z.string().min(1).nullable(),
+  activeGoalVersionId: z.string().min(1).nullable(),
+  activeTrainingPlanVersionId: z.string().min(1).nullable()
+}).strict();
+
 const successfulDataSchema = z.discriminatedUnion('kind', [
   healthDataSchema,
   supportedDataSchema,

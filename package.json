@@ -10,7 +10,7 @@
   "scripts": {
     "build": "pnpm -r --if-present build && pnpm build:miniprogram",
     "build:miniprogram": "node scripts/build-miniprogram.mjs",
-    "dev:api": "pnpm --filter @fitness/planning-api dev",
+    "dev:api": "node scripts/start-local-api.mjs",
     "dry-run:api": "pnpm --filter @fitness/planning-api build && pnpm --filter @fitness/planning-api dry-run",
     "lint": "eslint .",
     "open:miniprogram": "pnpm build:miniprogram && powershell -ExecutionPolicy Bypass -File scripts/open-miniprogram.ps1",

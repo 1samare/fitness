@@ -46,6 +46,8 @@ const planningService = createVersionedPlanningService({
   nextId: (prefix) => `${prefix}-${randomUUID()}`
 });
 
+export type VersionedPlanningService = ReturnType<typeof createVersionedPlanningService>;
+
 export interface TrustedRequestContext {
   readonly userId: string;
 }
@@ -132,18 +134,19 @@ async function executeAuthenticatedAction(
     ReturnType<typeof planningApiRequestSchema.parse>,
     { action: 'health' | 'previewDailyEnergy' }
   >,
-  context: TrustedRequestContext
+  context: TrustedRequestContext,
+  service: VersionedPlanningService
 ): Promise<PlanningApiResponse> {
   if (request.action === 'saveBodyProfile') {
-    const version = await planningService.saveBodyProfile(context.userId, request.payload);
+    const version = await service.saveBodyProfile(context.userId, request.payload);
     return { success: true, data: { kind: 'body_profile_saved', version: publicBodyProfile(version) } };
   }
   if (request.action === 'saveGoal') {
-    const version = await planningService.saveGoal(context.userId, request.payload);
+    const version = await service.saveGoal(context.userId, request.payload);
     return { success: true, data: { kind: 'goal_saved', version: publicGoal(version) } };
   }
   if (request.action === 'saveTrainingPlan') {
-    const result = await planningService.saveTrainingPlan(context.userId, request.payload);
+    const result = await service.saveTrainingPlan(context.userId, request.payload);
     return {
       success: true,
       data: {
@@ -153,13 +156,14 @@ async function executeAuthenticatedAction(
       }
     };
   }
-  const current = await planningService.getCurrentContext(context.userId);
+  const current = await service.getCurrentContext(context.userId);
   return { success: true, data: currentContextResponse(current) };
 }
 
 async function handlePlanningApiResult(
   input: unknown,
-  context?: TrustedRequestContext
+  context: TrustedRequestContext | undefined,
+  service: VersionedPlanningService
 ): Promise<PlanningApiResponse> {
   if (isRecord(input) && typeof input.action === 'string' && !knownActions.has(input.action)) {
     return errorResponse('unknown_action', '不支持的操作。');
@@ -209,7 +213,7 @@ async function handlePlanningApiResult(
 
   try {
     if (context === undefined) return errorResponse('unauthenticated', '需要可信的微信用户身份。');
-    return await executeAuthenticatedAction(parsed.data, context);
+    return await executeAuthenticatedAction(parsed.data, context, service);
   } catch (error: unknown) {
     if (error instanceof VersionConflictError) {
       return errorResponse(error.code, '数据已被更新，请刷新后重试。');
@@ -233,9 +237,13 @@ async function handlePlanningApiResult(
   }
 }
 
-export async function handlePlanningApi(
-  input: unknown,
-  context?: TrustedRequestContext
-): Promise<PlanningApiResponse> {
-  return planningApiResponseSchema.parse(await handlePlanningApiResult(input, context));
+export function createPlanningApiHandler(service: VersionedPlanningService) {
+  return async (
+    input: unknown,
+    context?: TrustedRequestContext
+  ): Promise<PlanningApiResponse> => planningApiResponseSchema.parse(
+    await handlePlanningApiResult(input, context, service)
+  );
 }
+
+export const handlePlanningApi = createPlanningApiHandler(planningService);
