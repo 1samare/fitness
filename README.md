@@ -1,8 +1,29 @@
 # Fitness 饮食与训练规划助手
 
-> 项目状态：立项设计阶段  
+> 项目状态：第一阶段本地纵向切片可运行
 > 目标平台：面向中国大陆健康成年人的微信小程序  
 > 架构基线日期：2026-07-30
+
+## 第一阶段本地运行
+
+环境要求：Node.js `20` 或 `22`、pnpm `9.15.x`，以及用于打开客户端的微信开发者工具。
+
+在仓库根目录依次执行：
+
+```powershell
+pnpm.cmd install
+pnpm.cmd lint
+pnpm.cmd typecheck
+pnpm.cmd test
+pnpm.cmd build
+pnpm.cmd dev:api
+```
+
+`pnpm.cmd dev:api` 会构建并启动 CloudBase 兼容的本地函数服务，监听 `http://127.0.0.1:3000/`。保持该终端运行，再执行 `pnpm.cmd open:miniprogram`，脚本会重建 `.build/miniprogram` 并通过微信开发者工具打开仓库项目。若工具未注册开始菜单快捷方式，可将 `WECHAT_DEVTOOLS_CLI` 设置为 `cli.bat` 的绝对路径。
+
+无需打开小程序也可以执行 `pnpm.cmd smoke:api`：它会在隔离端口启动真实函数进程，验证健康检查、受支持能量预览和超出适用范围三种场景，然后回收子进程。`pnpm.cmd dry-run:api` 用于确认 CloudBase 函数构建产物可被本地运行框架加载。
+
+当前纵向切片只实现“身体档案、目标、当日训练 → 每日能量起点预览”。第一阶段不持久化数据，不生成宏量营养目标或食谱，不访问 CloudBase 数据库、存储或 AI+ 资源，也不调用模型、视觉或营养外部供应商。
 
 ## 项目简介
 
