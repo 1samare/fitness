@@ -29,6 +29,18 @@ importers:
 
   data/met-sessions: {}
 
+  packages/application:
+    dependencies:
+      '@fitness/calculation':
+        specifier: workspace:*
+        version: link:../calculation
+      '@fitness/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@fitness/domain':
+        specifier: workspace:*
+        version: link:../domain
+
   packages/calculation:
     dependencies:
       '@fitness/domain':
