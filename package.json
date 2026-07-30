@@ -12,6 +12,7 @@
     "dev:api": "pnpm --filter @fitness/planning-api dev",
     "dry-run:api": "pnpm --filter @fitness/planning-api build && pnpm --filter @fitness/planning-api dry-run",
     "lint": "eslint .",
+    "smoke:api": "pnpm --filter @fitness/planning-api build && vitest run --config vitest.smoke.config.ts",
     "test": "vitest run",
     "typecheck": "pnpm -r --if-present typecheck"
   },
