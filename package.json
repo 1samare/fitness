@@ -8,17 +8,22 @@
     "node": ">=20 <23"
   },
   "scripts": {
-    "build": "pnpm -r --if-present build",
+    "build": "pnpm -r --if-present build && pnpm build:miniprogram",
+    "build:miniprogram": "node scripts/build-miniprogram.mjs",
     "dev:api": "pnpm --filter @fitness/planning-api dev",
     "dry-run:api": "pnpm --filter @fitness/planning-api build && pnpm --filter @fitness/planning-api dry-run",
     "lint": "eslint .",
+    "open:miniprogram": "pnpm build:miniprogram && powershell -ExecutionPolicy Bypass -File scripts/open-miniprogram.ps1",
     "smoke:api": "pnpm --filter @fitness/planning-api build && vitest run --config vitest.smoke.config.ts",
     "test": "vitest run",
-    "typecheck": "pnpm -r --if-present typecheck"
+    "typecheck": "pnpm -r --if-present typecheck && tsc -p miniprogram/tsconfig.json --noEmit"
   },
   "devDependencies": {
+    "@fitness/contracts": "workspace:*",
     "@eslint/js": "^9.32.0",
     "@types/node": "^22.17.0",
+    "@types/wechat-miniprogram": "^3.4.8",
+    "esbuild": "^0.25.8",
     "eslint": "^9.32.0",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.38.0",

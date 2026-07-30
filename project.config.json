@@ -1,0 +1,16 @@
+{
+  "description": "Fitness local development project",
+  "miniprogramRoot": ".build/miniprogram/",
+  "cloudfunctionRoot": "cloudfunctions/",
+  "compileType": "miniprogram",
+  "appid": "touristappid",
+  "projectname": "fitness-local",
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": false,
+    "minifyWXML": true
+  }
+}
