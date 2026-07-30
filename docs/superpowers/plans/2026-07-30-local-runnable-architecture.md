@@ -2472,7 +2472,7 @@ git add -- README.md docs/superpowers/plans/2026-07-30-local-runnable-architectu
 git commit -m "docs: add local development workflow"
 ```
 
-- [ ] **Step 7: Run a post-commit verification snapshot**
+- [x] **Step 7: Run a post-commit verification snapshot**
 
 Run:
 
