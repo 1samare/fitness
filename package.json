@@ -9,6 +9,8 @@
   },
   "scripts": {
     "build": "pnpm -r --if-present build",
+    "dev:api": "pnpm --filter @fitness/planning-api dev",
+    "dry-run:api": "pnpm --filter @fitness/planning-api build && pnpm --filter @fitness/planning-api dry-run",
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "pnpm -r --if-present typecheck"
