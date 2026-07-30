@@ -76,4 +76,45 @@ describe('planning API contracts', () => {
       data: { ...supportedResponse.data, targetEnergyKcal: 2557.5 }
     })).toThrow();
   });
+
+  it('accepts versioned writes without accepting a client userId', () => {
+    const request = {
+      action: 'saveBodyProfile',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'profile-create-001',
+        payload: {
+          ageYears: 30,
+          sexCode: 0,
+          heightCm: 175,
+          weightKg: 70,
+          healthScopeConfirmed: true,
+          nonTrainingActivity: 'light',
+          allergens: ['peanut'],
+          avoidFoods: [],
+          dietPreferences: ['home_cooking'],
+          businessTimezone: 'Asia/Shanghai'
+        }
+      }
+    } as const;
+
+    expect(planningApiRequestSchema.parse(request)).toEqual(request);
+    expect(() => planningApiRequestSchema.parse({
+      ...request,
+      payload: { ...request.payload, userId: 'attacker-selected-user' }
+    })).toThrow();
+  });
+
+  it('requires version and idempotency controls on every write', () => {
+    expect(() => planningApiRequestSchema.parse({
+      action: 'saveGoal',
+      payload: {
+        payload: {
+          goal: 'maintain',
+          effectiveDate: '2026-08-03',
+          targetDate: '2026-10-26'
+        }
+      }
+    })).toThrow();
+  });
 });

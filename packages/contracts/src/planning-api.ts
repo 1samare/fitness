@@ -31,12 +31,70 @@ const previewPayloadSchema = z.object({
   }).strict().optional()
 }).strict();
 
+const businessDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const businessTimezoneSchema = z.string().min(3).max(64).regex(/^[A-Za-z_]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?$/);
+const idempotencyKeySchema = z.string().min(8).max(128).regex(/^[A-Za-z0-9._:-]+$/);
+
+function writeEnvelopeSchema<TSchema extends z.ZodType>(payloadSchema: TSchema) {
+  return z.object({
+    expectedVersion: z.number().int().nonnegative(),
+    idempotencyKey: idempotencyKeySchema,
+    payload: payloadSchema
+  }).strict();
+}
+
+const bodyProfilePayloadSchema = z.object({
+  ageYears: z.number().int().min(18).max(120),
+  sexCode: z.union([z.literal(0), z.literal(1)]),
+  heightCm: z.number().min(100).max(250),
+  weightKg: z.number().min(25).max(300),
+  healthScopeConfirmed: z.boolean(),
+  nonTrainingActivity: z.enum(['light', 'moderate', 'heavy']),
+  allergens: z.array(z.string().trim().min(1).max(80)).max(50),
+  avoidFoods: z.array(z.string().trim().min(1).max(80)).max(50),
+  dietPreferences: z.array(z.string().trim().min(1).max(80)).max(50),
+  businessTimezone: businessTimezoneSchema
+}).strict();
+
+const goalPayloadSchema = z.object({
+  goal: z.enum(['maintain', 'fat_loss', 'muscle_gain']),
+  targetWeightKg: z.number().min(25).max(300).optional(),
+  effectiveDate: businessDateSchema,
+  targetDate: businessDateSchema
+}).strict().refine(
+  (value) => value.targetDate >= value.effectiveDate,
+  { path: ['targetDate'], message: 'targetDate must not precede effectiveDate' }
+);
+
+const trainingPlanPayloadSchema = z.object({
+  weekStartDate: businessDateSchema,
+  businessTimezone: businessTimezoneSchema,
+  sessions: z.array(z.object({
+    businessDate: businessDateSchema,
+    sessionCode: z.string().regex(/^\d{5}$/),
+    durationMinutes: z.number().positive().max(300)
+  }).strict()).max(7)
+}).strict();
+
 export const planningApiRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('health') }).strict(),
   z.object({
     action: z.literal('previewDailyEnergy'),
     payload: previewPayloadSchema
-  }).strict()
+  }).strict(),
+  z.object({
+    action: z.literal('saveBodyProfile'),
+    payload: writeEnvelopeSchema(bodyProfilePayloadSchema)
+  }).strict(),
+  z.object({
+    action: z.literal('saveGoal'),
+    payload: writeEnvelopeSchema(goalPayloadSchema)
+  }).strict(),
+  z.object({
+    action: z.literal('saveTrainingPlan'),
+    payload: writeEnvelopeSchema(trainingPlanPayloadSchema)
+  }).strict(),
+  z.object({ action: z.literal('getCurrentContext') }).strict()
 ]);
 
 const unsupportedReasonSchema = z.enum([
@@ -77,14 +135,92 @@ const unsupportedDataSchema = z.object({
   policy: policyMetadataSchema
 }).strict();
 
-const successfulDataSchema = z.discriminatedUnion('kind', [
-  healthDataSchema,
+const energyResultSchema = z.discriminatedUnion('kind', [
   supportedDataSchema,
   unsupportedDataSchema
 ]);
 
+const versionMetadataSchema = z.object({
+  id: z.string().min(1),
+  version: z.number().int().positive(),
+  createdAt: z.iso.datetime()
+});
+
+const bodyProfileVersionSchema = versionMetadataSchema.extend({
+  kind: z.literal('body_profile_version'),
+  payload: bodyProfilePayloadSchema
+}).strict();
+
+const goalVersionSchema = versionMetadataSchema.extend({
+  kind: z.literal('goal_version'),
+  bodyProfileVersionId: z.string().min(1),
+  payload: goalPayloadSchema
+}).strict();
+
+const trainingPlanVersionSchema = versionMetadataSchema.extend({
+  kind: z.literal('training_plan_version'),
+  bodyProfileVersionId: z.string().min(1),
+  goalVersionId: z.string().min(1),
+  payload: trainingPlanPayloadSchema
+}).strict();
+
+const dailyEnergyTargetVersionSchema = versionMetadataSchema.extend({
+  kind: z.literal('daily_energy_target_version'),
+  businessDate: businessDateSchema,
+  bodyProfileVersionId: z.string().min(1),
+  goalVersionId: z.string().min(1),
+  trainingPlanVersionId: z.string().min(1),
+  energyPolicyVersion: z.literal('calculation-policy-v2'),
+  energy: energyResultSchema
+}).strict();
+
+const bodyProfileSavedSchema = z.object({
+  kind: z.literal('body_profile_saved'),
+  version: bodyProfileVersionSchema
+}).strict();
+
+const goalSavedSchema = z.object({
+  kind: z.literal('goal_saved'),
+  version: goalVersionSchema
+}).strict();
+
+const trainingPlanSavedSchema = z.object({
+  kind: z.literal('training_plan_saved'),
+  trainingPlan: trainingPlanVersionSchema,
+  dailyEnergyTargets: z.array(dailyEnergyTargetVersionSchema).length(7)
+}).strict();
+
+const currentContextSchema = z.object({
+  kind: z.literal('current_context'),
+  bodyProfile: bodyProfileVersionSchema.nullable(),
+  goal: goalVersionSchema.nullable(),
+  trainingPlan: trainingPlanVersionSchema.nullable(),
+  dailyEnergyTargets: z.array(dailyEnergyTargetVersionSchema)
+}).strict();
+
+const successfulDataSchema = z.discriminatedUnion('kind', [
+  healthDataSchema,
+  supportedDataSchema,
+  unsupportedDataSchema,
+  bodyProfileSavedSchema,
+  goalSavedSchema,
+  trainingPlanSavedSchema,
+  currentContextSchema
+]);
+
 const apiErrorSchema = z.object({
-  code: z.enum(['invalid_request', 'unknown_action', 'unknown_training_session', 'internal_error']),
+  code: z.enum([
+    'invalid_request',
+    'unknown_action',
+    'unknown_training_session',
+    'unauthenticated',
+    'version_conflict',
+    'idempotency_key_reused',
+    'planning_prerequisite_missing',
+    'invalid_goal',
+    'invalid_training_plan',
+    'internal_error'
+  ]),
   message: z.string().min(1),
   issues: z.array(z.object({ path: z.string(), message: z.string() }).strict()).optional()
 }).strict();

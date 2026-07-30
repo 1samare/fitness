@@ -1,0 +1,50 @@
+import type { PlanningRepository } from '@fitness/application';
+import type { PlanningAggregateState } from '@fitness/domain';
+
+const emptyState: PlanningAggregateState = {
+  bodyProfiles: [],
+  goals: [],
+  trainingPlans: [],
+  dailyEnergyTargets: [],
+  idempotencyRecords: [],
+  activeBodyProfileVersionId: null,
+  activeGoalVersionId: null,
+  activeTrainingPlanVersionId: null
+};
+
+function copyState(state: PlanningAggregateState): PlanningAggregateState {
+  return structuredClone(state);
+}
+
+export class InMemoryPlanningRepository implements PlanningRepository {
+  private readonly states = new Map<string, PlanningAggregateState>();
+  private readonly queues = new Map<string, Promise<void>>();
+
+  public read(userId: string): Promise<PlanningAggregateState> {
+    return Promise.resolve(copyState(this.states.get(userId) ?? emptyState));
+  }
+
+  public async transact<TResult>(
+    userId: string,
+    operation: (current: PlanningAggregateState) => {
+      readonly nextState: PlanningAggregateState;
+      readonly result: TResult;
+    }
+  ): Promise<TResult> {
+    const previous = this.queues.get(userId) ?? Promise.resolve();
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.queues.set(userId, previous.then(() => gate));
+    await previous;
+    try {
+      const current = copyState(this.states.get(userId) ?? emptyState);
+      const { nextState, result } = operation(current);
+      this.states.set(userId, copyState(nextState));
+      return result;
+    } finally {
+      release?.();
+    }
+  }
+}

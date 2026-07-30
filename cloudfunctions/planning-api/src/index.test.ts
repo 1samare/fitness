@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { main } from './index';
+import { createMain, main } from './index';
 
 describe('CloudBase main event adapter', () => {
   it('parses the functions-framework HTTP body', async () => {
@@ -21,5 +21,25 @@ describe('CloudBase main event adapter', () => {
       error: { code: 'invalid_request', message: '请求体不是有效 JSON。' }
     });
     expect(JSON.stringify(result)).not.toContain('stack');
+  });
+
+  it('passes only the runtime-resolved identity to the controller', async () => {
+    const calls: unknown[] = [];
+    const injectedMain = createMain({
+      resolveIdentity: () => ({ userId: 'trusted-runtime-user' }),
+      handle: (input, context) => {
+        calls.push({ input, context });
+        return Promise.resolve({
+          success: false,
+          error: { code: 'internal_error', message: 'test response' }
+        });
+      }
+    });
+
+    await injectedMain({ action: 'getCurrentContext', userId: 'client-selected-user' }, {});
+    expect(calls).toEqual([{
+      input: { action: 'getCurrentContext', userId: 'client-selected-user' },
+      context: { userId: 'trusted-runtime-user' }
+    }]);
   });
 });

@@ -13,7 +13,10 @@
   },
   "dependencies": {
     "@fitness/application": "workspace:*",
-    "@fitness/contracts": "workspace:*"
+    "@fitness/contracts": "workspace:*",
+    "@fitness/domain": "workspace:*",
+    "@fitness/persistence": "workspace:*",
+    "wx-server-sdk": "^4.0.2"
   },
   "devDependencies": {
     "@cloudbase/functions-framework": "^1.6.0",
