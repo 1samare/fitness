@@ -1,0 +1,6 @@
+{
+  "description": "Copy to project.private.config.json for developer-specific settings",
+  "setting": {
+    "compileHotReLoad": true
+  }
+}

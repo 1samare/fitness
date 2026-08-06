@@ -1,0 +1,14 @@
+{
+  "version": "2.0",
+  "functionRoot": "./cloudfunctions",
+  "functions": [
+    {
+      "name": "planning-api",
+      "dir": "./cloudfunctions/planning-api/dist",
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "timeout": 5,
+      "installDependency": false
+    }
+  ]
+}

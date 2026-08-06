@@ -46,7 +46,7 @@
 - Consumes: the two allowed actions `health` and `previewDailyEnergy` from the approved design.
 - Produces: `planningApiRequestSchema`, `planningApiResponseSchema`, `PreviewDailyEnergyRequest`, `PlanningApiRequest`, and `PlanningApiResponse` for the mini program and function controller.
 
-- [ ] **Step 1: Add workspace-only configuration**
+- [x] **Step 1: Add workspace-only configuration**
 
 Create `.gitignore`:
 
@@ -206,7 +206,7 @@ export default tseslint.config(
 );
 ```
 
-- [ ] **Step 2: Add the contracts package manifest and install dependencies**
+- [x] **Step 2: Add the contracts package manifest and install dependencies**
 
 Create `packages/contracts/package.json`:
 
@@ -258,7 +258,7 @@ pnpm.cmd install
 
 Expected: exit `0`, `pnpm-lock.yaml` is created, and no lifecycle script requests secrets or external credentials.
 
-- [ ] **Step 3: Write the failing contract tests**
+- [x] **Step 3: Write the failing contract tests**
 
 Create `packages/contracts/src/planning-api.test.ts`:
 
@@ -324,7 +324,7 @@ describe('planning API contracts', () => {
 });
 ```
 
-- [ ] **Step 4: Run the tests and verify RED**
+- [x] **Step 4: Run the tests and verify RED**
 
 Run:
 
@@ -334,7 +334,7 @@ pnpm.cmd exec vitest run packages/contracts/src/planning-api.test.ts
 
 Expected: FAIL because `packages/contracts/src/planning-api.ts` does not exist.
 
-- [ ] **Step 5: Implement the schemas and inferred types**
+- [x] **Step 5: Implement the schemas and inferred types**
 
 Create `packages/contracts/src/planning-api.ts` with strict Zod objects:
 
@@ -441,7 +441,7 @@ Create `packages/contracts/src/index.ts`:
 export * from './planning-api';
 ```
 
-- [ ] **Step 6: Verify GREEN and workspace quality**
+- [x] **Step 6: Verify GREEN and workspace quality**
 
 Run:
 
@@ -454,7 +454,7 @@ pnpm.cmd build
 
 Expected: all commands exit `0`; the contract test reports three passing tests.
 
-- [ ] **Step 7: Commit the workspace and contracts**
+- [x] **Step 7: Commit the workspace and contracts**
 
 ```powershell
 git add -- .gitignore .editorconfig package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json tsconfig.json vitest.config.ts eslint.config.mjs packages/contracts
@@ -483,7 +483,7 @@ git commit -m "feat: add strict planning API contracts"
 - Consumes: no runtime packages except `@fitness/domain`.
 - Produces: `CALCULATION_POLICY_V2`, `evaluateEligibility(input)`, `roundHalfUp(value, decimals)`, and the domain types later consumed by the energy calculator.
 
-- [ ] **Step 1: Add domain and calculation manifests**
+- [x] **Step 1: Add domain and calculation manifests**
 
 Create `packages/domain/package.json`:
 
@@ -566,7 +566,7 @@ Create `packages/calculation/tsconfig.json`:
 }
 ```
 
-- [ ] **Step 2: Define dependency-free domain types**
+- [x] **Step 2: Define dependency-free domain types**
 
 Create `packages/domain/src/daily-energy.ts`:
 
@@ -643,7 +643,7 @@ Create `packages/domain/src/index.ts`:
 export * from './daily-energy';
 ```
 
-- [ ] **Step 3: Write failing eligibility and rounding tests**
+- [x] **Step 3: Write failing eligibility and rounding tests**
 
 Create `packages/calculation/src/eligibility.test.ts`:
 
@@ -688,7 +688,7 @@ describe('roundHalfUp', () => {
 });
 ```
 
-- [ ] **Step 4: Verify RED**
+- [x] **Step 4: Verify RED**
 
 Run:
 
@@ -698,7 +698,7 @@ pnpm.cmd exec vitest run packages/calculation/src/eligibility.test.ts packages/c
 
 Expected: FAIL because `eligibility.ts` and `rounding.ts` do not exist.
 
-- [ ] **Step 5: Implement policy metadata, raw-BMI eligibility, and display rounding**
+- [x] **Step 5: Implement policy metadata, raw-BMI eligibility, and display rounding**
 
 Create `packages/calculation/src/policy.ts`:
 
@@ -772,7 +772,7 @@ export * from './policy';
 export * from './rounding';
 ```
 
-- [ ] **Step 6: Verify GREEN**
+- [x] **Step 6: Verify GREEN**
 
 Run:
 
@@ -785,7 +785,7 @@ pnpm.cmd build
 
 Expected: all commands exit `0`; six parameterized eligibility assertions and two rounding assertions pass.
 
-- [ ] **Step 7: Commit domain and policy foundations**
+- [x] **Step 7: Commit domain and policy foundations**
 
 ```powershell
 git add -- packages/domain packages/calculation
@@ -812,7 +812,7 @@ git commit -m "feat: add calculation policy eligibility"
 - Consumes: `DailyEnergyCommand`, `DailyEnergyResult`, `CALCULATION_POLICY_V2`, and reviewed dataset code `02054`.
 - Produces: `findReviewedTrainingSession(code): ReviewedTrainingSession | undefined` and `calculateDailyEnergy(command): DailyEnergyResult`.
 
-- [ ] **Step 1: Add the reviewed data package and its failing integrity test**
+- [x] **Step 1: Add the reviewed data package and its failing integrity test**
 
 Create `data/met-sessions/package.json`:
 
@@ -885,7 +885,7 @@ pnpm.cmd exec vitest run data/met-sessions/src/reviewed-met-sessions.test.ts
 
 Expected: FAIL because the reviewed dataset module does not exist.
 
-- [ ] **Step 2: Implement the single reviewed session record**
+- [x] **Step 2: Implement the single reviewed session record**
 
 Create `data/met-sessions/src/reviewed-met-sessions.ts`:
 
@@ -912,7 +912,7 @@ export * from './reviewed-met-sessions';
 
 Run the data test again. Expected: PASS.
 
-- [ ] **Step 3: Write failing daily energy tests**
+- [x] **Step 3: Write failing daily energy tests**
 
 Add `"@fitness/met-sessions": "workspace:*"` to the calculation package dependencies.
 
@@ -1004,7 +1004,7 @@ describe('calculateDailyEnergy', () => {
 });
 ```
 
-- [ ] **Step 4: Verify RED**
+- [x] **Step 4: Verify RED**
 
 Run:
 
@@ -1014,7 +1014,7 @@ pnpm.cmd exec vitest run packages/calculation/src/calculate-daily-energy.test.ts
 
 Expected: FAIL because the calculator and reviewed-session resolver do not exist.
 
-- [ ] **Step 5: Implement source resolution and the deterministic calculation**
+- [x] **Step 5: Implement source resolution and the deterministic calculation**
 
 Create `packages/calculation/src/reviewed-training-session.ts`:
 
@@ -1096,7 +1096,7 @@ export function calculateDailyEnergy(command: DailyEnergyCommand): DailyEnergyRe
 
 Export both modules from `packages/calculation/src/index.ts`.
 
-- [ ] **Step 6: Verify GREEN and all calculation invariants**
+- [x] **Step 6: Verify GREEN and all calculation invariants**
 
 Run:
 
@@ -1109,7 +1109,7 @@ pnpm.cmd build
 
 Expected: all commands exit `0`; expected supported results are `1582 / 2373 / 184 / 2557`, BMI `24.0` is unsupported, and no test uses a client-supplied MET.
 
-- [ ] **Step 7: Commit reviewed data and calculation**
+- [x] **Step 7: Commit reviewed data and calculation**
 
 ```powershell
 git add -- data/met-sessions packages/calculation
@@ -1131,7 +1131,7 @@ git commit -m "feat: calculate traceable daily energy"
 - Consumes: `PreviewDailyEnergyRequest['payload']`, `findReviewedTrainingSession`, and `calculateDailyEnergy`.
 - Produces: `previewDailyEnergy(payload): DailyEnergyResult` and `UnknownTrainingSessionError`.
 
-- [ ] **Step 1: Add the application package manifest**
+- [x] **Step 1: Add the application package manifest**
 
 Create `packages/application/package.json`:
 
@@ -1177,7 +1177,7 @@ Create `packages/application/tsconfig.json`:
 }
 ```
 
-- [ ] **Step 2: Write the failing application tests**
+- [x] **Step 2: Write the failing application tests**
 
 Create `packages/application/src/preview-daily-energy.test.ts`:
 
@@ -1214,7 +1214,7 @@ describe('previewDailyEnergy', () => {
 });
 ```
 
-- [ ] **Step 3: Verify RED**
+- [x] **Step 3: Verify RED**
 
 Run:
 
@@ -1224,7 +1224,7 @@ pnpm.cmd exec vitest run packages/application/src/preview-daily-energy.test.ts
 
 Expected: FAIL because the use case does not exist.
 
-- [ ] **Step 4: Implement the use case without transport concerns**
+- [x] **Step 4: Implement the use case without transport concerns**
 
 Create `packages/application/src/preview-daily-energy.ts`:
 
@@ -1262,7 +1262,7 @@ Create `packages/application/src/index.ts`:
 export * from './preview-daily-energy';
 ```
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run:
 
@@ -1275,7 +1275,7 @@ pnpm.cmd build
 
 Expected: all commands exit `0`; both application tests pass.
 
-- [ ] **Step 6: Commit the use case**
+- [x] **Step 6: Commit the use case**
 
 ```powershell
 git add -- packages/application
@@ -1301,7 +1301,7 @@ git commit -m "feat: add daily energy preview use case"
 - Consumes: `planningApiRequestSchema`, `previewDailyEnergy`, and `UnknownTrainingSessionError`.
 - Produces: `handlePlanningApi(input: unknown): Promise<PlanningApiResponse>` and CloudBase export `main(event: unknown): Promise<PlanningApiResponse>`.
 
-- [ ] **Step 1: Add function build and local-run configuration**
+- [x] **Step 1: Add function build and local-run configuration**
 
 Create `cloudfunctions/planning-api/package.json`:
 
@@ -1388,7 +1388,7 @@ Add root scripts:
 }
 ```
 
-- [ ] **Step 2: Write failing controller tests**
+- [x] **Step 2: Write failing controller tests**
 
 Create `cloudfunctions/planning-api/src/handler.test.ts`:
 
@@ -1472,7 +1472,7 @@ describe('CloudBase main event adapter', () => {
 });
 ```
 
-- [ ] **Step 3: Verify RED**
+- [x] **Step 3: Verify RED**
 
 Run:
 
@@ -1483,7 +1483,7 @@ pnpm.cmd exec vitest run cloudfunctions/planning-api/src/handler.test.ts cloudfu
 
 Expected: FAIL because `handler.ts` and `index.ts` do not exist.
 
-- [ ] **Step 4: Implement the controller and event normalization**
+- [x] **Step 4: Implement the controller and event normalization**
 
 Create `cloudfunctions/planning-api/src/handler.ts`:
 
@@ -1568,7 +1568,7 @@ export async function main(event: unknown): Promise<PlanningApiResponse> {
 }
 ```
 
-- [ ] **Step 5: Verify GREEN, bundle loading, and no sensitive request logging**
+- [x] **Step 5: Verify GREEN, bundle loading, and no sensitive request logging**
 
 Run:
 
@@ -1582,7 +1582,7 @@ pnpm.cmd dry-run:api
 
 Expected: all commands exit `0`; `tcb-ff --dry-run` loads `dist/index.js`; the local start command includes `--logEventContext=false --logHeaderBody=false`.
 
-- [ ] **Step 6: Commit the function boundary**
+- [x] **Step 6: Commit the function boundary**
 
 ```powershell
 git add -- package.json pnpm-lock.yaml cloudbaserc.json cloudfunctions/planning-api
@@ -1602,7 +1602,7 @@ git commit -m "feat: expose planning CloudBase function"
 - Consumes: built `@fitness/planning-api`, `tcb-ff`, and HTTP port from `PORT`.
 - Produces: `pnpm smoke:api`, which proves a real local function process serves health, supported, and unsupported requests.
 
-- [ ] **Step 1: Add the smoke command and failing test**
+- [x] **Step 1: Add the smoke command and failing test**
 
 Create `vitest.smoke.config.ts`:
 
@@ -1644,7 +1644,7 @@ it('serves the planning API from a real local process', async () => {
 });
 ```
 
-- [ ] **Step 2: Verify RED against an intentionally unavailable process**
+- [x] **Step 2: Verify RED against an intentionally unavailable process**
 
 Ensure port `3131` is unused, then run:
 
@@ -1654,9 +1654,11 @@ pnpm.cmd smoke:api
 
 Expected: FAIL with a connection error, proving the smoke test depends on a real HTTP service rather than a direct function import.
 
-- [ ] **Step 3: Replace the RED test with the complete process lifecycle and assertions**
+- [x] **Step 3: Replace the RED test with the complete process lifecycle and assertions**
 
-Replace `tests/smoke/planning-api.smoke.test.ts` with:
+Review correction: the final harness allocates an ephemeral loopback port, launches the `tcb-ff.js` entry point as its direct child, waits for that child's own readiness marker before making HTTP assertions, terminates only that direct child, waits for its exit, and re-binds the same port to prove cleanup. The fixed-port/process-tree sketch below is retained only as the original implementation outline and is superseded by `tests/smoke/planning-api.smoke.test.ts`.
+
+Original implementation outline (superseded by the review correction above):
 
 ```ts
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -1778,9 +1780,9 @@ describe('local planning API process', () => {
 });
 ```
 
-This helper records exactly one child PID, never enumerates processes, retries readiness for at most 15 seconds, includes buffered output on startup failure, and terminates only its own process tree.
+The final helper records exactly one direct child PID, never enumerates processes, retries readiness for at most 15 seconds, includes buffered output on startup failure, and verifies that its dynamic port is released.
 
-- [ ] **Step 4: Verify GREEN and repeatability**
+- [x] **Step 4: Verify GREEN and repeatability**
 
 Run twice:
 
@@ -1789,9 +1791,9 @@ pnpm.cmd smoke:api
 pnpm.cmd smoke:api
 ```
 
-Expected: both runs exit `0`; port `3131` is released between runs; the supported and unsupported assertions pass.
+Expected: both runs exit `0`; each dynamically allocated port is released; the supported and unsupported assertions pass.
 
-- [ ] **Step 5: Commit the smoke harness**
+- [x] **Step 5: Commit the smoke harness**
 
 ```powershell
 git add -- package.json vitest.smoke.config.ts tests/smoke/planning-api.smoke.test.ts
@@ -1825,7 +1827,7 @@ git commit -m "test: verify local planning function process"
 - Consumes: `PlanningApiRequest`, `PlanningApiResponse`, and local function `http://127.0.0.1:3000/`.
 - Produces: `createPlanningApiClient(transport)`, a native planning preview page, `.build/miniprogram`, `pnpm build:miniprogram`, and `pnpm open:miniprogram`.
 
-- [ ] **Step 1: Add mini program tooling and strict typecheck config**
+- [x] **Step 1: Add mini program tooling and strict typecheck config**
 
 Add root dev dependencies:
 
@@ -1863,7 +1865,7 @@ Create `miniprogram/tsconfig.json`:
 
 Run `pnpm.cmd install` and expect exit `0`.
 
-- [ ] **Step 2: Write the failing API client tests**
+- [x] **Step 2: Write the failing API client tests**
 
 Create `miniprogram/services/planning-api.test.ts`:
 
@@ -1900,7 +1902,7 @@ pnpm.cmd exec vitest run miniprogram/services/planning-api.test.ts
 
 Expected: FAIL because the API client does not exist.
 
-- [ ] **Step 3: Implement a transport-injected, response-validating client**
+- [x] **Step 3: Implement a transport-injected, response-validating client**
 
 Create `miniprogram/services/planning-api.ts`:
 
@@ -1939,7 +1941,7 @@ export const planningApiClient = createPlanningApiClient(localTransport);
 
 Run the client tests again. Expected: PASS.
 
-- [ ] **Step 4: Implement the native page without duplicating calculation constants**
+- [x] **Step 4: Implement the native page without duplicating calculation constants**
 
 Create `app.ts` with `App({})`, `app.json` with page `pages/planning-preview/index`, a plain global stylesheet, and a sitemap allowing the page.
 
@@ -2221,7 +2223,7 @@ label { margin-right: 24rpx; }
 .phase-note { display: block; padding: 12rpx 8rpx 40rpx; }
 ```
 
-- [ ] **Step 5: Add the reproducible mini program build**
+- [x] **Step 5: Add the reproducible mini program build**
 
 Create `scripts/build-miniprogram.mjs`:
 
@@ -2316,7 +2318,7 @@ Create `project.private.config.example.json`:
 }
 ```
 
-- [ ] **Step 6: Add a developer-tools launcher with no hard-coded user path**
+- [x] **Step 6: Add a developer-tools launcher with no hard-coded user path**
 
 Create `scripts/open-miniprogram.ps1`:
 
@@ -2360,7 +2362,7 @@ if ($LASTEXITCODE -ne 0) {
 
 The script resolves `WECHAT_DEVTOOLS_CLI`, the current user's Start Menu shortcut, then the two standard install paths. It does not upload, preview, log in, or write an AppID.
 
-- [ ] **Step 7: Verify mini program tests, build, and local project loading**
+- [x] **Step 7: Verify mini program tests, build, and local project loading**
 
 Run:
 
@@ -2374,7 +2376,7 @@ pnpm.cmd open:miniprogram
 
 Expected: tests/typecheck/lint/build exit `0`; `.build/miniprogram` contains `app.js` and `pages/planning-preview/index.js`; the developer-tools CLI exits `0` after opening the repository project. If guest AppID or login prevents IDE compilation, capture that exact limitation and do not claim a successful developer-tools compile.
 
-- [ ] **Step 8: Commit the native mini program source and build scripts**
+- [x] **Step 8: Commit the native mini program source and build scripts**
 
 ```powershell
 git add -- .gitignore package.json pnpm-lock.yaml miniprogram scripts/build-miniprogram.mjs scripts/open-miniprogram.ps1 project.config.json project.private.config.example.json
@@ -2393,12 +2395,12 @@ git commit -m "feat: add local planning mini program"
 - Consumes: every prior task and the approved design acceptance criteria.
 - Produces: accurate local-run documentation and fresh completion evidence for all Phase 1 requirements.
 
-- [ ] **Step 1: Update README status and local-run instructions**
+- [x] **Step 1: Update README status and local-run instructions**
 
-Change the status line to:
+Set the status line to accurately distinguish automated implementation from manual IDE acceptance:
 
 ```markdown
-> 项目状态：第一阶段本地纵向切片可运行  
+> 项目状态：第一阶段本地纵向切片已实现；微信开发者工具交互待人工验收
 ```
 
 Add a `## 第一阶段本地运行` section containing these exact commands and expected endpoints:
@@ -2414,7 +2416,7 @@ pnpm.cmd dev:api
 
 Document that `pnpm dev:api` listens on `http://127.0.0.1:3000`, `pnpm smoke:api` performs process-level verification, and `pnpm open:miniprogram` builds then opens the project in WeChat Developer Tools. State explicitly that Phase 1 does not persist data, generate macros/recipes, call CloudBase resources, or contact external providers.
 
-- [ ] **Step 2: Invoke verification-before-completion and run the full automated gate**
+- [x] **Step 2: Invoke verification-before-completion and run the full automated gate**
 
 Run fresh, in this order:
 
@@ -2439,7 +2441,7 @@ pnpm.cmd open:miniprogram
 
 Expected: the installed CLI opens the project with exit `0`. In the IDE, confirm the planning form renders, start `pnpm dev:api`, submit the supported 70 kg/175 cm case, and observe target energy `2557 kcal`; submit the BMI `24.0` case and observe the unsupported message with no target energy. If interactive IDE state cannot be inspected automatically, report this as a manual verification item rather than claiming it passed.
 
-- [ ] **Step 4: Audit secrets, generated files, and architecture boundaries**
+- [x] **Step 4: Audit secrets, generated files, and architecture boundaries**
 
 Run:
 
@@ -2461,18 +2463,18 @@ Expected:
 - Diff check reports no whitespace errors.
 - Only intended Phase 1 files and pre-existing user-owned untracked documentation remain.
 
-- [ ] **Step 5: Reconcile documentation with actual commands**
+- [x] **Step 5: Reconcile documentation with actual commands**
 
 Compare `README.md`, `package.json`, `project.config.json`, `cloudbaserc.json`, and the approved design. Correct any command, path, port, runtime, limitation, or feature-boundary mismatch before proceeding. Do not broaden Phase 1 to persistence, macros, recipes, Agent, or providers.
 
-- [ ] **Step 6: Commit documentation and final plan state**
+- [x] **Step 6: Commit documentation and final plan state**
 
 ```powershell
 git add -- README.md docs/superpowers/plans/2026-07-30-local-runnable-architecture.md
 git commit -m "docs: add local development workflow"
 ```
 
-- [ ] **Step 7: Run a post-commit verification snapshot**
+- [x] **Step 7: Run a post-commit verification snapshot**
 
 Run:
 

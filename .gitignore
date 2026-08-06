@@ -1,2 +1,12 @@
+node_modules/
+dist/
+.build/
+coverage/
+logs/
+*.log
+.env
+.env.*
+!.env.example
+project.private.config.json
 .worktrees/
 .pnpm-store/
