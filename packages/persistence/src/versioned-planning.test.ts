@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   IdempotencyKeyReuseError,
   InvalidGoalError,
+  PlanningPrerequisiteError,
   VersionConflictError,
   createVersionedPlanningService
 } from '@fitness/application';
@@ -149,5 +150,42 @@ describe('versioned planning service', () => {
         targetDate: '2026-10-26'
       }
     })).rejects.toBeInstanceOf(InvalidGoalError);
+  });
+
+  test('rejects a training plan when the active goal belongs to an older profile version', async () => {
+    const { service } = createHarness();
+    await service.saveBodyProfile('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'profile-create',
+      payload: profilePayload
+    });
+    await service.saveGoal('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'goal-create',
+      payload: {
+        goal: 'maintain',
+        effectiveDate: '2026-08-03',
+        targetDate: '2026-10-26'
+      }
+    });
+    await service.saveBodyProfile('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'profile-update',
+      payload: { ...profilePayload, weightKg: 69.5 }
+    });
+
+    await expect(service.saveTrainingPlan('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'training-with-stale-goal',
+      payload: {
+        weekStartDate: '2026-08-03',
+        businessTimezone: 'Asia/Shanghai',
+        sessions: []
+      }
+    })).rejects.toEqual(expect.objectContaining({
+      name: PlanningPrerequisiteError.name,
+      code: 'planning_prerequisite_missing',
+      prerequisite: 'goal'
+    }));
   });
 });

@@ -53,18 +53,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function decodeDocument(value: unknown): PlanningAggregateState {
+function isOwnedByUser(state: PlanningAggregateState, userId: string): boolean {
+  return [
+    ...state.bodyProfiles,
+    ...state.goals,
+    ...state.trainingPlans,
+    ...state.dailyEnergyTargets
+  ].every((version) => version.userId === userId);
+}
+
+function decodeDocument(value: unknown, userId: string): PlanningAggregateState {
   if (!isRecord(value) || value.schemaVersion !== 1 || !('state' in value)) {
     throw new CorruptPlanningStateError();
   }
   const parsed = planningAggregateStateSchema.safeParse(value.state);
-  if (!parsed.success) throw new CorruptPlanningStateError();
+  if (!parsed.success || !isOwnedByUser(parsed.data, userId)) {
+    throw new CorruptPlanningStateError();
+  }
   return parsed.data;
 }
 
-function encodeDocument(state: PlanningAggregateState): StoredPlanningDocument {
+function encodeDocument(
+  state: PlanningAggregateState,
+  userId: string
+): StoredPlanningDocument {
   const parsed = planningAggregateStateSchema.safeParse(state);
-  if (!parsed.success) throw new CorruptPlanningStateError();
+  if (!parsed.success || !isOwnedByUser(parsed.data, userId)) {
+    throw new CorruptPlanningStateError();
+  }
   return { schemaVersion: 1, state: parsed.data };
 }
 
@@ -80,7 +96,9 @@ export class CloudBasePlanningRepository implements PlanningRepository {
       .collection(collectionName)
       .doc(this.documentIdForUser(userId))
       .get();
-    return result.data === undefined ? structuredClone(emptyState) : decodeDocument(result.data);
+    return result.data === undefined
+      ? structuredClone(emptyState)
+      : decodeDocument(result.data, userId);
   }
 
   public async transact<TResult>(
@@ -96,9 +114,9 @@ export class CloudBasePlanningRepository implements PlanningRepository {
       const stored = await reference.get();
       const current = stored.data === undefined
         ? structuredClone(emptyState)
-        : decodeDocument(stored.data);
+        : decodeDocument(stored.data, userId);
       const { nextState, result } = operation(current);
-      await reference.set({ data: encodeDocument(nextState) });
+      await reference.set({ data: encodeDocument(nextState, userId) });
       return result;
     });
   }

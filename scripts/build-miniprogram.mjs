@@ -1,5 +1,6 @@
 import { cp, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { argv } from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
@@ -7,6 +8,12 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const sourceRoot = path.join(repositoryRoot, 'miniprogram');
 const buildRoot = path.join(repositoryRoot, '.build');
 const outputRoot = path.join(buildRoot, 'miniprogram');
+const apiModeArgument = argv.find((argument) => argument.startsWith('--api-mode='));
+const apiMode = apiModeArgument?.slice('--api-mode='.length) ?? 'cloud';
+
+if (apiMode !== 'cloud' && apiMode !== 'local') {
+  throw new Error(`Unsupported mini program API mode: ${apiMode}`);
+}
 
 if (path.dirname(outputRoot) !== buildRoot) {
   throw new Error(`Refusing to clean unexpected output directory: ${outputRoot}`);
@@ -27,6 +34,9 @@ await build({
   platform: 'browser',
   target: 'es2020',
   outdir: outputRoot,
+  define: {
+    __FITNESS_API_MODE__: JSON.stringify(apiMode)
+  },
   legalComments: 'none',
   sourcemap: false
 });

@@ -291,6 +291,9 @@ export function createVersionedPlanningService(
         if (profile === null) throw new PlanningPrerequisiteError('body_profile');
         const goal = findById(state.goals, state.activeGoalVersionId);
         if (goal === null) throw new PlanningPrerequisiteError('goal');
+        if (goal.bodyProfileVersionId !== profile.id) {
+          throw new PlanningPrerequisiteError('goal');
+        }
         const actualVersion = state.trainingPlans.length;
         assertExpectedVersion(envelope.expectedVersion, actualVersion);
 

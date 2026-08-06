@@ -1,0 +1,5 @@
+{
+  "planning-api": {
+    "invoke": "auth != null"
+  }
+}

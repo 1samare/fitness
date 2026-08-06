@@ -93,4 +93,41 @@ describe('CloudBasePlanningRepository', () => {
       CorruptPlanningStateError
     );
   });
+
+  test('fails closed when a stored version belongs to another user', async () => {
+    const database = new FakeDatabase();
+    const repository = new CloudBasePlanningRepository(database);
+    const service = createVersionedPlanningService({
+      repository,
+      now: () => '2026-08-03T08:00:00.000Z',
+      nextId: () => 'profile-user-b'
+    });
+    await service.saveBodyProfile('wx-openid-b', {
+      expectedVersion: 0,
+      idempotencyKey: 'profile-user-b-create',
+      payload: {
+        ageYears: 30,
+        sexCode: 0,
+        heightCm: 175,
+        weightKg: 70,
+        healthScopeConfirmed: true,
+        nonTrainingActivity: 'light',
+        allergens: [],
+        avoidFoods: [],
+        dietPreferences: [],
+        businessTimezone: 'Asia/Shanghai'
+      }
+    });
+    const userBDocument = database.documents.get(
+      `planning_user_states/${repository.documentIdForUser('wx-openid-b')}`
+    );
+    database.documents.set(
+      `planning_user_states/${repository.documentIdForUser('wx-openid-a')}`,
+      structuredClone(userBDocument)
+    );
+
+    await expect(repository.read('wx-openid-a')).rejects.toBeInstanceOf(
+      CorruptPlanningStateError
+    );
+  });
 });

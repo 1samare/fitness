@@ -4,7 +4,19 @@ import {
   type PlanningApiResponse
 } from '@fitness/contracts';
 
+declare const __FITNESS_API_MODE__: PlanningApiMode | undefined;
+
 export type PlanningTransport = (request: PlanningApiRequest) => Promise<unknown>;
+export type CloudFunctionInvoker = (
+  functionName: 'planning-api',
+  data: PlanningApiRequest
+) => Promise<unknown>;
+
+export function createCloudPlanningTransport(
+  invoke: CloudFunctionInvoker
+): PlanningTransport {
+  return (request) => invoke('planning-api', request);
+}
 
 export function createPlanningApiClient(transport: PlanningTransport) {
   return {
@@ -14,6 +26,18 @@ export function createPlanningApiClient(transport: PlanningTransport) {
       return parsed.data;
     }
   };
+}
+
+export type PlanningApiMode = 'local' | 'cloud';
+
+export function createPlanningApiClientForMode(
+  mode: PlanningApiMode,
+  transports: {
+    readonly local: PlanningTransport;
+    readonly cloud: PlanningTransport;
+  }
+) {
+  return createPlanningApiClient(mode === 'cloud' ? transports.cloud : transports.local);
 }
 
 const localTransport: PlanningTransport = (request) => new Promise((resolve, reject) => {
@@ -27,4 +51,22 @@ const localTransport: PlanningTransport = (request) => new Promise((resolve, rej
   });
 });
 
-export const planningApiClient = createPlanningApiClient(localTransport);
+const cloudTransport = createCloudPlanningTransport((functionName, data) => new Promise(
+  (resolve, reject) => {
+    wx.cloud.callFunction({
+      name: functionName,
+      data,
+      success: (response) => { resolve(response.result); },
+      fail: () => { reject(new Error('无法连接云端规划服务，请稍后重试。')); }
+    });
+  }
+));
+
+const apiMode: PlanningApiMode = typeof __FITNESS_API_MODE__ === 'undefined'
+  ? 'local'
+  : __FITNESS_API_MODE__;
+
+export const planningApiClient = createPlanningApiClientForMode(apiMode, {
+  local: localTransport,
+  cloud: cloudTransport
+});
