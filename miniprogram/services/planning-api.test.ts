@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { PlanningApiRequest } from '@fitness/contracts';
 import {
   createCloudPlanningTransport,
   createPlanningApiClient,
@@ -48,6 +49,47 @@ describe('mini program planning API client', () => {
       functionName: 'planning-api',
       data: { action: 'health' }
     }]);
+  });
+
+  it('forwards one complete planning setup request unchanged', async () => {
+    const calls: unknown[] = [];
+    const transport = createCloudPlanningTransport((_functionName, data) => {
+      calls.push(data);
+      return Promise.resolve({ success: true });
+    });
+    const request: PlanningApiRequest = {
+      action: 'completePlanningSetup',
+      payload: {
+        expectedVersions: { bodyProfile: 0, goal: 0, trainingPlan: 0 },
+        idempotencyKey: 'planning-setup-key-001',
+        bodyProfile: {
+          ageYears: 30,
+          sexCode: 0,
+          heightCm: 175,
+          weightKg: 70,
+          healthScopeConfirmed: true,
+          nonTrainingActivity: 'light',
+          allergens: [],
+          avoidFoods: [],
+          dietPreferences: [],
+          businessTimezone: 'Asia/Shanghai'
+        },
+        goal: {
+          goal: 'maintain',
+          effectiveDate: '2026-08-07',
+          targetDate: '2026-10-30'
+        },
+        trainingPlan: {
+          weekStartDate: '2026-08-10',
+          businessTimezone: 'Asia/Shanghai',
+          sessions: []
+        }
+      }
+    };
+
+    await transport(request);
+
+    expect(calls).toEqual([request]);
   });
 
   it('selects the cloud transport for a cloud build', async () => {

@@ -2,63 +2,158 @@
   <view class="hero">
     <text class="eyebrow">FITNESS · 版本化规划</text>
     <text class="title">创建一周训练与能量目标</text>
-    <text class="subtitle">按身体档案、目标、训练顺序保存；每次提交都会保留历史版本。</text>
+    <text class="subtitle">身体档案、目标、训练与每日能量目标会在一次提交中保存；网络中断后可安全重试。</text>
   </view>
 
   <view class="card">
     <text class="section-title">1. 身体档案与偏好</text>
-    <input type="number" value="{{ageYears}}" bindinput="onAgeInput" placeholder="年龄（自动能量支持 18–45 岁）" />
-    <input type="digit" value="{{heightCm}}" bindinput="onHeightInput" placeholder="身高（厘米）" />
-    <input type="digit" value="{{weightKg}}" bindinput="onWeightInput" placeholder="体重（千克）" />
-    <radio-group bindchange="onSexChange">
-      <label><radio value="0" checked="{{sexCode === '0'}}" />男</label>
-      <label><radio value="1" checked="{{sexCode === '1'}}" />女</label>
-    </radio-group>
-    <picker range="{{activityLabels}}" value="{{activityIndex}}" bindchange="onActivityChange">
-      <view class="picker">非训练日常活动：{{activityLabels[activityIndex]}}</view>
-    </picker>
-    <input value="{{allergens}}" bindinput="onAllergensInput" placeholder="过敏原，逗号分隔；没有可留空" />
-    <input value="{{avoidFoods}}" bindinput="onAvoidFoodsInput" placeholder="忌口，逗号分隔" />
-    <input value="{{dietPreferences}}" bindinput="onDietPreferencesInput" placeholder="饮食偏好，逗号分隔" />
-    <label class="consent"><switch checked="{{healthScopeConfirmed}}" bindchange="onHealthScopeChange" />我已确认不属于疾病治疗、孕哺期、进食障碍或伤病康复等需专业管理人群</label>
+    <label class="field">
+      <text class="field__label">年龄</text>
+      <input class="field__control" type="number" value="{{ageYears}}" bindinput="onAgeInput" placeholder="自动能量支持 18–45 岁" />
+    </label>
+    <label class="field">
+      <text class="field__label">身高（厘米）</text>
+      <input class="field__control" type="digit" value="{{heightCm}}" bindinput="onHeightInput" placeholder="例如 175" />
+    </label>
+    <label class="field">
+      <text class="field__label">体重（千克）</text>
+      <input class="field__control" type="digit" value="{{weightKg}}" bindinput="onWeightInput" placeholder="例如 70" />
+    </label>
+    <view class="field">
+      <text class="field__label">公式所需性别</text>
+      <radio-group class="radio-group" bindchange="onSexChange" aria-label="公式所需性别">
+        <label class="radio-option"><radio value="0" checked="{{sexCode === '0'}}" />男</label>
+        <label class="radio-option"><radio value="1" checked="{{sexCode === '1'}}" />女</label>
+      </radio-group>
+    </view>
+    <view class="field">
+      <text class="field__label">非训练日常活动</text>
+      <picker range="{{activityLabels}}" value="{{activityIndex}}" bindchange="onActivityChange">
+        <view class="field__control picker">{{activityLabels[activityIndex]}}</view>
+      </picker>
+      <text class="field__hint">这里只评价工作、通勤和家务，不重复计算明确训练。</text>
+    </view>
+    <label class="field">
+      <text class="field__label">过敏原</text>
+      <input class="field__control" value="{{allergens}}" bindinput="onAllergensInput" placeholder="逗号分隔；没有可留空" />
+    </label>
+    <label class="field">
+      <text class="field__label">忌口</text>
+      <input class="field__control" value="{{avoidFoods}}" bindinput="onAvoidFoodsInput" placeholder="逗号分隔；没有可留空" />
+    </label>
+    <label class="field">
+      <text class="field__label">饮食偏好</text>
+      <input class="field__control" value="{{dietPreferences}}" bindinput="onDietPreferencesInput" placeholder="例如 家常菜，逗号分隔" />
+    </label>
+    <label class="consent">
+      <switch checked="{{healthScopeConfirmed}}" bindchange="onHealthScopeChange" aria-label="确认健康适用范围" />
+      <text>我已确认不属于疾病治疗、孕哺期、进食障碍或伤病康复等需专业管理人群</text>
+    </label>
   </view>
 
   <view class="card">
     <text class="section-title">2. 健身目标</text>
-    <picker range="{{goalLabels}}" value="{{goalIndex}}" bindchange="onGoalChange">
-      <view class="picker">目标：{{goalLabels[goalIndex]}}</view>
-    </picker>
-    <input type="digit" value="{{targetWeightKg}}" bindinput="onTargetWeightInput" placeholder="目标体重（可选，千克）" />
-    <picker mode="date" value="{{effectiveDate}}" bindchange="onEffectiveDateChange">
-      <view class="picker">目标生效日：{{effectiveDate || '请选择'}}</view>
-    </picker>
-    <picker mode="date" value="{{targetDate}}" bindchange="onTargetDateChange">
-      <view class="picker">目标日期：{{targetDate || '请选择'}}</view>
-    </picker>
+    <view class="field">
+      <text class="field__label">目标类型</text>
+      <picker range="{{goalLabels}}" value="{{goalIndex}}" bindchange="onGoalChange">
+        <view class="field__control picker">{{goalLabels[goalIndex]}}</view>
+      </picker>
+    </view>
+    <label class="field">
+      <text class="field__label">目标体重（可选，千克）</text>
+      <input class="field__control" type="digit" value="{{targetWeightKg}}" bindinput="onTargetWeightInput" placeholder="减脂目标不会允许 BMI 低于 18.5" />
+    </label>
+    <view class="field">
+      <text class="field__label">目标生效日</text>
+      <picker mode="date" value="{{effectiveDate}}" bindchange="onEffectiveDateChange">
+        <view class="field__control picker">{{effectiveDate || '请选择'}}</view>
+      </picker>
+    </view>
+    <view class="field">
+      <text class="field__label">目标日期</text>
+      <picker mode="date" value="{{targetDate}}" bindchange="onTargetDateChange">
+        <view class="field__control picker">{{targetDate || '请选择'}}</view>
+      </picker>
+    </view>
   </view>
 
   <view class="card">
     <text class="section-title">3. 一周训练</text>
-    <picker mode="date" value="{{weekStartDate}}" bindchange="onWeekStartDateChange">
-      <view class="picker">规划周开始日：{{weekStartDate || '请选择'}}</view>
-    </picker>
-    <label class="consent"><switch checked="{{hasTraining}}" bindchange="onHasTrainingChange" />本周安排多动作抗阻训练</label>
-    <block wx:if="{{hasTraining}}">
-      <picker mode="date" value="{{trainingDate}}" bindchange="onTrainingDateChange">
-        <view class="picker">训练日期：{{trainingDate || '请选择'}}</view>
+    <view class="field">
+      <text class="field__label">规划周开始日</text>
+      <picker mode="date" value="{{weekStartDate}}" bindchange="onWeekStartDateChange">
+        <view class="field__control picker">{{weekStartDate || '请选择'}}</view>
       </picker>
-      <input type="digit" value="{{durationMinutes}}" bindinput="onDurationInput" placeholder="有效训练分钟数" />
-      <text class="hint">当前审核映射：2024 Adult Compendium 会话 02054；客户端不提交 MET。</text>
-    </block>
-    <button type="primary" loading="{{loading}}" disabled="{{loading}}" bindtap="onSubmit">保存并生成七天能量目标</button>
+      <text class="field__hint">选择目标周期和规划周后，会显示连续七天。</text>
+    </view>
+
+    <view wx:if="{{trainingDays.length === 0}}" class="empty-state">
+      请先选择有效的目标生效日、目标日期和规划周开始日。
+    </view>
+    <view
+      wx:for="{{trainingDays}}"
+      wx:key="businessDate"
+      class="training-day {{item.disabled ? 'training-day--disabled' : ''}}"
+    >
+      <view class="training-day__header">
+        <view class="training-day__date-group">
+          <text class="training-day__date">{{item.businessDate}}</text>
+          <text wx:if="{{item.disabled}}" class="training-day__reason">{{item.disabledReason}}</text>
+        </view>
+        <label class="training-day__switch">
+          <text>安排训练</text>
+          <switch
+            checked="{{item.enabled}}"
+            disabled="{{item.disabled}}"
+            data-index="{{index}}"
+            bindchange="onTrainingEnabledChange"
+            aria-label="{{item.businessDate}}安排训练"
+          />
+        </label>
+      </view>
+      <view class="training-day__fields">
+        <view class="field field--compact">
+          <text class="field__label">审核训练会话</text>
+          <picker
+            range="{{sessionLabels}}"
+            value="{{item.sessionIndex}}"
+            disabled="{{!item.enabled || item.disabled}}"
+            data-index="{{index}}"
+            bindchange="onTrainingSessionChange"
+          >
+            <view class="field__control picker {{!item.enabled || item.disabled ? 'field__control--disabled' : ''}}">
+              {{sessionLabels[item.sessionIndex] || '请选择'}}
+            </view>
+          </picker>
+        </view>
+        <label class="field field--compact">
+          <text class="field__label">有效分钟数</text>
+          <input
+            class="field__control"
+            type="digit"
+            value="{{item.durationMinutes}}"
+            disabled="{{!item.enabled || item.disabled}}"
+            data-index="{{index}}"
+            bindinput="onTrainingDurationInput"
+            placeholder="例如 60"
+            aria-label="{{item.businessDate}}有效训练分钟数"
+          />
+        </label>
+      </view>
+    </view>
+
+    <text class="hint">动作选项来自人工审核的 2024 Adult Compendium 会话映射；客户端不提交 MET。</text>
+    <button class="submit-button" type="primary" loading="{{loading}}" disabled="{{loading}}" bindtap="onSubmit">
+      {{loading ? '正在保存…' : '保存并生成能量目标'}}
+    </button>
   </view>
 
-  <view wx:if="{{successMessage}}" class="card result-card">
+  <view wx:if="{{successMessage}}" class="card result-card" aria-live="polite">
     <text class="success">{{successMessage}}</text>
     <view wx:for="{{displayTargets}}" wx:key="businessDate" class="target-row">
       <text>{{item.businessDate}}</text><text>{{item.energyText}}</text>
     </view>
-    <text class="hint">当前仅生成确定性能量目标，宏量营养与食谱将在后续阶段加入。</text>
+    <text class="hint">所有能量和训练消耗均为估算；当前仅生成确定性能量目标，宏量营养与食谱将在后续阶段加入。</text>
   </view>
-  <view wx:if="{{errorMessage}}" class="error">{{errorMessage}}</view>
+  <view wx:if="{{errorMessage}}" class="error" aria-role="alert" aria-live="assertive">{{errorMessage}}</view>
 </view>

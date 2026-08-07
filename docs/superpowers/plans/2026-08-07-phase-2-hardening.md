@@ -659,7 +659,7 @@ git push origin codex/phase-2
 - Produces: one composite request per logical form payload, persisted under `fitness.pendingPlanningSetup.v1` until a validated success response.
 - Consumes: Task 5 API and Task 6 normalized payload/catalog.
 
-- [ ] **Step 1: Write failing pending-command tests**
+- [x] **Step 1: Write failing pending-command tests**
 
 Create pure tests proving:
 
@@ -670,7 +670,7 @@ Create pure tests proving:
 
 Use a literal pending record and assert complete request equality; do not mock `wx`.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 ```powershell
 & .\node_modules\.bin\vitest.CMD run miniprogram/pages/planning-setup/pending-command.test.ts miniprogram/pages/planning-setup/form.test.ts miniprogram/services/planning-api.test.ts
@@ -678,7 +678,7 @@ Use a literal pending record and assert complete request equality; do not mock `
 
 Expected: FAIL because pending command selection and composite page calls do not exist.
 
-- [ ] **Step 3: Implement pure pending command selection**
+- [x] **Step 3: Implement pure pending command selection**
 
 Define:
 
@@ -698,7 +698,7 @@ export function selectPlanningSetupCommand(input: {
 
 The client fingerprint may be deterministic JSON of the normalized fixed-shape payload because it stays only in private local storage; the server remains authoritative with SHA-256.
 
-- [ ] **Step 4: Replace sequential page writes with one recoverable call**
+- [x] **Step 4: Replace sequential page writes with one recoverable call**
 
 Update page flow in this order:
 
@@ -713,13 +713,13 @@ Update page flow in this order:
 
 Use a Shanghai business-date helper for disabling rows; server validation remains authoritative.
 
-- [ ] **Step 5: Render seven editable rows**
+- [x] **Step 5: Render seven editable rows**
 
 `index.wxml` must use `wx:for` over `trainingDays`. Each row renders date, enabled switch, reviewed-session picker, and duration input. Event handlers update indexed fields using `data-index`. Disabled rows show “过去日期不可改” or “目标周期外”. Remove the hard-coded `02054` copy and read labels/codes from the reviewed catalog.
 
 Update CSS with `.training-day`, `.training-day__header`, `.training-day--disabled`, and compact picker/input states. Keep estimates/non-medical copy unchanged.
 
-- [ ] **Step 6: Verify page logic, build, commit, and push**
+- [x] **Step 6: Verify page logic, build, commit, and push**
 
 ```powershell
 & .\node_modules\.bin\vitest.CMD run miniprogram/pages/planning-setup/pending-command.test.ts miniprogram/pages/planning-setup/form.test.ts miniprogram/services/planning-api.test.ts
