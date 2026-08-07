@@ -108,6 +108,7 @@ function publicDailyEnergyTarget(version: DailyEnergyTargetVersion) {
     goalVersionId: version.goalVersionId,
     trainingPlanVersionId: version.trainingPlanVersionId,
     energyPolicyVersion: version.energyPolicyVersion,
+    nutritionPolicyVersion: version.nutritionPolicyVersion,
     energy: version.energy
   };
 }
@@ -118,7 +119,8 @@ function currentContextResponse(context: CurrentPlanningContext) {
     bodyProfile: context.bodyProfile === null ? null : publicBodyProfile(context.bodyProfile),
     goal: context.goal === null ? null : publicGoal(context.goal),
     trainingPlan: context.trainingPlan === null ? null : publicTrainingPlan(context.trainingPlan),
-    dailyEnergyTargets: context.dailyEnergyTargets.map(publicDailyEnergyTarget)
+    dailyEnergyTargets: context.dailyEnergyTargets.map(publicDailyEnergyTarget),
+    latestVersions: context.latestVersions
   };
 }
 

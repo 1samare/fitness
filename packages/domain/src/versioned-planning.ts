@@ -69,13 +69,42 @@ export interface DailyEnergyTargetVersion extends VersionMetadata {
   readonly goalVersionId: string;
   readonly trainingPlanVersionId: string;
   readonly energyPolicyVersion: 'calculation-policy-v2';
+  readonly nutritionPolicyVersion: 'nutrition-policy-v1';
   readonly energy: DailyEnergyResult;
+}
+
+export interface LatestPlanningVersions {
+  readonly bodyProfile: number;
+  readonly goal: number;
+  readonly trainingPlan: number;
+}
+
+export interface CompletePlanningSetupCommand {
+  readonly expectedVersions: LatestPlanningVersions;
+  readonly idempotencyKey: string;
+  readonly bodyProfile: BodyProfilePayload;
+  readonly goal: GoalPayload;
+  readonly trainingPlan: TrainingPlanPayload;
+}
+
+export interface TrainingPlanChangedEvent {
+  readonly eventId: string;
+  readonly eventType: 'TrainingPlanChanged';
+  readonly userId: string;
+  readonly previousTrainingPlanVersionId: string | null;
+  readonly trainingPlanVersionId: string;
+  readonly bodyProfileVersionId: string;
+  readonly goalVersionId: string;
+  readonly affectedDates: readonly string[];
+  readonly occurredAt: string;
+  readonly status: 'pending';
 }
 
 export type PlanningWriteOperation =
   | 'saveBodyProfile'
   | 'saveGoal'
-  | 'saveTrainingPlan';
+  | 'saveTrainingPlan'
+  | 'completePlanningSetup';
 
 export type IdempotencyRecord =
   | {
@@ -95,6 +124,18 @@ export type IdempotencyRecord =
       readonly key: string;
       readonly requestFingerprint: string;
       readonly resultVersionId: string;
+    }
+  | {
+      readonly operation: 'completePlanningSetup';
+      readonly key: string;
+      readonly requestFingerprint: string;
+      readonly resultVersionIds: {
+        readonly bodyProfileVersionId: string;
+        readonly goalVersionId: string;
+        readonly trainingPlanVersionId: string;
+        readonly dailyEnergyTargetVersionIds: readonly string[];
+        readonly eventId: string;
+      };
     };
 
 export interface PlanningAggregateState {
@@ -102,6 +143,7 @@ export interface PlanningAggregateState {
   readonly goals: readonly GoalVersion[];
   readonly trainingPlans: readonly TrainingPlanVersion[];
   readonly dailyEnergyTargets: readonly DailyEnergyTargetVersion[];
+  readonly outboxEvents: readonly TrainingPlanChangedEvent[];
   readonly idempotencyRecords: readonly IdempotencyRecord[];
   readonly activeBodyProfileVersionId: string | null;
   readonly activeGoalVersionId: string | null;
@@ -113,6 +155,7 @@ export interface CurrentPlanningContext {
   readonly goal: GoalVersion | null;
   readonly trainingPlan: TrainingPlanVersion | null;
   readonly dailyEnergyTargets: readonly DailyEnergyTargetVersion[];
+  readonly latestVersions: LatestPlanningVersions;
 }
 
 export interface WriteCommandEnvelope<TPayload> {

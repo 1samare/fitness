@@ -10,6 +10,7 @@ const emptyState: PlanningAggregateState = {
   goals: [],
   trainingPlans: [],
   dailyEnergyTargets: [],
+  outboxEvents: [],
   idempotencyRecords: [],
   activeBodyProfileVersionId: null,
   activeGoalVersionId: null,
@@ -58,7 +59,8 @@ function isOwnedByUser(state: PlanningAggregateState, userId: string): boolean {
     ...state.bodyProfiles,
     ...state.goals,
     ...state.trainingPlans,
-    ...state.dailyEnergyTargets
+    ...state.dailyEnergyTargets,
+    ...state.outboxEvents
   ].every((version) => version.userId === userId);
 }
 

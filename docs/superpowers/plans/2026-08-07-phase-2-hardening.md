@@ -36,12 +36,18 @@
 - Modify: `packages/contracts/src/planning-api.test.ts`
 - Modify: `packages/domain/src/versioned-planning.ts`
 - Modify: `packages/calculation/src/policy.ts`
+- Modify: `packages/application/src/versioned-planning.ts`
+- Modify: `packages/persistence/src/in-memory-planning-repository.ts`
+- Modify: `packages/persistence/src/cloudbase-planning-repository.ts`
+- Modify: `packages/persistence/src/versioned-planning.test.ts`
+- Modify: `cloudfunctions/planning-api/src/handler.ts`
+- Modify: `cloudfunctions/planning-api/src/handler.test.ts`
 
 **Interfaces:**
 - Produces: `isBusinessDate(value: string): boolean`, `addBusinessDays(date: string, days: number): string`, `businessDateSchema`, `planningSetupPayloadSchema`, `PlanningSetupPayload`, `CompletePlanningSetupCommand`, `TrainingPlanChangedEvent`, `LatestPlanningVersions`, `NUTRITION_POLICY_V1`, and updated request/response schemas.
 - Consumes: existing `DailyEnergyResult`, profile/goal/training payloads, and `calculation-policy-v2`.
 
-- [ ] **Step 1: Write failing calendar-date tests**
+- [x] **Step 1: Write failing calendar-date tests**
 
 Create `packages/contracts/src/business-date.test.ts`:
 
@@ -69,7 +75,7 @@ describe('business dates', () => {
 
 Extend `packages/contracts/src/planning-api.test.ts` with one request using `effectiveDate: '2026-02-30'` and one using `weekStartDate: '2025-02-29'`; assert both throw. Add a valid `completePlanningSetup` request and assert that adding `userId: 'attacker'` at the action or payload level throws.
 
-- [ ] **Step 2: Run the contract tests and verify RED**
+- [x] **Step 2: Run the contract tests and verify RED**
 
 ```powershell
 & .\node_modules\.bin\vitest.CMD run packages/contracts/src/business-date.test.ts packages/contracts/src/planning-api.test.ts
@@ -77,7 +83,7 @@ Extend `packages/contracts/src/planning-api.test.ts` with one request using `eff
 
 Expected: FAIL because `business-date.ts`, strict calendar refinement, and `completePlanningSetup` do not exist.
 
-- [ ] **Step 3: Implement calendar helpers without silent date normalization**
+- [x] **Step 3: Implement calendar helpers without silent date normalization**
 
 Create `packages/contracts/src/business-date.ts` with this public shape:
 
@@ -114,7 +120,7 @@ export const businessDateSchema = z.string().refine(isBusinessDate, {
 
 Export it from `packages/contracts/src/index.ts`. Replace the regex-only date schema in `planning-api.ts` with this schema.
 
-- [ ] **Step 4: Add the approved domain records**
+- [x] **Step 4: Add the approved domain records**
 
 Update `packages/domain/src/versioned-planning.ts` with these exact concepts:
 
@@ -149,7 +155,7 @@ export interface TrainingPlanChangedEvent {
 
 Add `nutritionPolicyVersion: 'nutrition-policy-v1'` to `DailyEnergyTargetVersion`, add `outboxEvents` to `PlanningAggregateState`, add `latestVersions` to `CurrentPlanningContext`, and add `completePlanningSetup` to `PlanningWriteOperation`/`IdempotencyRecord` with a structured result containing the three version IDs, daily-target IDs, and event ID.
 
-- [ ] **Step 5: Add versioned nutrition policy metadata**
+- [x] **Step 5: Add versioned nutrition policy metadata**
 
 Extend `packages/calculation/src/policy.ts`:
 
@@ -166,7 +172,7 @@ export const NUTRITION_POLICY_V1 = Object.freeze({
 
 Do not add nutrition constants or calculations in this task.
 
-- [ ] **Step 6: Extend strict request, response, stored-state, event, and error schemas**
+- [x] **Step 6: Extend strict request, response, stored-state, event, and error schemas**
 
 In `packages/contracts/src/planning-api.ts`:
 
@@ -181,14 +187,19 @@ In `packages/contracts/src/planning-api.ts`:
 
 All objects remain `.strict()` and no public schema exposes `userId`.
 
-- [ ] **Step 7: Verify GREEN, typecheck, commit, and push**
+- [x] **Step 7: Adapt existing producers to the new required fields**
+
+Before the composite service exists, keep the existing three-write flow green by adding `outboxEvents: []` to both repository empty states, adding `nutritionPolicyVersion: 'nutrition-policy-v1'` to current daily-target creation/public mapping, and adding history-length `latestVersions` to `getCurrentContext`/the public response. Update the existing handler isolation expectation to include zero version counts. Do not implement or route `completePlanningSetup` in this compatibility step.
+
+- [x] **Step 8: Verify GREEN, typecheck, commit, and push**
 
 ```powershell
 & .\node_modules\.bin\vitest.CMD run packages/contracts/src/business-date.test.ts packages/contracts/src/planning-api.test.ts
+pnpm.cmd test
 pnpm.cmd typecheck
 pnpm.cmd lint
 git diff --check
-git add -- packages/contracts packages/domain/src/versioned-planning.ts packages/calculation/src/policy.ts docs/superpowers/plans/2026-08-07-phase-2-hardening.md
+git add -- packages/contracts packages/domain/src/versioned-planning.ts packages/calculation/src/policy.ts packages/application/src/versioned-planning.ts packages/persistence/src/in-memory-planning-repository.ts packages/persistence/src/cloudbase-planning-repository.ts packages/persistence/src/versioned-planning.test.ts cloudfunctions/planning-api/src/handler.ts cloudfunctions/planning-api/src/handler.test.ts docs/superpowers/plans/2026-08-07-phase-2-hardening.md
 git commit -m "feat: extend phase two planning contracts"
 git push origin codex/phase-2
 ```

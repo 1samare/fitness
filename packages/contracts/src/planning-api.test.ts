@@ -117,4 +117,74 @@ describe('planning API contracts', () => {
       }
     })).toThrow();
   });
+
+  it('rejects impossible goal and training calendar dates', () => {
+    expect(() => planningApiRequestSchema.parse({
+      action: 'saveGoal',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'goal-invalid-date-001',
+        payload: {
+          goal: 'maintain',
+          effectiveDate: '2026-02-30',
+          targetDate: '2026-03-30'
+        }
+      }
+    })).toThrow();
+
+    expect(() => planningApiRequestSchema.parse({
+      action: 'saveTrainingPlan',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'training-invalid-date-001',
+        payload: {
+          weekStartDate: '2025-02-29',
+          businessTimezone: 'Asia/Shanghai',
+          sessions: []
+        }
+      }
+    })).toThrow();
+  });
+
+  it('accepts atomic setup without accepting a client userId', () => {
+    const request = {
+      action: 'completePlanningSetup',
+      payload: {
+        expectedVersions: { bodyProfile: 0, goal: 0, trainingPlan: 0 },
+        idempotencyKey: 'setup-create-001',
+        bodyProfile: {
+          ageYears: 30,
+          sexCode: 0,
+          heightCm: 175,
+          weightKg: 70,
+          healthScopeConfirmed: true,
+          nonTrainingActivity: 'light',
+          allergens: [],
+          avoidFoods: [],
+          dietPreferences: [],
+          businessTimezone: 'Asia/Shanghai'
+        },
+        goal: {
+          goal: 'maintain',
+          effectiveDate: '2026-08-07',
+          targetDate: '2026-10-30'
+        },
+        trainingPlan: {
+          weekStartDate: '2026-08-10',
+          businessTimezone: 'Asia/Shanghai',
+          sessions: []
+        }
+      }
+    } as const;
+
+    expect(planningApiRequestSchema.parse(request)).toEqual(request);
+    expect(() => planningApiRequestSchema.parse({
+      ...request,
+      payload: { ...request.payload, userId: 'attacker-selected-user' }
+    })).toThrow();
+    expect(() => planningApiRequestSchema.parse({
+      ...request,
+      userId: 'attacker-selected-user'
+    })).toThrow();
+  });
 });

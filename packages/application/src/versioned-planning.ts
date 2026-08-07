@@ -100,13 +100,15 @@ function fingerprint<T>(envelope: WriteCommandEnvelope<T>): string {
   });
 }
 
-function findIdempotencyRecord(
+function findIdempotencyRecord<TOperation extends IdempotencyRecord['operation']>(
   state: PlanningAggregateState,
-  operation: IdempotencyRecord['operation'],
+  operation: TOperation,
   key: string
-): IdempotencyRecord | undefined {
+): Extract<IdempotencyRecord, { readonly operation: TOperation }> | undefined {
   return state.idempotencyRecords.find(
-    (record) => record.operation === operation && record.key === key
+    (record): record is Extract<IdempotencyRecord, { readonly operation: TOperation }> => (
+      record.operation === operation && record.key === key
+    )
   );
 }
 
@@ -344,6 +346,7 @@ export function createVersionedPlanningService(
             goalVersionId: goal.id,
             trainingPlanVersionId: trainingPlan.id,
             energyPolicyVersion: 'calculation-policy-v2',
+            nutritionPolicyVersion: 'nutrition-policy-v1',
             energy
           };
           return target;
@@ -380,8 +383,13 @@ export function createVersionedPlanningService(
         dailyEnergyTargets: trainingPlan === null
           ? []
           : state.dailyEnergyTargets.filter(
-              (target) => target.trainingPlanVersionId === trainingPlan.id
-            )
+            (target) => target.trainingPlanVersionId === trainingPlan.id
+            ),
+        latestVersions: {
+          bodyProfile: state.bodyProfiles.length,
+          goal: state.goals.length,
+          trainingPlan: state.trainingPlans.length
+        }
       };
     }
   };

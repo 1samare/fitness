@@ -128,7 +128,8 @@ describe('versioned planning service', () => {
       bodyProfile: null,
       goal: null,
       trainingPlan: null,
-      dailyEnergyTargets: []
+      dailyEnergyTargets: [],
+      latestVersions: { bodyProfile: 0, goal: 0, trainingPlan: 0 }
     });
   });
 
