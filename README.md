@@ -1,6 +1,6 @@
 # Fitness 饮食与训练规划助手
 
-> 项目状态：第二阶段身份、持久化与版本基础已实现；CloudBase 实机部署与双身份隔离待人工验收
+> 项目状态：第二阶段代码与本地自动化验收已实现；CloudBase 实机部署、规则发布与双身份隔离待人工验收
 > 目标平台：面向中国大陆健康成年人的微信小程序  
 > 架构基线日期：2026-07-30
 
@@ -21,13 +21,15 @@ pnpm.cmd dev:api
 
 `pnpm.cmd dev:api` 会构建并启动 CloudBase 兼容的本地函数服务，监听 `http://127.0.0.1:3000/`。保持该终端运行，再执行 `pnpm.cmd open:miniprogram`；该命令会显式生成本地 API 构建并通过微信开发者工具打开仓库项目。若工具未注册开始菜单快捷方式，可将 `WECHAT_DEVTOOLS_CLI` 设置为 `cli.bat` 的绝对路径。
 
-常规 `pnpm.cmd build` 生成云端小程序构建，客户端通过 `wx.cloud.callFunction` 调用 `planning-api`，由云函数运行时提供可信 OpenID。真实部署前需配置微信 AppID 和 CloudBase 开发环境，并应用拒绝客户端直读数据库的规则；仓库不提交环境 ID 或密钥。部署与双身份验收清单见 [`docs/cloudbase/phase-2-deployment.md`](docs/cloudbase/phase-2-deployment.md)。
+常规 `pnpm.cmd build` 同时生成云端小程序构建和可部署的 `.build/cloudfunctions/planning-api` 单文件制品。客户端通过 `wx.cloud.callFunction` 调用 `planning-api`，用户身份只取自云函数运行时的可信 OpenID。真实部署前需配置微信 AppID 和 CloudBase 开发环境，并应用拒绝客户端直读数据库的规则；仓库不提交环境 ID 或密钥。部署与双身份验收清单见 [`docs/cloudbase/phase-2-deployment.md`](docs/cloudbase/phase-2-deployment.md)。
 
 无需打开小程序也可以执行 `pnpm.cmd smoke:api`：它会在隔离端口启动真实函数进程，验证健康检查、受支持能量预览和超出适用范围三种场景，然后回收子进程。`pnpm.cmd dry-run:api` 用于确认 CloudBase 函数构建产物可被本地运行框架加载。
 
 自动化验收覆盖 lint、类型检查、单元测试、构建、CloudBase 本地加载和真实 HTTP 进程烟雾测试。`pnpm.cmd open:miniprogram` 只负责构建并请求已安装的微信开发者工具打开项目；页面在 IDE 内的实际渲染，以及受支持/不受支持两次表单交互，仍需人工确认，不能由命令退出码替代。
 
-当前实现覆盖身体档案、目标、一周训练计划和七日能量目标的不可变版本，所有写入包含预期版本和幂等键；CloudBase 适配器按服务端可信身份隔离用户聚合。阶段二尚不生成宏量营养目标或食谱，不访问对象存储、AI+、模型、视觉或营养外部供应商。
+当前实现用一个原子命令保存身体档案、目标、一周训练计划、受影响日期的能量目标、幂等结果和 `TrainingPlanChanged` outbox 事件；请求在响应丢失后会复用同一幂等键安全重试。独立编辑会使旧的下游活动指针失效，当前上下文只返回一致的活动版本链，同时返回各实体的历史版本计数。
+
+同周训练变更只为发生新增、移动、取消或时长变化的未来日期追加能量目标版本；过去事实不改写。每日目标同时记录 `calculation-policy-v2` 和 `nutrition-policy-v1`，其中 `nutrition-policy-v1` 目前仅为来源追溯元数据，阶段二尚不计算宏量营养素、食材克数、食谱或餐单。CloudBase 聚合文档从 schema v2 开始，没有已部署的阶段二 v1 数据需要迁移。
 
 ## 项目简介
 

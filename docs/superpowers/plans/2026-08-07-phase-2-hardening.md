@@ -748,7 +748,7 @@ git push origin codex/phase-2
 - Produces: ignored `.build/cloudfunctions/planning-api/index.js` plus a dependency-free package manifest, and exact sanitized deployment/acceptance instructions.
 - Consumes: bundled `cloudfunctions/planning-api/dist/index.js`; no real AppID/EnvId is written.
 
-- [ ] **Step 1: Add a failing artifact smoke check**
+- [x] **Step 1: Add a failing artifact smoke check**
 
 Create the build script so it fails before implementation when `dist/index.js` is missing. Its postcondition must be verifiable with:
 
@@ -760,7 +760,7 @@ node -e "const fn=require('./.build/cloudfunctions/planning-api/index.js'); if(t
 
 Expected before the script exists: command fails. Expected after implementation: exit `0` and no network access.
 
-- [ ] **Step 2: Implement safe artifact generation**
+- [x] **Step 2: Implement safe artifact generation**
 
 The script resolves repository paths from `import.meta.url`, verifies that the cleanup target is exactly `.build/cloudfunctions/planning-api`, removes only that directory, copies `dist/index.js`, and writes this generated manifest:
 
@@ -775,7 +775,7 @@ The script resolves repository paths from `import.meta.url`, verifies that the c
 
 Do not copy source maps, source files, workspace manifests, node_modules, or secrets. Add the script to root `build` after workspace builds and before the mini-program build.
 
-- [ ] **Step 3: Update documentation to actual behavior**
+- [x] **Step 3: Update documentation to actual behavior**
 
 README and deployment docs must state:
 
@@ -801,7 +801,7 @@ if ($phase2AppId -eq 'touristappid') { throw 'A real local AppID is required' }
 & $wechatCli cloud functions list --env $phase2EnvId --appid $phase2AppId
 ```
 
-- [ ] **Step 4: Verify, commit, and push**
+- [x] **Step 4: Verify, commit, and push**
 
 ```powershell
 pnpm.cmd build
