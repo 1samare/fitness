@@ -11,17 +11,19 @@ export { CorruptPlanningStateError } from './planning-aggregate-invariants';
 
 const collectionName = 'planning_user_states';
 
-const emptyState: PlanningAggregateState = {
-  bodyProfiles: [],
-  goals: [],
-  trainingPlans: [],
-  dailyEnergyTargets: [],
-  outboxEvents: [],
-  idempotencyRecords: [],
-  activeBodyProfileVersionId: null,
-  activeGoalVersionId: null,
-  activeTrainingPlanVersionId: null
-};
+function createEmptyState(): PlanningAggregateState {
+  return {
+    bodyProfiles: [],
+    goals: [],
+    trainingPlans: [],
+    dailyEnergyTargets: [],
+    outboxEvents: [],
+    idempotencyRecords: [],
+    activeBodyProfileVersionId: null,
+    activeGoalVersionId: null,
+    activeTrainingPlanVersionId: null
+  };
+}
 
 export interface CloudBaseDocumentReference {
   get(): Promise<{ readonly data?: unknown }>;
@@ -84,7 +86,7 @@ export class CloudBasePlanningRepository implements PlanningRepository {
       .doc(this.documentIdForUser(userId))
       .get();
     return result.data === undefined
-      ? structuredClone(emptyState)
+      ? createEmptyState()
       : decodeDocument(result.data, userId);
   }
 
@@ -100,7 +102,7 @@ export class CloudBasePlanningRepository implements PlanningRepository {
       const reference = transaction.collection(collectionName).doc(documentId);
       const stored = await reference.get();
       const current = stored.data === undefined
-        ? structuredClone(emptyState)
+        ? createEmptyState()
         : decodeDocument(stored.data, userId);
       const { nextState, result } = operation(current);
       await reference.set({ data: encodeDocument(nextState, userId) });

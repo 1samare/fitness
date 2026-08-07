@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { createVersionedPlanningService } from '@fitness/application';
 import {
   CloudBasePlanningRepository,
@@ -20,7 +20,7 @@ class FakeDocumentReference implements CloudBaseDocumentReference {
   }
 
   public set(input: { readonly data: unknown }): Promise<unknown> {
-    this.documents.set(this.key, structuredClone(input.data));
+    this.documents.set(this.key, input.data);
     return Promise.resolve({ updated: 1 });
   }
 }
@@ -47,6 +47,20 @@ class FakeDatabase implements CloudBaseDatabase, CloudBaseTransaction {
 }
 
 describe('CloudBasePlanningRepository', () => {
+  test('initializes missing state without the Node 17 structuredClone global', async () => {
+    vi.stubGlobal('structuredClone', undefined);
+    try {
+      const repository = new CloudBasePlanningRepository(new FakeDatabase());
+
+      await expect(repository.transact('wx-openid-a', (state) => ({
+        nextState: state,
+        result: 'initialized'
+      }))).resolves.toBe('initialized');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test('persists validated state across repository instances without exposing OpenID in the key', async () => {
     const database = new FakeDatabase();
     const firstRepository = new CloudBasePlanningRepository(database);
