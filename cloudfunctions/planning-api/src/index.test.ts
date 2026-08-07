@@ -38,6 +38,20 @@ describe('CloudBase main event adapter', () => {
     if (result.success) expect(result.data.kind).toBe('current_context');
   });
 
+  it('removes CloudBase tcbContext metadata before strict request validation', async () => {
+    const injectedMain = createMain({
+      resolveIdentity: () => ({ userId: 'trusted-runtime-user' }),
+      handle: createRuntimePlanningHandler({ runtimeMode: 'local' })
+    });
+    const result = await injectedMain({
+      action: 'getCurrentContext',
+      tcbContext: { requestId: 'platform-request' }
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.kind).toBe('current_context');
+  });
+
   it('does not authenticate from CloudBase event userInfo', async () => {
     const injectedMain = createMain({
       resolveIdentity: () => undefined,
@@ -46,6 +60,20 @@ describe('CloudBase main event adapter', () => {
     const result = await injectedMain({
       action: 'getCurrentContext',
       userInfo: { appId: 'platform-app', openId: 'untrusted-event-user' }
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.code).toBe('unauthenticated');
+  });
+
+  it('does not authenticate from CloudBase event tcbContext', async () => {
+    const injectedMain = createMain({
+      resolveIdentity: () => undefined,
+      handle: createRuntimePlanningHandler({ runtimeMode: 'local' })
+    });
+    const result = await injectedMain({
+      action: 'getCurrentContext',
+      tcbContext: { userId: 'untrusted-event-user' }
     });
 
     expect(result.success).toBe(false);

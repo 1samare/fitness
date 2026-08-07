@@ -10,9 +10,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function removePlatformEventMetadata(input: unknown): unknown {
-  if (!isRecord(input) || !('userInfo' in input)) return input;
+  if (
+    !isRecord(input)
+    || (!('userInfo' in input) && !('tcbContext' in input))
+  ) return input;
   const normalizedInput = { ...input };
   delete normalizedInput.userInfo;
+  delete normalizedInput.tcbContext;
   return normalizedInput;
 }
 
