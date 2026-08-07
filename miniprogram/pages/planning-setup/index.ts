@@ -2,7 +2,7 @@ import type { PlanningApiResponse } from '@fitness/contracts';
 import { planningApiClient } from '../../services/planning-api';
 import {
   buildPlanningSetupRequests,
-  type PlanningSetupFormInput
+  type LegacyPlanningSetupFormInput
 } from './form';
 
 type SuccessData = Extract<PlanningApiResponse, { success: true }>['data'];
@@ -17,7 +17,7 @@ interface DisplayTarget {
   readonly energyText: string;
 }
 
-interface PageData extends PlanningSetupFormInput {
+interface PageData extends LegacyPlanningSetupFormInput {
   readonly activityLabels: readonly string[];
   readonly activityValues: readonly string[];
   activityIndex: number;

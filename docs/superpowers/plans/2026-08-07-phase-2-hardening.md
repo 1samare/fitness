@@ -571,7 +571,7 @@ git push origin codex/phase-2
 - Produces: `displayNameZh` in reviewed session data, `TrainingDayFormInput`, `buildTrainingDayRows`, and `buildPlanningSetupPayload` for zero-to-seven sessions.
 - Consumes: `businessDateSchema`/`addBusinessDays` and the reviewed MET catalog; never consumes raw MET in the page payload.
 
-- [ ] **Step 1: Write failing catalog and form tests**
+- [x] **Step 1: Write failing catalog and form tests**
 
 Extend the MET fixture expectation with:
 
@@ -589,7 +589,7 @@ Replace the single-session form tests with table-driven tests that prove:
 - changing `weekStartDate` yields seven exact consecutive business dates across a month boundary;
 - the result is a payload only, with no `userId`, MET, IDs, timestamps, versions, or idempotency key.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 ```powershell
 & .\node_modules\.bin\vitest.CMD run data/met-sessions/src/reviewed-met-sessions.test.ts miniprogram/pages/planning-setup/form.test.ts
@@ -597,7 +597,7 @@ Replace the single-session form tests with table-driven tests that prove:
 
 Expected: FAIL because the catalog label and seven-row form model do not exist.
 
-- [ ] **Step 3: Make the reviewed catalog consumable by the mini program**
+- [x] **Step 3: Make the reviewed catalog consumable by the mini program**
 
 Add `displayNameZh` without changing MET, source ID, dataset version, review date, or English source description. Add `@fitness/met-sessions: workspace:*` to root `devDependencies` and run:
 
@@ -607,7 +607,7 @@ pnpm.cmd install --lockfile-only
 
 The lockfile change must contain only the workspace link needed by the root mini-program build.
 
-- [ ] **Step 4: Implement the pure seven-day form builder**
+- [x] **Step 4: Implement the pure seven-day form builder**
 
 Replace `trainingDate`/`durationMinutes` with:
 
@@ -630,7 +630,7 @@ type SetupRequest = Extract<PlanningApiRequest, { action: 'completePlanningSetup
 export type PlanningVersions = SetupRequest['payload']['expectedVersions'];
 ```
 
-- [ ] **Step 5: Verify, commit, and push**
+- [x] **Step 5: Verify, commit, and push**
 
 ```powershell
 & .\node_modules\.bin\vitest.CMD run data/met-sessions/src/reviewed-met-sessions.test.ts miniprogram/pages/planning-setup/form.test.ts

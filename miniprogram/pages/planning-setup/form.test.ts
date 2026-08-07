@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'vitest';
-import { buildPlanningSetupRequests } from './form';
+import {
+  buildPlanningSetupPayload,
+  buildTrainingDayRows,
+  type PlanningSetupFormInput,
+  type TrainingDayFormInput
+} from './form';
 
-const validForm = {
+const baseForm = {
   ageYears: '30',
   sexCode: '0',
   heightCm: '175',
@@ -15,78 +20,143 @@ const validForm = {
   targetWeightKg: '',
   effectiveDate: '2026-08-03',
   targetDate: '2026-10-26',
-  weekStartDate: '2026-08-03',
-  trainingDate: '2026-08-04',
-  durationMinutes: '60'
+  weekStartDate: '2026-08-03'
 } as const;
 
-describe('buildPlanningSetupRequests', () => {
-  test('builds three versioned commands and normalizes comma-separated preferences', () => {
-    const result = buildPlanningSetupRequests(validForm, {
-      bodyProfile: 0,
-      goal: 0,
-      trainingPlan: 0
-    }, {
-      bodyProfile: 'profile-key-001',
-      goal: 'goal-key-001',
-      trainingPlan: 'training-key-001'
-    });
+function formWith(trainingDays: readonly TrainingDayFormInput[]): PlanningSetupFormInput {
+  return { ...baseForm, trainingDays };
+}
+
+function enabledRow(row: TrainingDayFormInput, durationMinutes = '60') {
+  return {
+    ...row,
+    enabled: true,
+    sessionCode: '02054',
+    durationMinutes
+  };
+}
+
+describe('weekly planning setup form', () => {
+  test('builds seven exact consecutive rows across a month boundary', () => {
+    expect(buildTrainingDayRows(
+      '2026-08-28',
+      '2026-08-01',
+      '2026-08-01',
+      '2026-09-30'
+    ).map((row) => row.businessDate)).toEqual([
+      '2026-08-28', '2026-08-29', '2026-08-30', '2026-08-31',
+      '2026-09-01', '2026-09-02', '2026-09-03'
+    ]);
+  });
+
+  test('omits a fully disabled week and normalizes comma-separated preferences', () => {
+    const rows = buildTrainingDayRows(
+      '2026-08-03',
+      '2026-08-10',
+      '2026-08-03',
+      '2026-10-26'
+    );
+    const result = buildPlanningSetupPayload(formWith(rows));
 
     expect(result.kind).toBe('valid');
     if (result.kind === 'valid') {
-      expect(result.bodyProfile.payload.payload.allergens).toEqual(['花生', '虾']);
-      expect(result.goal.payload.payload).toEqual({
-        goal: 'maintain',
-        effectiveDate: '2026-08-03',
-        targetDate: '2026-10-26'
-      });
-      expect(result.trainingPlan.payload.payload.sessions).toEqual([{
-        businessDate: '2026-08-04',
-        sessionCode: '02054',
-        durationMinutes: 60
-      }]);
+      expect(result.payload.trainingPlan.sessions).toEqual([]);
+      expect(result.payload.bodyProfile.allergens).toEqual(['花生', '虾']);
     }
   });
 
-  test('supports an explicit no-training week', () => {
-    const result = buildPlanningSetupRequests({
-      ...validForm,
-      trainingDate: '',
-      durationMinutes: ''
-    }, {
-      bodyProfile: 1,
-      goal: 1,
-      trainingPlan: 1
-    }, {
-      bodyProfile: 'profile-key-002',
-      goal: 'goal-key-002',
-      trainingPlan: 'training-key-002'
-    });
+  test('maps seven enabled rows to seven date-ordered reviewed sessions', () => {
+    const rows = buildTrainingDayRows(
+      '2026-08-03',
+      '2026-08-03',
+      '2026-08-03',
+      '2026-10-26'
+    ).map((row, index) => enabledRow(row, String(30 + index)));
+    const result = buildPlanningSetupPayload(formWith(rows));
 
     expect(result.kind).toBe('valid');
     if (result.kind === 'valid') {
-      expect(result.trainingPlan.payload.payload.sessions).toEqual([]);
-      expect(result.trainingPlan.payload.expectedVersion).toBe(1);
+      expect(result.payload.trainingPlan.sessions).toHaveLength(7);
+      expect(result.payload.trainingPlan.sessions.map((session) => session.businessDate))
+        .toEqual(rows.map((row) => row.businessDate));
     }
   });
 
-  test('rejects missing health confirmation and partial training input', () => {
-    expect(buildPlanningSetupRequests({
-      ...validForm,
-      healthScopeConfirmed: false
-    }, { bodyProfile: 0, goal: 0, trainingPlan: 0 }, {
-      bodyProfile: 'profile-key-003',
-      goal: 'goal-key-003',
-      trainingPlan: 'training-key-003'
-    })).toEqual({ kind: 'invalid', message: '请先完成健康适用范围确认。' });
+  test('preserves two selected reviewed sessions and numeric durations', () => {
+    const rows = buildTrainingDayRows(
+      '2026-08-03',
+      '2026-08-03',
+      '2026-08-03',
+      '2026-10-26'
+    ).map((row, index) => (
+      index === 1 || index === 4 ? enabledRow(row, index === 1 ? '45' : '75') : row
+    ));
+    const result = buildPlanningSetupPayload(formWith(rows));
 
-    expect(buildPlanningSetupRequests({
-      ...validForm,
-      durationMinutes: ''
-    }, { bodyProfile: 0, goal: 0, trainingPlan: 0 }, {
-      bodyProfile: 'profile-key-004',
-      goal: 'goal-key-004',
-      trainingPlan: 'training-key-004'
-    })).toEqual({ kind: 'invalid', message: '训练日期和有效分钟数必须同时填写。' });
+    expect(result.kind).toBe('valid');
+    if (result.kind === 'valid') {
+      expect(result.payload.trainingPlan.sessions).toEqual([
+        { businessDate: '2026-08-04', sessionCode: '02054', durationMinutes: 45 },
+        { businessDate: '2026-08-07', sessionCode: '02054', durationMinutes: 75 }
+      ]);
+    }
+  });
+
+  test.each([
+    { sessionCode: '', durationMinutes: '60' },
+    { sessionCode: '02054', durationMinutes: '' }
+  ])('rejects an enabled row with incomplete reviewed-session input', (incomplete) => {
+    const rows = buildTrainingDayRows(
+      '2026-08-03',
+      '2026-08-03',
+      '2026-08-03',
+      '2026-10-26'
+    );
+    const first = rows[0];
+    if (first === undefined) throw new Error('Expected the first training day');
+    const result = buildPlanningSetupPayload(formWith([
+      { ...first, enabled: true, ...incomplete },
+      ...rows.slice(1)
+    ]));
+
+    expect(result).toEqual({
+      kind: 'invalid',
+      message: '已启用的训练日必须选择审核动作并填写有效分钟数。'
+    });
+  });
+
+  test('omits disabled past rows even if stale controls still contain values', () => {
+    const rows = buildTrainingDayRows(
+      '2026-08-03',
+      '2026-08-05',
+      '2026-08-03',
+      '2026-10-26'
+    ).map((row) => enabledRow(row));
+    const result = buildPlanningSetupPayload(formWith(rows));
+
+    expect(result.kind).toBe('valid');
+    if (result.kind === 'valid') {
+      expect(result.payload.trainingPlan.sessions.map((session) => session.businessDate))
+        .toEqual(['2026-08-05', '2026-08-06', '2026-08-07', '2026-08-08', '2026-08-09']);
+    }
+  });
+
+  test('returns only the normalized payload without identity, MET, IDs, or command metadata', () => {
+    const rows = buildTrainingDayRows(
+      '2026-08-03',
+      '2026-08-03',
+      '2026-08-03',
+      '2026-10-26'
+    );
+    const result = buildPlanningSetupPayload(formWith(rows));
+
+    expect(result.kind).toBe('valid');
+    if (result.kind === 'valid') {
+      const serialized = JSON.stringify(result.payload);
+      expect(serialized).not.toMatch(/userId|openid|\bmet\b|createdAt|VersionId|policyVersion|idempotencyKey|expectedVersions/i);
+      expect(Object.keys(result.payload).sort()).toEqual([
+        'bodyProfile', 'goal', 'trainingPlan'
+      ]);
+    }
   });
 });

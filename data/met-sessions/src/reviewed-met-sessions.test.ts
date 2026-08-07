@@ -12,6 +12,7 @@ describe('reviewed MET dataset', () => {
       {
         code: '02054',
         met: 3.5,
+        displayNameZh: '多动作抗阻训练',
         originalUnit: 'MET',
         activityCategory: 'conditioning_exercise',
         description: 'Resistance (weight) training, multiple exercises, 8-15 reps at varied resistance'
