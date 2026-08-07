@@ -191,15 +191,19 @@ async function handlePlanningApiResult(
 
   const parsed = planningApiRequestSchema.safeParse(input);
   if (!parsed.success) {
+    const issues = parsed.error.issues.map((issue) => ({
+      path: issue.path.join('.'),
+      message: issue.message
+    }));
+    const firstIssue = issues[0];
     return {
       success: false,
       error: {
         code: 'invalid_request',
-        message: '请求参数不合法。',
-        issues: parsed.error.issues.map((issue) => ({
-          path: issue.path.join('.'),
-          message: issue.message
-        }))
+        message: firstIssue === undefined
+          ? '请求参数不合法。'
+          : `请求参数不合法。诊断：${firstIssue.path || '根对象'}：${firstIssue.message}`,
+        issues
       }
     };
   }

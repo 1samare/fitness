@@ -76,6 +76,21 @@ describe('handlePlanningApi', () => {
     if (!invalidRequest.success) expect(invalidRequest.error.code).toBe('invalid_request');
   });
 
+  it('reports an invalid request field without echoing its value', async () => {
+    const result = await handlePlanningApi({
+      action: 'getCurrentContext',
+      unexpectedTransportKey: 'private-value'
+    }, { userId: 'trusted-user-a' });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.message).toBe(
+        '请求参数不合法。诊断：根对象：Unrecognized key: "unexpectedTransportKey"'
+      );
+    }
+    expect(JSON.stringify(result)).not.toContain('private-value');
+  });
+
   it('maps an unreviewed session to a stable fail-closed error', async () => {
     const request = {
       action: 'previewDailyEnergy',
