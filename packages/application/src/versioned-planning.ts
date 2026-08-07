@@ -1,18 +1,23 @@
+import { addBusinessDays } from '@fitness/contracts';
 import type {
   BodyProfilePayload,
   BodyProfileVersion,
+  CompletePlanningSetupCommand,
   CurrentPlanningContext,
   DailyEnergyTargetVersion,
   GoalPayload,
   GoalVersion,
   IdempotencyRecord,
   PlanningAggregateState,
+  TrainingPlanChangedEvent,
   TrainingPlanPayload,
   TrainingPlanVersion,
   WriteCommandEnvelope
 } from '@fitness/domain';
+import { businessDateAt } from './business-time';
 import { requestFingerprint } from './idempotency-fingerprint';
 import { previewDailyEnergy } from './preview-daily-energy';
+import { affectedTrainingDates } from './training-plan-change';
 
 export interface PlanningRepository {
   read(userId: string): Promise<PlanningAggregateState>;
@@ -81,9 +86,48 @@ export class InvalidTrainingPlanError extends Error {
   }
 }
 
+export class PastTrainingChangeError extends Error {
+  public readonly code = 'past_training_change_forbidden' as const;
+
+  public constructor(public readonly businessDate: string) {
+    super(`Training changes are forbidden before the eligible business date: ${businessDate}`);
+    this.name = 'PastTrainingChangeError';
+  }
+}
+
+export class TrainingDateOutsideGoalPeriodError extends Error {
+  public readonly code = 'training_date_outside_goal_period' as const;
+
+  public constructor(public readonly businessDate: string) {
+    super(`Training date is outside the active goal period: ${businessDate}`);
+    this.name = 'TrainingDateOutsideGoalPeriodError';
+  }
+}
+
 export interface SavedTrainingPlan {
   readonly trainingPlan: TrainingPlanVersion;
   readonly dailyEnergyTargets: readonly DailyEnergyTargetVersion[];
+}
+
+export interface SavedPlanningSetup extends SavedTrainingPlan {
+  readonly bodyProfile: BodyProfileVersion;
+  readonly goal: GoalVersion;
+  readonly affectedDates: readonly string[];
+}
+
+interface TrainingAppendResult extends SavedTrainingPlan {
+  readonly affectedDates: readonly string[];
+  readonly event: TrainingPlanChangedEvent;
+}
+
+interface AppendContext {
+  readonly createdAt: string;
+  readonly nextId: (prefix: string) => string;
+}
+
+interface StateResult<TResult> {
+  readonly nextState: PlanningAggregateState;
+  readonly result: TResult;
 }
 
 function findById<T extends { readonly id: string }>(
@@ -101,6 +145,15 @@ function fingerprint<T>(envelope: WriteCommandEnvelope<T>): string {
   });
 }
 
+function setupFingerprint(command: CompletePlanningSetupCommand): string {
+  return requestFingerprint({
+    expectedVersions: command.expectedVersions,
+    bodyProfile: command.bodyProfile,
+    goal: command.goal,
+    trainingPlan: command.trainingPlan
+  });
+}
+
 function findIdempotencyRecord<TOperation extends IdempotencyRecord['operation']>(
   state: PlanningAggregateState,
   operation: TOperation,
@@ -115,10 +168,10 @@ function findIdempotencyRecord<TOperation extends IdempotencyRecord['operation']
 
 function assertReplay(
   record: IdempotencyRecord,
-  requestFingerprint: string,
+  expectedFingerprint: string,
   idempotencyKey: string
 ): void {
-  if (record.requestFingerprint !== requestFingerprint) {
+  if (record.requestFingerprint !== expectedFingerprint) {
     throw new IdempotencyKeyReuseError(idempotencyKey);
   }
 }
@@ -129,13 +182,8 @@ function assertExpectedVersion(expectedVersion: number, actualVersion: number): 
   }
 }
 
-function appendDays(startDate: string, count: number): string[] {
-  const start = new Date(`${startDate}T00:00:00.000Z`);
-  return Array.from({ length: count }, (_, index) => {
-    const date = new Date(start);
-    date.setUTCDate(start.getUTCDate() + index);
-    return date.toISOString().slice(0, 10);
-  });
+function weekBusinessDates(startDate: string): string[] {
+  return Array.from({ length: 7 }, (_, index) => addBusinessDays(startDate, index));
 }
 
 function assertTrainingDates(payload: TrainingPlanPayload, weekDates: readonly string[]): void {
@@ -151,6 +199,268 @@ function assertTrainingDates(payload: TrainingPlanPayload, weekDates: readonly s
   }
 }
 
+function assertGoal(profile: BodyProfileVersion, payload: GoalPayload): void {
+  if (payload.goal !== 'fat_loss' || payload.targetWeightKg === undefined) return;
+  const heightM = profile.payload.heightCm / 100;
+  const targetBmi = payload.targetWeightKg / (heightM * heightM);
+  if (targetBmi < 18.5) {
+    throw new InvalidGoalError('target_bmi_below_supported_floor');
+  }
+}
+
+function appendBodyProfile(
+  state: PlanningAggregateState,
+  userId: string,
+  payload: BodyProfilePayload,
+  expectedVersion: number,
+  context: AppendContext
+): StateResult<BodyProfileVersion> {
+  const actualVersion = state.bodyProfiles.length;
+  assertExpectedVersion(expectedVersion, actualVersion);
+  const version: BodyProfileVersion = {
+    kind: 'body_profile_version',
+    id: context.nextId('body-profile'),
+    userId,
+    version: actualVersion + 1,
+    createdAt: context.createdAt,
+    payload
+  };
+  return {
+    nextState: {
+      ...state,
+      bodyProfiles: [...state.bodyProfiles, version],
+      activeBodyProfileVersionId: version.id,
+      activeGoalVersionId: null,
+      activeTrainingPlanVersionId: null
+    },
+    result: version
+  };
+}
+
+function appendGoal(
+  state: PlanningAggregateState,
+  userId: string,
+  payload: GoalPayload,
+  expectedVersion: number,
+  context: AppendContext
+): StateResult<GoalVersion> {
+  const profile = findById(state.bodyProfiles, state.activeBodyProfileVersionId);
+  if (profile === null) throw new PlanningPrerequisiteError('body_profile');
+  const actualVersion = state.goals.length;
+  assertExpectedVersion(expectedVersion, actualVersion);
+  assertGoal(profile, payload);
+  const version: GoalVersion = {
+    kind: 'goal_version',
+    id: context.nextId('goal'),
+    userId,
+    version: actualVersion + 1,
+    createdAt: context.createdAt,
+    bodyProfileVersionId: profile.id,
+    payload
+  };
+  return {
+    nextState: {
+      ...state,
+      goals: [...state.goals, version],
+      activeGoalVersionId: version.id,
+      activeTrainingPlanVersionId: null
+    },
+    result: version
+  };
+}
+
+function eligibleWeekDates(input: {
+  readonly weekDates: readonly string[];
+  readonly businessToday: string;
+  readonly goal: GoalVersion;
+}): string[] {
+  const eligibleStart = [
+    input.weekDates[0] ?? input.businessToday,
+    input.businessToday,
+    input.goal.payload.effectiveDate
+  ].sort().at(-1);
+  if (eligibleStart === undefined) return [];
+  return input.weekDates.filter(
+    (date) => date >= eligibleStart && date <= input.goal.payload.targetDate
+  );
+}
+
+function assertChangedDatesEligible(
+  changedDates: readonly string[],
+  eligibleDates: readonly string[],
+  goal: GoalVersion
+): void {
+  const eligible = new Set(eligibleDates);
+  for (const date of changedDates) {
+    if (eligible.has(date)) continue;
+    if (date > goal.payload.targetDate) {
+      throw new TrainingDateOutsideGoalPeriodError(date);
+    }
+    throw new PastTrainingChangeError(date);
+  }
+}
+
+function appendTrainingPlan(
+  state: PlanningAggregateState,
+  userId: string,
+  payload: TrainingPlanPayload,
+  expectedVersion: number,
+  context: AppendContext
+): StateResult<TrainingAppendResult> {
+  const profile = findById(state.bodyProfiles, state.activeBodyProfileVersionId);
+  if (profile === null) throw new PlanningPrerequisiteError('body_profile');
+  const goal = findById(state.goals, state.activeGoalVersionId);
+  if (goal === null || goal.bodyProfileVersionId !== profile.id) {
+    throw new PlanningPrerequisiteError('goal');
+  }
+  const actualVersion = state.trainingPlans.length;
+  assertExpectedVersion(expectedVersion, actualVersion);
+
+  const weekDates = weekBusinessDates(payload.weekStartDate);
+  assertTrainingDates(payload, weekDates);
+  const businessToday = businessDateAt(context.createdAt, payload.businessTimezone);
+  const eligibleDates = eligibleWeekDates({ weekDates, businessToday, goal });
+  const previous = findById(state.trainingPlans, state.activeTrainingPlanVersionId);
+  const isSameWeek = previous?.payload.weekStartDate === payload.weekStartDate;
+  const previousSessions = isSameWeek ? previous.payload.sessions : [];
+  const changedDates = affectedTrainingDates(previousSessions, payload.sessions, weekDates);
+  assertChangedDatesEligible(changedDates, eligibleDates, goal);
+  const affectedDates = isSameWeek
+    ? affectedTrainingDates(previousSessions, payload.sessions, eligibleDates)
+    : eligibleDates;
+
+  const trainingPlan: TrainingPlanVersion = {
+    kind: 'training_plan_version',
+    id: context.nextId('training-plan'),
+    userId,
+    version: actualVersion + 1,
+    createdAt: context.createdAt,
+    bodyProfileVersionId: profile.id,
+    goalVersionId: goal.id,
+    payload
+  };
+  const dailyEnergyTargets = affectedDates.map((businessDate) => {
+    const session = payload.sessions.find(
+      (candidate) => candidate.businessDate === businessDate
+    );
+    const energy = previewDailyEnergy({
+      ageYears: profile.payload.ageYears,
+      sexCode: profile.payload.sexCode,
+      heightCm: profile.payload.heightCm,
+      weightKg: profile.payload.weightKg,
+      healthScopeConfirmed: profile.payload.healthScopeConfirmed,
+      nonTrainingActivity: profile.payload.nonTrainingActivity,
+      goal: goal.payload.goal,
+      ...(session === undefined
+        ? {}
+        : {
+            training: {
+              sessionCode: session.sessionCode,
+              durationMinutes: session.durationMinutes
+            }
+          })
+    });
+    const version: DailyEnergyTargetVersion = {
+      kind: 'daily_energy_target_version',
+      id: context.nextId('daily-energy-target'),
+      userId,
+      version: state.dailyEnergyTargets.filter(
+        (target) => target.businessDate === businessDate
+      ).length + 1,
+      createdAt: context.createdAt,
+      businessDate,
+      bodyProfileVersionId: profile.id,
+      goalVersionId: goal.id,
+      trainingPlanVersionId: trainingPlan.id,
+      energyPolicyVersion: 'calculation-policy-v2',
+      nutritionPolicyVersion: 'nutrition-policy-v1',
+      energy
+    };
+    return version;
+  });
+  const event: TrainingPlanChangedEvent = {
+    eventId: context.nextId('training-plan-change'),
+    eventType: 'TrainingPlanChanged',
+    userId,
+    previousTrainingPlanVersionId: previous?.id ?? null,
+    trainingPlanVersionId: trainingPlan.id,
+    bodyProfileVersionId: profile.id,
+    goalVersionId: goal.id,
+    affectedDates,
+    occurredAt: context.createdAt,
+    status: 'pending'
+  };
+  return {
+    nextState: {
+      ...state,
+      trainingPlans: [...state.trainingPlans, trainingPlan],
+      dailyEnergyTargets: [...state.dailyEnergyTargets, ...dailyEnergyTargets],
+      outboxEvents: [...state.outboxEvents, event],
+      activeTrainingPlanVersionId: trainingPlan.id
+    },
+    result: { trainingPlan, dailyEnergyTargets, affectedDates, event }
+  };
+}
+
+function resolveCompositeReplay(
+  state: PlanningAggregateState,
+  record: Extract<IdempotencyRecord, { readonly operation: 'completePlanningSetup' }>
+): SavedPlanningSetup {
+  const bodyProfile = findById(state.bodyProfiles, record.resultVersionIds.bodyProfileVersionId);
+  const goal = findById(state.goals, record.resultVersionIds.goalVersionId);
+  const trainingPlan = findById(
+    state.trainingPlans,
+    record.resultVersionIds.trainingPlanVersionId
+  );
+  const dailyEnergyTargets = record.resultVersionIds.dailyEnergyTargetVersionIds.map((id) => {
+    const target = findById(state.dailyEnergyTargets, id);
+    if (target === null) throw new Error('Stored idempotency result is missing');
+    return target;
+  });
+  const event = state.outboxEvents.find(
+    (candidate) => candidate.eventId === record.resultVersionIds.eventId
+  );
+  if (bodyProfile === null || goal === null || trainingPlan === null || event === undefined) {
+    throw new Error('Stored idempotency result is missing');
+  }
+  return {
+    bodyProfile,
+    goal,
+    trainingPlan,
+    dailyEnergyTargets,
+    affectedDates: event.affectedDates
+  };
+}
+
+function latestTargetsForActivePlan(
+  state: PlanningAggregateState,
+  profile: BodyProfileVersion,
+  goal: GoalVersion,
+  trainingPlan: TrainingPlanVersion
+): DailyEnergyTargetVersion[] {
+  const dates = weekBusinessDates(trainingPlan.payload.weekStartDate);
+  const relatedPlanIds = new Set(
+    state.trainingPlans
+      .filter((candidate) => (
+        candidate.bodyProfileVersionId === profile.id
+        && candidate.goalVersionId === goal.id
+        && candidate.payload.weekStartDate === trainingPlan.payload.weekStartDate
+      ))
+      .map((candidate) => candidate.id)
+  );
+  return dates.flatMap((businessDate) => {
+    const latest = state.dailyEnergyTargets
+      .filter((target) => (
+        target.businessDate === businessDate
+        && target.bodyProfileVersionId === profile.id
+        && target.goalVersionId === goal.id
+        && relatedPlanIds.has(target.trainingPlanVersionId)
+      ))
+      .sort((left, right) => right.version - left.version)[0];
+    return latest === undefined ? [] : [latest];
+  });
+}
+
 export function createVersionedPlanningService(
   dependencies: VersionedPlanningServiceDependencies
 ) {
@@ -161,46 +471,38 @@ export function createVersionedPlanningService(
       userId: string,
       envelope: WriteCommandEnvelope<BodyProfilePayload>
     ): Promise<BodyProfileVersion> {
+      const expectedFingerprint = fingerprint(envelope);
       return repository.transact(userId, (state) => {
-        const requestFingerprint = fingerprint(envelope);
         const replay = findIdempotencyRecord(
           state,
           'saveBodyProfile',
           envelope.idempotencyKey
         );
         if (replay !== undefined) {
-          assertReplay(replay, requestFingerprint, envelope.idempotencyKey);
-          const previous = state.bodyProfiles.find(
-            (profile) => profile.id === replay.resultVersionId
-          );
-          if (previous === undefined) throw new Error('Stored idempotency result is missing');
+          assertReplay(replay, expectedFingerprint, envelope.idempotencyKey);
+          const previous = findById(state.bodyProfiles, replay.resultVersionId);
+          if (previous === null) throw new Error('Stored idempotency result is missing');
           return { nextState: state, result: previous };
         }
-
-        const actualVersion = state.bodyProfiles.length;
-        assertExpectedVersion(envelope.expectedVersion, actualVersion);
-        const version: BodyProfileVersion = {
-          kind: 'body_profile_version',
-          id: nextId('body-profile'),
+        const appended = appendBodyProfile(
+          state,
           userId,
-          version: actualVersion + 1,
-          createdAt: now(),
-          payload: envelope.payload
-        };
+          envelope.payload,
+          envelope.expectedVersion,
+          { createdAt: now(), nextId }
+        );
         const record: IdempotencyRecord = {
           operation: 'saveBodyProfile',
           key: envelope.idempotencyKey,
-          requestFingerprint,
-          resultVersionId: version.id
+          requestFingerprint: expectedFingerprint,
+          resultVersionId: appended.result.id
         };
         return {
           nextState: {
-            ...state,
-            bodyProfiles: [...state.bodyProfiles, version],
-            idempotencyRecords: [...state.idempotencyRecords, record],
-            activeBodyProfileVersionId: version.id
+            ...appended.nextState,
+            idempotencyRecords: [...appended.nextState.idempotencyRecords, record]
           },
-          result: version
+          result: appended.result
         };
       });
     },
@@ -209,55 +511,34 @@ export function createVersionedPlanningService(
       userId: string,
       envelope: WriteCommandEnvelope<GoalPayload>
     ): Promise<GoalVersion> {
+      const expectedFingerprint = fingerprint(envelope);
       return repository.transact(userId, (state) => {
-        const requestFingerprint = fingerprint(envelope);
         const replay = findIdempotencyRecord(state, 'saveGoal', envelope.idempotencyKey);
         if (replay !== undefined) {
-          assertReplay(replay, requestFingerprint, envelope.idempotencyKey);
-          const previous = state.goals.find((goal) => goal.id === replay.resultVersionId);
-          if (previous === undefined) throw new Error('Stored idempotency result is missing');
+          assertReplay(replay, expectedFingerprint, envelope.idempotencyKey);
+          const previous = findById(state.goals, replay.resultVersionId);
+          if (previous === null) throw new Error('Stored idempotency result is missing');
           return { nextState: state, result: previous };
         }
-
-        const profile = findById(state.bodyProfiles, state.activeBodyProfileVersionId);
-        if (profile === null) throw new PlanningPrerequisiteError('body_profile');
-        const actualVersion = state.goals.length;
-        assertExpectedVersion(envelope.expectedVersion, actualVersion);
-
-        if (
-          envelope.payload.goal === 'fat_loss'
-          && envelope.payload.targetWeightKg !== undefined
-        ) {
-          const heightM = profile.payload.heightCm / 100;
-          const targetBmi = envelope.payload.targetWeightKg / (heightM * heightM);
-          if (targetBmi < 18.5) {
-            throw new InvalidGoalError('target_bmi_below_supported_floor');
-          }
-        }
-
-        const version: GoalVersion = {
-          kind: 'goal_version',
-          id: nextId('goal'),
+        const appended = appendGoal(
+          state,
           userId,
-          version: actualVersion + 1,
-          createdAt: now(),
-          bodyProfileVersionId: profile.id,
-          payload: envelope.payload
-        };
+          envelope.payload,
+          envelope.expectedVersion,
+          { createdAt: now(), nextId }
+        );
         const record: IdempotencyRecord = {
           operation: 'saveGoal',
           key: envelope.idempotencyKey,
-          requestFingerprint,
-          resultVersionId: version.id
+          requestFingerprint: expectedFingerprint,
+          resultVersionId: appended.result.id
         };
         return {
           nextState: {
-            ...state,
-            goals: [...state.goals, version],
-            idempotencyRecords: [...state.idempotencyRecords, record],
-            activeGoalVersionId: version.id
+            ...appended.nextState,
+            idempotencyRecords: [...appended.nextState.idempotencyRecords, record]
           },
-          result: version
+          result: appended.result
         };
       });
     },
@@ -266,19 +547,17 @@ export function createVersionedPlanningService(
       userId: string,
       envelope: WriteCommandEnvelope<TrainingPlanPayload>
     ): Promise<SavedTrainingPlan> {
+      const expectedFingerprint = fingerprint(envelope);
       return repository.transact(userId, (state) => {
-        const requestFingerprint = fingerprint(envelope);
         const replay = findIdempotencyRecord(
           state,
           'saveTrainingPlan',
           envelope.idempotencyKey
         );
         if (replay !== undefined) {
-          assertReplay(replay, requestFingerprint, envelope.idempotencyKey);
-          const previous = state.trainingPlans.find(
-            (plan) => plan.id === replay.resultVersionId
-          );
-          if (previous === undefined) throw new Error('Stored idempotency result is missing');
+          assertReplay(replay, expectedFingerprint, envelope.idempotencyKey);
+          const previous = findById(state.trainingPlans, replay.resultVersionId);
+          if (previous === null) throw new Error('Stored idempotency result is missing');
           return {
             nextState: state,
             result: {
@@ -289,103 +568,121 @@ export function createVersionedPlanningService(
             }
           };
         }
-
-        const profile = findById(state.bodyProfiles, state.activeBodyProfileVersionId);
-        if (profile === null) throw new PlanningPrerequisiteError('body_profile');
-        const goal = findById(state.goals, state.activeGoalVersionId);
-        if (goal === null) throw new PlanningPrerequisiteError('goal');
-        if (goal.bodyProfileVersionId !== profile.id) {
-          throw new PlanningPrerequisiteError('goal');
-        }
-        const actualVersion = state.trainingPlans.length;
-        assertExpectedVersion(envelope.expectedVersion, actualVersion);
-
-        const weekDates = appendDays(envelope.payload.weekStartDate, 7);
-        assertTrainingDates(envelope.payload, weekDates);
-        const trainingPlan: TrainingPlanVersion = {
-          kind: 'training_plan_version',
-          id: nextId('training-plan'),
+        const appended = appendTrainingPlan(
+          state,
           userId,
-          version: actualVersion + 1,
-          createdAt: now(),
-          bodyProfileVersionId: profile.id,
-          goalVersionId: goal.id,
-          payload: envelope.payload
-        };
-        const dailyEnergyTargets = weekDates.map((businessDate) => {
-          const session = envelope.payload.sessions.find(
-            (candidate) => candidate.businessDate === businessDate
-          );
-          const energy = previewDailyEnergy({
-            ageYears: profile.payload.ageYears,
-            sexCode: profile.payload.sexCode,
-            heightCm: profile.payload.heightCm,
-            weightKg: profile.payload.weightKg,
-            healthScopeConfirmed: profile.payload.healthScopeConfirmed,
-            nonTrainingActivity: profile.payload.nonTrainingActivity,
-            goal: goal.payload.goal,
-            ...(session === undefined
-              ? {}
-              : {
-                  training: {
-                    sessionCode: session.sessionCode,
-                    durationMinutes: session.durationMinutes
-                  }
-                })
-          });
-          const existingForDate = state.dailyEnergyTargets.filter(
-            (target) => target.businessDate === businessDate
-          ).length;
-          const target: DailyEnergyTargetVersion = {
-            kind: 'daily_energy_target_version',
-            id: nextId('daily-energy-target'),
-            userId,
-            version: existingForDate + 1,
-            createdAt: now(),
-            businessDate,
-            bodyProfileVersionId: profile.id,
-            goalVersionId: goal.id,
-            trainingPlanVersionId: trainingPlan.id,
-            energyPolicyVersion: 'calculation-policy-v2',
-            nutritionPolicyVersion: 'nutrition-policy-v1',
-            energy
-          };
-          return target;
-        });
+          envelope.payload,
+          envelope.expectedVersion,
+          { createdAt: now(), nextId }
+        );
         const record: IdempotencyRecord = {
           operation: 'saveTrainingPlan',
           key: envelope.idempotencyKey,
-          requestFingerprint,
-          resultVersionId: trainingPlan.id
+          requestFingerprint: expectedFingerprint,
+          resultVersionId: appended.result.trainingPlan.id
         };
         return {
           nextState: {
-            ...state,
-            trainingPlans: [...state.trainingPlans, trainingPlan],
-            dailyEnergyTargets: [...state.dailyEnergyTargets, ...dailyEnergyTargets],
-            idempotencyRecords: [...state.idempotencyRecords, record],
-            activeTrainingPlanVersionId: trainingPlan.id
+            ...appended.nextState,
+            idempotencyRecords: [...appended.nextState.idempotencyRecords, record]
           },
-          result: { trainingPlan, dailyEnergyTargets }
+          result: {
+            trainingPlan: appended.result.trainingPlan,
+            dailyEnergyTargets: appended.result.dailyEnergyTargets
+          }
+        };
+      });
+    },
+
+    async completePlanningSetup(
+      userId: string,
+      command: CompletePlanningSetupCommand
+    ): Promise<SavedPlanningSetup> {
+      const expectedFingerprint = setupFingerprint(command);
+      return repository.transact(userId, (state) => {
+        const replay = findIdempotencyRecord(
+          state,
+          'completePlanningSetup',
+          command.idempotencyKey
+        );
+        if (replay !== undefined) {
+          assertReplay(replay, expectedFingerprint, command.idempotencyKey);
+          return { nextState: state, result: resolveCompositeReplay(state, replay) };
+        }
+
+        const context = { createdAt: now(), nextId };
+        const profile = appendBodyProfile(
+          state,
+          userId,
+          command.bodyProfile,
+          command.expectedVersions.bodyProfile,
+          context
+        );
+        const goal = appendGoal(
+          profile.nextState,
+          userId,
+          command.goal,
+          command.expectedVersions.goal,
+          context
+        );
+        const training = appendTrainingPlan(
+          goal.nextState,
+          userId,
+          command.trainingPlan,
+          command.expectedVersions.trainingPlan,
+          context
+        );
+        const record: IdempotencyRecord = {
+          operation: 'completePlanningSetup',
+          key: command.idempotencyKey,
+          requestFingerprint: expectedFingerprint,
+          resultVersionIds: {
+            bodyProfileVersionId: profile.result.id,
+            goalVersionId: goal.result.id,
+            trainingPlanVersionId: training.result.trainingPlan.id,
+            dailyEnergyTargetVersionIds: training.result.dailyEnergyTargets.map(
+              (target) => target.id
+            ),
+            eventId: training.result.event.eventId
+          }
+        };
+        return {
+          nextState: {
+            ...training.nextState,
+            idempotencyRecords: [...training.nextState.idempotencyRecords, record]
+          },
+          result: {
+            bodyProfile: profile.result,
+            goal: goal.result,
+            trainingPlan: training.result.trainingPlan,
+            dailyEnergyTargets: training.result.dailyEnergyTargets,
+            affectedDates: training.result.affectedDates
+          }
         };
       });
     },
 
     async getCurrentContext(userId: string): Promise<CurrentPlanningContext> {
       const state = await repository.read(userId);
-      const trainingPlan = findById(
-        state.trainingPlans,
-        state.activeTrainingPlanVersionId
-      );
+      const bodyProfile = findById(state.bodyProfiles, state.activeBodyProfileVersionId);
+      const candidateGoal = findById(state.goals, state.activeGoalVersionId);
+      const goal = bodyProfile !== null && candidateGoal?.bodyProfileVersionId === bodyProfile.id
+        ? candidateGoal
+        : null;
+      const candidatePlan = findById(state.trainingPlans, state.activeTrainingPlanVersionId);
+      const trainingPlan = bodyProfile !== null
+        && goal !== null
+        && candidatePlan?.bodyProfileVersionId === bodyProfile.id
+        && candidatePlan.goalVersionId === goal.id
+        ? candidatePlan
+        : null;
       return {
-        bodyProfile: findById(state.bodyProfiles, state.activeBodyProfileVersionId),
-        goal: findById(state.goals, state.activeGoalVersionId),
+        bodyProfile,
+        goal,
         trainingPlan,
-        dailyEnergyTargets: trainingPlan === null
+        dailyEnergyTargets: bodyProfile === null || goal === null || trainingPlan === null
           ? []
-          : state.dailyEnergyTargets.filter(
-            (target) => target.trainingPlanVersionId === trainingPlan.id
-            ),
+          : latestTargetsForActivePlan(state, bodyProfile, goal, trainingPlan),
         latestVersions: {
           bodyProfile: state.bodyProfiles.length,
           goal: state.goals.length,

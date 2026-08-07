@@ -315,7 +315,7 @@ Expected: the existing uncommitted fingerprint patch is fully represented by the
 - Produces: `businessDateAt(isoInstant, timeZone)`, `affectedTrainingDates(previous, next, eligibleDates)`, `service.completePlanningSetup(userId, command)`, consistent `getCurrentContext`, and durable `TrainingPlanChanged` records.
 - Consumes: strict commands from Task 1 and fingerprints from Task 2.
 
-- [ ] **Step 1: Write failing pure time and change-set tests**
+- [x] **Step 1: Write failing pure time and change-set tests**
 
 Create `business-time.test.ts` covering UTC day crossover:
 
@@ -336,7 +336,7 @@ expect(affectedTrainingDates(
 
 Add cases for duration change, cancellation, unchanged input, and exclusion of an ineligible past date.
 
-- [ ] **Step 2: Add failing service tests one behavior at a time**
+- [x] **Step 2: Add failing service tests one behavior at a time**
 
 In `packages/persistence/src/versioned-planning.test.ts`, add separate tests for:
 
@@ -352,7 +352,7 @@ In `packages/persistence/src/versioned-planning.test.ts`, add separate tests for
 
 Use `now: () => '2026-08-07T00:00:00.000Z'` and `businessTimezone: 'Asia/Shanghai'` so expectations are deterministic.
 
-- [ ] **Step 3: Run targeted tests and verify RED**
+- [x] **Step 3: Run targeted tests and verify RED**
 
 ```powershell
 & .\node_modules\.bin\vitest.CMD run packages/application/src/business-time.test.ts packages/application/src/training-plan-change.test.ts packages/persistence/src/versioned-planning.test.ts
@@ -360,7 +360,7 @@ Use `now: () => '2026-08-07T00:00:00.000Z'` and `businessTimezone: 'Asia/Shangha
 
 Expected: FAIL on missing helpers, missing composite method/event state, stale active pointers, and seven-day unconditional recalculation.
 
-- [ ] **Step 4: Implement pure time and affected-date helpers**
+- [x] **Step 4: Implement pure time and affected-date helpers**
 
 `businessDateAt` must use `Intl.DateTimeFormat(...).formatToParts()` with the requested IANA timezone, assemble a literal `YYYY-MM-DD`, and validate the result with `isBusinessDate`.
 
@@ -376,7 +376,7 @@ export function affectedTrainingDates(
 
 The result is unique and ascending.
 
-- [ ] **Step 5: Refactor version appends into transaction-local pure operations**
+- [x] **Step 5: Refactor version appends into transaction-local pure operations**
 
 Inside `versioned-planning.ts`, keep repository access only at public service methods. Extract private pure operations that accept a state and return `{ nextState, result }` for profile, goal, and training writes. Required behavior:
 
@@ -395,7 +395,7 @@ PastTrainingChangeError.code = 'past_training_change_forbidden'
 TrainingDateOutsideGoalPeriodError.code = 'training_date_outside_goal_period'
 ```
 
-- [ ] **Step 6: Implement `completePlanningSetup` as one repository transaction**
+- [x] **Step 6: Implement `completePlanningSetup` as one repository transaction**
 
 The method must compute one fingerprint before entering the transaction, check/replay the composite idempotency record, assert all three expected counts, and call the private append operations without starting nested transactions. It must add exactly one composite idempotency record after all appends succeed. Return:
 
@@ -411,7 +411,7 @@ The method must compute one fingerprint before entering the transaction, check/r
 
 On replay, resolve every stored result ID and fail closed if any is missing. No partial record may be persisted when an operation throws.
 
-- [ ] **Step 7: Verify GREEN and all application/persistence tests**
+- [x] **Step 7: Verify GREEN and all application/persistence tests**
 
 ```powershell
 & .\node_modules\.bin\vitest.CMD run packages/application/src/business-time.test.ts packages/application/src/training-plan-change.test.ts packages/persistence/src/versioned-planning.test.ts
@@ -422,7 +422,7 @@ pnpm.cmd lint
 
 Expected: all tests pass; the full suite has more than the previous 60 tests.
 
-- [ ] **Step 8: Commit and push**
+- [x] **Step 8: Commit and push**
 
 ```powershell
 git diff --check
