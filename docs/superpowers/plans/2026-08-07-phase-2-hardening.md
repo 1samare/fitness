@@ -875,13 +875,13 @@ git rev-parse origin/codex/phase-2
 
 Expected: local and remote SHA match; only intentional personal/local evidence files remain uncommitted or ignored.
 
-- [ ] **Step 4: Verify Developer Tools login and the exact environment before mutation**
+- [x] **Step 4: Verify Developer Tools login and the exact environment before mutation**
 
 Use the installed Developer Tools CLI to run `islogin` and `cloud env list` for this project. Confirm the returned AppID and EnvId match the user-provided local values. If either differs, stop before deployment and request correction.
 
 - [ ] **Step 5: Deploy the generated function and verify its presence**
 
-Run the documented `cloud functions deploy` command against `.build/cloudfunctions/planning-api`, then `cloud functions list` for the same environment. Record the function name, runtime/version information returned by the tool, timestamp, and command exit status in ignored `logs/phase-2-cloudbase-acceptance.md`.
+Run the documented `cloud functions deploy` command against `.build/cloudfunctions/planning-api`, then `cloud functions list` for the same environment. Record the function name, runtime/version information returned by the tool, timestamp, and command exit status in ignored `logs/phase-2-cloudbase-acceptance.md`. If this is a new environment, create the `planning_user_states` collection before publishing its database rule; do not seed user data from the console.
 
 Apply `cloudbase/database.rules.json` and `cloudbase/function.rules.json` through the authenticated CloudBase console. Capture rule publication timestamps in the local acceptance record; do not store account names, OpenID, tokens, cookies, or screenshots containing personal data in Git.
 

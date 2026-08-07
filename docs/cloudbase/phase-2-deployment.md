@@ -50,6 +50,7 @@ if ($phase2AppId -eq 'touristappid') { throw 'A real local AppID is required' }
 
 在已认证的 CloudBase 控制台发布：
 
+- 如果集合尚不存在，先创建文档型数据库集合 `planning_user_states`；不要从客户端创建集合，也不要写入测试用户数据。
 - `cloudbase/database.rules.json`：拒绝客户端直接读写业务数据。
 - `cloudbase/function.rules.json`：只允许已认证用户调用 `planning-api`。
 
