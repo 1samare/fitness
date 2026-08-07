@@ -47,6 +47,14 @@ function isRawDatabase(value: unknown): value is RawDatabase {
     && typeof value.runTransaction === 'function';
 }
 
+function isMissingDocumentError(value: unknown): boolean {
+  if (!isRecord(value) || value.errCode !== -1 || typeof value.errMsg !== 'string') {
+    return false;
+  }
+  return value.errMsg.startsWith('document.get:fail document with _id ')
+    && value.errMsg.endsWith(' does not exist');
+}
+
 function requirePromise(value: unknown): Promise<unknown> {
   if (!(value instanceof Promise)) {
     return Promise.reject(new Error('CloudBase SDK did not return a Promise'));
@@ -60,9 +68,15 @@ function adaptDocumentReference(value: unknown): CloudBaseDocumentReference {
   }
   return {
     async get() {
-      const result = await requirePromise(value.get());
-      if (!isRecord(result)) throw new Error('CloudBase SDK returned an invalid get result');
-      return 'data' in result ? { data: result.data } : {};
+      try {
+        const result = await requirePromise(value.get());
+        if (!isRecord(result)) throw new Error('CloudBase SDK returned an invalid get result');
+        const data = 'data' in result ? result.data : undefined;
+        return data === undefined || data === null ? {} : { data };
+      } catch (error: unknown) {
+        if (isMissingDocumentError(error)) return {};
+        throw error;
+      }
     },
     async set(input) {
       return requirePromise(value.set(input));

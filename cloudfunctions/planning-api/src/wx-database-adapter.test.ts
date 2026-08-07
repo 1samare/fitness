@@ -58,4 +58,53 @@ describe('adaptWxCloudBaseDatabase', () => {
       'CloudBase SDK did not return a Promise'
     );
   });
+
+  test('maps the wx-server-sdk missing-document error to an empty result', async () => {
+    const notFound = Object.assign(
+      new Error('document.get:fail document with _id user-a does not exist'),
+      {
+        errCode: -1,
+        errMsg: 'document.get:fail document with _id user-a does not exist'
+      }
+    );
+    const database = adaptWxCloudBaseDatabase({
+      collection: () => ({
+        doc: () => ({
+          get: () => Promise.reject(notFound),
+          set: () => Promise.resolve({})
+        })
+      }),
+      runTransaction: (operation: (transaction: unknown) => Promise<unknown>) => operation({
+        collection: () => ({
+          doc: () => ({
+            get: () => Promise.reject(notFound),
+            set: () => Promise.resolve({})
+          })
+        })
+      })
+    });
+
+    await expect(database.collection('states').doc('user-a').get()).resolves.toEqual({});
+  });
+
+  test('maps a null CloudBase document to an empty result', async () => {
+    const database = adaptWxCloudBaseDatabase({
+      collection: () => ({
+        doc: () => ({
+          get: () => Promise.resolve({ data: null }),
+          set: () => Promise.resolve({})
+        })
+      }),
+      runTransaction: (operation: (transaction: unknown) => Promise<unknown>) => operation({
+        collection: () => ({
+          doc: () => ({
+            get: () => Promise.resolve({ data: null }),
+            set: () => Promise.resolve({})
+          })
+        })
+      })
+    });
+
+    await expect(database.collection('states').doc('user-a').get()).resolves.toEqual({});
+  });
 });
