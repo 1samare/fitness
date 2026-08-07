@@ -81,6 +81,37 @@ describe('versioned planning service', () => {
     })).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
   });
 
+  test('replays a semantically identical goal when object keys use another insertion order', async () => {
+    const { repository, service } = createHarness();
+    await service.saveBodyProfile('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'profile-create',
+      payload: profilePayload
+    });
+
+    const first = await service.saveGoal('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'goal-create',
+      payload: {
+        goal: 'maintain',
+        effectiveDate: '2026-08-03',
+        targetDate: '2026-10-26'
+      }
+    });
+    const replay = await service.saveGoal('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'goal-create',
+      payload: {
+        targetDate: '2026-10-26',
+        effectiveDate: '2026-08-03',
+        goal: 'maintain'
+      }
+    });
+
+    expect(replay).toEqual(first);
+    expect((await repository.read('user-a')).goals).toHaveLength(1);
+  });
+
   test('creates a traceable seven-day target set from the active profile, goal, and plan', async () => {
     const { repository, service } = createHarness();
     const profile = await service.saveBodyProfile('user-a', {

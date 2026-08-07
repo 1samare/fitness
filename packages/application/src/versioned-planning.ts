@@ -11,6 +11,7 @@ import type {
   TrainingPlanVersion,
   WriteCommandEnvelope
 } from '@fitness/domain';
+import { requestFingerprint } from './idempotency-fingerprint';
 import { previewDailyEnergy } from './preview-daily-energy';
 
 export interface PlanningRepository {
@@ -94,7 +95,7 @@ function findById<T extends { readonly id: string }>(
 }
 
 function fingerprint<T>(envelope: WriteCommandEnvelope<T>): string {
-  return JSON.stringify({
+  return requestFingerprint({
     expectedVersion: envelope.expectedVersion,
     payload: envelope.payload
   });

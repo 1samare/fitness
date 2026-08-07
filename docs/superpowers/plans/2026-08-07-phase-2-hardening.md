@@ -221,7 +221,7 @@ Expected: targeted tests, typecheck, and lint pass; `project.config.json` remain
 - Produces: `requestFingerprint(value: unknown): string` returning `v2:sha256:<64 lowercase hex>`.
 - Consumes: JSON-compatible, schema-validated command objects.
 
-- [ ] **Step 1: Move the existing test intent into focused failing tests**
+- [x] **Step 1: Move the existing test intent into focused failing tests**
 
 Create `packages/application/src/idempotency-fingerprint.test.ts`:
 
@@ -255,7 +255,7 @@ describe('requestFingerprint', () => {
 
 Keep the existing persistence-level replay test, but remove the temporary inline `canonicalizeJson` implementation from `versioned-planning.ts` only after RED is observed.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 ```powershell
 & .\node_modules\.bin\vitest.CMD run packages/application/src/idempotency-fingerprint.test.ts packages/persistence/src/versioned-planning.test.ts
@@ -263,7 +263,7 @@ Keep the existing persistence-level replay test, but remove the temporary inline
 
 Expected: FAIL because the focused module does not exist and the current `localeCompare`/raw JSON implementation does not produce a versioned digest.
 
-- [ ] **Step 3: Implement canonical SHA-256**
+- [x] **Step 3: Implement canonical SHA-256**
 
 Create `idempotency-fingerprint.ts` using `createHash` from `node:crypto`. The comparator must be:
 
@@ -283,7 +283,7 @@ return `v2:sha256:${createHash('sha256').update(serialized, 'utf8').digest('hex'
 
 Replace all service fingerprint calls with `requestFingerprint` and export the helper from `packages/application/src/index.ts`.
 
-- [ ] **Step 4: Verify GREEN, commit, and push**
+- [x] **Step 4: Verify GREEN, commit, and push**
 
 ```powershell
 & .\node_modules\.bin\vitest.CMD run packages/application/src/idempotency-fingerprint.test.ts packages/persistence/src/versioned-planning.test.ts
