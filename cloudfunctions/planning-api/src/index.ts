@@ -9,11 +9,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function removePlatformEventMetadata(input: unknown): unknown {
+  if (!isRecord(input) || !('userInfo' in input)) return input;
+  const normalizedInput = { ...input };
+  delete normalizedInput.userInfo;
+  return normalizedInput;
+}
+
 function normalizeEvent(event: unknown): unknown {
-  if (!isRecord(event) || !('body' in event)) return event;
-  const body = event.body;
-  if (typeof body !== 'string') return body;
-  return JSON.parse(body) as unknown;
+  if (!isRecord(event) || !('body' in event)) return removePlatformEventMetadata(event);
+  const body = typeof event.body === 'string'
+    ? JSON.parse(event.body) as unknown
+    : event.body;
+  return removePlatformEventMetadata(body);
 }
 
 export interface MainDependencies {

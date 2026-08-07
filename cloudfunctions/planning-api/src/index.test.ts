@@ -24,6 +24,34 @@ describe('CloudBase main event adapter', () => {
     expect(JSON.stringify(result)).not.toContain('stack');
   });
 
+  it('removes CloudBase userInfo metadata before strict request validation', async () => {
+    const injectedMain = createMain({
+      resolveIdentity: () => ({ userId: 'trusted-runtime-user' }),
+      handle: createRuntimePlanningHandler({ runtimeMode: 'local' })
+    });
+    const result = await injectedMain({
+      action: 'getCurrentContext',
+      userInfo: { appId: 'platform-app', openId: 'platform-user' }
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.kind).toBe('current_context');
+  });
+
+  it('does not authenticate from CloudBase event userInfo', async () => {
+    const injectedMain = createMain({
+      resolveIdentity: () => undefined,
+      handle: createRuntimePlanningHandler({ runtimeMode: 'local' })
+    });
+    const result = await injectedMain({
+      action: 'getCurrentContext',
+      userInfo: { appId: 'platform-app', openId: 'untrusted-event-user' }
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.code).toBe('unauthenticated');
+  });
+
   it('passes only the runtime-resolved identity to the controller', async () => {
     const calls: unknown[] = [];
     const injectedMain = createMain({
