@@ -829,7 +829,7 @@ Before committing, remove `cloudbaserc.json` from the index if unchanged. Confir
 - Produces: fresh automated evidence, remote commits, one deployed `planning-api` development function, and a private acceptance record.
 - Consumes: the user-provided local AppID/EnvId and authenticated Developer Tools session.
 
-- [ ] **Step 1: Invoke verification-before-completion and run the complete automated gate**
+- [x] **Step 1: Invoke verification-before-completion and run the complete automated gate**
 
 Run fresh, in order:
 
@@ -846,7 +846,7 @@ git diff --check
 
 Expected: every command exits `0`; capture current test file/test counts and smoke count.
 
-- [ ] **Step 2: Audit security, boundaries, generated files, and commit scope**
+- [x] **Step 2: Audit security, boundaries, generated files, and commit scope**
 
 ```powershell
 rg -n --hidden --glob '!node_modules/**' --glob '!**/dist/**' --glob '!.build/**' --glob '!.git/**' '(AKID[A-Za-z0-9]{16,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|(?:secretId|secretKey|apiKey|accessKey)\s*[:=])' .
@@ -859,7 +859,7 @@ git diff --cached --stat
 
 Expected: no secrets; no forbidden domain/calculation imports; no client `userId`; generated artifacts absent from status; `project.config.json` remains an unstaged personal modification.
 
-- [ ] **Step 3: Record automated verification and confirm every implementation commit is remote**
+- [x] **Step 3: Record automated verification and confirm every implementation commit is remote**
 
 If the audit finds a code problem, return to the task that owns that file and repeat its RED/GREEN/commit cycle. When the gate is clean, check off completed Tasks 1–8 in this plan and stage only the plan record. Never run `git add .` or stage `project.config.json`.
 
