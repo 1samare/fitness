@@ -55,6 +55,25 @@ const writeProfile = {
   }
 } as const;
 
+const completeSetup = {
+  action: 'completePlanningSetup',
+  payload: {
+    expectedVersions: { bodyProfile: 0, goal: 0, trainingPlan: 0 },
+    idempotencyKey: 'planning-setup-001',
+    bodyProfile: writeProfile.payload.payload,
+    goal: {
+      goal: 'maintain',
+      effectiveDate: '2026-08-07',
+      targetDate: '2026-10-30'
+    },
+    trainingPlan: {
+      weekStartDate: '2026-08-10',
+      businessTimezone: 'Asia/Shanghai',
+      sessions: []
+    }
+  }
+} as const;
+
 describe('runtime planning handler', () => {
   test('uses CloudBase persistence in cloud mode across cold starts', async () => {
     const database = new FakeDatabase();
@@ -80,6 +99,39 @@ describe('runtime planning handler', () => {
     expect(result.success).toBe(true);
     if (result.success && result.data.kind === 'current_context') {
       expect(result.data.bodyProfile?.id).toBe('profile-1');
+    }
+  });
+
+  test('persists one atomic setup across cloud handler cold starts', async () => {
+    const database = new FakeDatabase();
+    let sequence = 0;
+    const first = createRuntimePlanningHandler({
+      runtimeMode: 'cloud',
+      database,
+      now: () => '2026-08-07T00:00:00.000Z',
+      nextId: (prefix) => `${prefix}-${String(++sequence)}`
+    });
+    const saved = await first(completeSetup, { userId: 'wx-openid-setup' });
+    expect(saved.success).toBe(true);
+
+    const afterColdStart = createRuntimePlanningHandler({
+      runtimeMode: 'cloud',
+      database,
+      now: () => '2026-08-07T00:00:00.000Z',
+      nextId: (prefix) => `${prefix}-unused`
+    });
+    const current = await afterColdStart(
+      { action: 'getCurrentContext' },
+      { userId: 'wx-openid-setup' }
+    );
+    expect(current.success).toBe(true);
+    if (current.success && current.data.kind === 'current_context') {
+      expect(current.data.latestVersions).toEqual({
+        bodyProfile: 1,
+        goal: 1,
+        trainingPlan: 1
+      });
+      expect(current.data.dailyEnergyTargets).toHaveLength(7);
     }
   });
 });

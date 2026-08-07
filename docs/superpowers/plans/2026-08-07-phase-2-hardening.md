@@ -516,7 +516,7 @@ git push origin codex/phase-2
 - Produces: public `planning_setup_completed` and updated `current_context` responses.
 - Consumes: trusted `OPENID`, strict Task 1 contracts, and Task 3 service.
 
-- [ ] **Step 1: Write failing handler tests**
+- [x] **Step 1: Write failing handler tests**
 
 Add tests that:
 
@@ -527,7 +527,7 @@ Add tests that:
 - map past-date and goal-period errors to their stable codes;
 - return `latestVersions` for an empty and populated context.
 
-- [ ] **Step 2: Run handler tests and verify RED**
+- [x] **Step 2: Run handler tests and verify RED**
 
 ```powershell
 & .\node_modules\.bin\vitest.CMD run cloudfunctions/planning-api/src/handler.test.ts cloudfunctions/planning-api/src/runtime-handler.test.ts cloudfunctions/planning-api/src/index.test.ts
@@ -535,13 +535,13 @@ Add tests that:
 
 Expected: FAIL because the action, public mapping, error mapping, and version counters are missing.
 
-- [ ] **Step 3: Implement controller wiring**
+- [x] **Step 3: Implement controller wiring**
 
 Add `completePlanningSetup` to `knownActions` and `authenticatedActions`. Add a public mapper for composite results and include `nutritionPolicyVersion` in daily target responses. `currentContextResponse` must include literal history counts from `context.latestVersions`.
 
 Map known domain errors without logging payloads or OpenID. Continue returning a generic Chinese message for `internal_error`.
 
-- [ ] **Step 4: Verify build boundary, commit, and push**
+- [x] **Step 4: Verify build boundary, commit, and push**
 
 ```powershell
 & .\node_modules\.bin\vitest.CMD run cloudfunctions/planning-api/src/handler.test.ts cloudfunctions/planning-api/src/runtime-handler.test.ts cloudfunctions/planning-api/src/index.test.ts

@@ -3,7 +3,9 @@ import {
   IdempotencyKeyReuseError,
   InvalidGoalError,
   InvalidTrainingPlanError,
+  PastTrainingChangeError,
   PlanningPrerequisiteError,
+  TrainingDateOutsideGoalPeriodError,
   UnknownTrainingSessionError,
   VersionConflictError,
   createVersionedPlanningService,
@@ -29,6 +31,7 @@ const knownActions = new Set([
   'saveBodyProfile',
   'saveGoal',
   'saveTrainingPlan',
+  'completePlanningSetup',
   'getCurrentContext'
 ]);
 
@@ -36,6 +39,7 @@ const authenticatedActions = new Set([
   'saveBodyProfile',
   'saveGoal',
   'saveTrainingPlan',
+  'completePlanningSetup',
   'getCurrentContext'
 ]);
 
@@ -158,6 +162,20 @@ async function executeAuthenticatedAction(
       }
     };
   }
+  if (request.action === 'completePlanningSetup') {
+    const result = await service.completePlanningSetup(context.userId, request.payload);
+    return {
+      success: true,
+      data: {
+        kind: 'planning_setup_completed',
+        bodyProfile: publicBodyProfile(result.bodyProfile),
+        goal: publicGoal(result.goal),
+        trainingPlan: publicTrainingPlan(result.trainingPlan),
+        dailyEnergyTargets: result.dailyEnergyTargets.map(publicDailyEnergyTarget),
+        affectedDates: [...result.affectedDates]
+      }
+    };
+  }
   const current = await service.getCurrentContext(context.userId);
   return { success: true, data: currentContextResponse(current) };
 }
@@ -231,6 +249,12 @@ async function handlePlanningApiResult(
     }
     if (error instanceof InvalidTrainingPlanError) {
       return errorResponse(error.code, '训练日期必须唯一且位于当前规划周。');
+    }
+    if (error instanceof PastTrainingChangeError) {
+      return errorResponse(error.code, '过去日期的训练记录不可修改。');
+    }
+    if (error instanceof TrainingDateOutsideGoalPeriodError) {
+      return errorResponse(error.code, '训练日期必须位于当前目标周期内。');
     }
     if (error instanceof UnknownTrainingSessionError) {
       return errorResponse(error.code, '训练会话缺少已审核的 MET 映射。');

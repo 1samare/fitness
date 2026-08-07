@@ -3,6 +3,7 @@ import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { addBusinessDays } from '../../packages/contracts/src/business-date';
 import { planningApiResponseSchema } from '../../packages/contracts/src/planning-api';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -158,6 +159,9 @@ describe('local planning API process', () => {
   });
 
   it('serves health, supported, and unsupported scenarios', async () => {
+    const futureWeekStart = addBusinessDays(new Date().toISOString().slice(0, 10), 7);
+    const futureTrainingDate = addBusinessDays(futureWeekStart, 1);
+    const futureTargetDate = addBusinessDays(futureWeekStart, 84);
     const health = planningApiResponseSchema.parse(await call({ action: 'health' }));
     expect(health.success).toBe(true);
     if (health.success) {
@@ -238,8 +242,8 @@ describe('local planning API process', () => {
         idempotencyKey: 'smoke-goal-001',
         payload: {
           goal: 'maintain',
-          effectiveDate: '2026-08-03',
-          targetDate: '2026-10-26'
+          effectiveDate: futureWeekStart,
+          targetDate: futureTargetDate
         }
       }
     }));
@@ -251,10 +255,10 @@ describe('local planning API process', () => {
         expectedVersion: 0,
         idempotencyKey: 'smoke-training-001',
         payload: {
-          weekStartDate: '2026-08-03',
+          weekStartDate: futureWeekStart,
           businessTimezone: 'Asia/Shanghai',
           sessions: [{
-            businessDate: '2026-08-04',
+            businessDate: futureTrainingDate,
             sessionCode: '02054',
             durationMinutes: 60
           }]

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMain, main } from './index';
+import { createRuntimePlanningHandler } from './runtime-handler';
 
 describe('CloudBase main event adapter', () => {
   it('parses the functions-framework HTTP body', async () => {
@@ -41,5 +42,19 @@ describe('CloudBase main event adapter', () => {
       input: { action: 'getCurrentContext', userId: 'client-selected-user' },
       context: { userId: 'trusted-runtime-user' }
     }]);
+  });
+
+  it('does not use an identity embedded in an authenticated event', async () => {
+    const injectedMain = createMain({
+      resolveIdentity: () => undefined,
+      handle: createRuntimePlanningHandler({ runtimeMode: 'local' })
+    });
+    const result = await injectedMain({
+      action: 'getCurrentContext',
+      userId: 'client-selected-user'
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.code).toBe('invalid_request');
   });
 });
