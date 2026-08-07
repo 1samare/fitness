@@ -78,6 +78,9 @@ describe('CloudBasePlanningRepository', () => {
     expect(state.bodyProfiles).toHaveLength(1);
     expect(database.documents).toHaveLength(1);
     expect(database.requestedKeys.join('|')).not.toContain('wx-openid-sensitive');
+    expect([...database.documents.values()][0]).toEqual(expect.objectContaining({
+      schemaVersion: 2
+    }));
   });
 
   test('fails closed instead of replacing a corrupt stored state', async () => {
@@ -85,7 +88,7 @@ describe('CloudBasePlanningRepository', () => {
     const repository = new CloudBasePlanningRepository(database);
     const documentId = repository.documentIdForUser('wx-openid-a');
     database.documents.set(`planning_user_states/${documentId}`, {
-      schemaVersion: 1,
+      schemaVersion: 2,
       state: { bodyProfiles: 'not-an-array' }
     });
 
@@ -129,5 +132,33 @@ describe('CloudBasePlanningRepository', () => {
     await expect(repository.read('wx-openid-a')).rejects.toBeInstanceOf(
       CorruptPlanningStateError
     );
+  });
+
+  test('rejects schema version 1 without attempting an implicit migration', async () => {
+    const database = new FakeDatabase();
+    const repository = new CloudBasePlanningRepository(database);
+    const documentId = repository.documentIdForUser('wx-openid-a');
+    database.documents.set(`planning_user_states/${documentId}`, {
+      schemaVersion: 1,
+      state: {}
+    });
+
+    await expect(repository.read('wx-openid-a')).rejects.toBeInstanceOf(
+      CorruptPlanningStateError
+    );
+  });
+
+  test('validates semantic invariants before writing the next state', async () => {
+    const database = new FakeDatabase();
+    const repository = new CloudBasePlanningRepository(database);
+
+    await expect(repository.transact('wx-openid-a', (state) => ({
+      nextState: {
+        ...state,
+        activeBodyProfileVersionId: 'missing-profile'
+      },
+      result: undefined
+    }))).rejects.toBeInstanceOf(CorruptPlanningStateError);
+    expect(database.documents).toHaveLength(0);
   });
 });

@@ -446,7 +446,7 @@ git push origin codex/phase-2
 - Produces: `assertPlanningAggregateInvariants(state, userId): void` and `CorruptPlanningStateError`.
 - Consumes: Task 1 structural schema and Task 3 version/event state.
 
-- [ ] **Step 1: Write failing invariant tests**
+- [x] **Step 1: Write failing invariant tests**
 
 Create a valid aggregate through the real application service, clone it, mutate one invariant per test, and assert `CorruptPlanningStateError` for:
 
@@ -461,7 +461,7 @@ Create a valid aggregate through the real application service, clone it, mutate 
 
 Do not assert against mocks; invoke the real invariant function and CloudBase repository decoder.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 ```powershell
 & .\node_modules\.bin\vitest.CMD run packages/persistence/src/planning-aggregate-invariants.test.ts packages/persistence/src/cloudbase-planning-repository.test.ts
@@ -469,7 +469,7 @@ Do not assert against mocks; invoke the real invariant function and CloudBase re
 
 Expected: FAIL because semantic invariants and schema version 2 are absent.
 
-- [ ] **Step 3: Implement semantic validation**
+- [x] **Step 3: Implement semantic validation**
 
 The invariant module must:
 
@@ -483,13 +483,13 @@ The invariant module must:
 
 Throw only `CorruptPlanningStateError`; do not repair or normalize stored data.
 
-- [ ] **Step 4: Apply invariants at both CloudBase boundaries**
+- [x] **Step 4: Apply invariants at both CloudBase boundaries**
 
 Move `CorruptPlanningStateError` to the invariant module. In `decodeDocument`, require `schemaVersion === 2`, run Zod parsing, then semantic invariants. In `encodeDocument`, run the same validations before `set`. Keep document keys as SHA-256 of trusted OpenID.
 
 There is no v1 migration because no real environment has received Phase 2 data; document this in Task 8.
 
-- [ ] **Step 5: Verify, commit, and push**
+- [x] **Step 5: Verify, commit, and push**
 
 ```powershell
 & .\node_modules\.bin\vitest.CMD run packages/persistence/src/planning-aggregate-invariants.test.ts packages/persistence/src/cloudbase-planning-repository.test.ts

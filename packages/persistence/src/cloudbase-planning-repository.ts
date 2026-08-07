@@ -2,6 +2,12 @@ import { createHash } from 'node:crypto';
 import type { PlanningRepository } from '@fitness/application';
 import { planningAggregateStateSchema } from '@fitness/contracts';
 import type { PlanningAggregateState } from '@fitness/domain';
+import {
+  CorruptPlanningStateError,
+  assertPlanningAggregateInvariants
+} from './planning-aggregate-invariants';
+
+export { CorruptPlanningStateError } from './planning-aggregate-invariants';
 
 const collectionName = 'planning_user_states';
 
@@ -37,41 +43,21 @@ export interface CloudBaseDatabase extends CloudBaseTransaction {
 }
 
 interface StoredPlanningDocument {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly state: PlanningAggregateState;
-}
-
-export class CorruptPlanningStateError extends Error {
-  public readonly code = 'corrupt_planning_state' as const;
-
-  public constructor() {
-    super('Stored planning state failed runtime validation');
-    this.name = 'CorruptPlanningStateError';
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isOwnedByUser(state: PlanningAggregateState, userId: string): boolean {
-  return [
-    ...state.bodyProfiles,
-    ...state.goals,
-    ...state.trainingPlans,
-    ...state.dailyEnergyTargets,
-    ...state.outboxEvents
-  ].every((version) => version.userId === userId);
-}
-
 function decodeDocument(value: unknown, userId: string): PlanningAggregateState {
-  if (!isRecord(value) || value.schemaVersion !== 1 || !('state' in value)) {
+  if (!isRecord(value) || value.schemaVersion !== 2 || !('state' in value)) {
     throw new CorruptPlanningStateError();
   }
   const parsed = planningAggregateStateSchema.safeParse(value.state);
-  if (!parsed.success || !isOwnedByUser(parsed.data, userId)) {
-    throw new CorruptPlanningStateError();
-  }
+  if (!parsed.success) throw new CorruptPlanningStateError();
+  assertPlanningAggregateInvariants(parsed.data, userId);
   return parsed.data;
 }
 
@@ -80,10 +66,9 @@ function encodeDocument(
   userId: string
 ): StoredPlanningDocument {
   const parsed = planningAggregateStateSchema.safeParse(state);
-  if (!parsed.success || !isOwnedByUser(parsed.data, userId)) {
-    throw new CorruptPlanningStateError();
-  }
-  return { schemaVersion: 1, state: parsed.data };
+  if (!parsed.success) throw new CorruptPlanningStateError();
+  assertPlanningAggregateInvariants(parsed.data, userId);
+  return { schemaVersion: 2, state: parsed.data };
 }
 
 export class CloudBasePlanningRepository implements PlanningRepository {
