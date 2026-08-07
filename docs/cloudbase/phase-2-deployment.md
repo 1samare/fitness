@@ -26,9 +26,13 @@ pnpm.cmd smoke:api
 
 `pnpm.cmd build` 会先构建工作区，再把已打包云函数复制到忽略的 `.build/cloudfunctions/planning-api`。部署目录只能包含 `index.js` 和无依赖的 `package.json`，不得包含源码映射、工作区源码、`node_modules` 或本地配置。
 
-## 选择本地 AppID 与开发环境
+## 选择本地 AppID、开发环境与部署工具
 
-不要把真实标识写进命令脚本或文档。当前 PowerShell 会话中按以下方式读取本地 AppID，并从环境变量读取环境 ID：
+不要把真实标识写进命令脚本或文档。部署前先用微信开发者工具 CLI 的 `islogin` 和 `cloud env list` 核对登录状态、AppID 与环境 ID；任何一项与本地授权值不一致时停止，不部署到其他环境。
+
+函数首次创建或运行时升级必须使用 CloudBase CLI，并在部署后用 `fn detail` 核对实际运行时。微信开发者工具的 `cloud functions deploy --paths` 可以更新代码，但实测首次创建不会应用仓库 `cloudbaserc.json` 中的 `Nodejs20.19`，不得用它证明运行时正确。腾讯云函数运行时在创建后不能原地修改；如果已有同名函数运行时不符，只能在取得明确停机授权后受控删除并同名重建。
+
+当前 PowerShell 会话中按以下方式从本地配置读取 AppID、从环境变量读取环境 ID，并在忽略的 `.build` 下生成一次性 CloudBase CLI 配置：
 
 ```powershell
 $phase2Repo = (Resolve-Path '.').Path
@@ -38,11 +42,35 @@ $phase2EnvId = $env:FITNESS_PHASE2_ENV_ID
 $wechatCli = 'D:\Program Files\微信web开发者工具\cli.bat'
 if ([string]::IsNullOrWhiteSpace($phase2EnvId)) { throw 'FITNESS_PHASE2_ENV_ID is required' }
 if ($phase2AppId -eq 'touristappid') { throw 'A real local AppID is required' }
-& $wechatCli cloud functions deploy --env $phase2EnvId --paths (Join-Path $phase2Repo '.build\cloudfunctions\planning-api') --appid $phase2AppId
-& $wechatCli cloud functions list --env $phase2EnvId --appid $phase2AppId
+& $wechatCli islogin --appid $phase2AppId
+& $wechatCli cloud env list --appid $phase2AppId
+
+$phase2CliDir = Join-Path $phase2Repo '.build\cloudbase-cli'
+New-Item -ItemType Directory -Path $phase2CliDir -Force | Out-Null
+@{
+  version = '2.0'
+  envId = $phase2EnvId
+  functions = @(@{
+    name = 'planning-api'
+    dir = (Join-Path $phase2Repo '.build\cloudfunctions\planning-api')
+    runtime = 'Nodejs20.19'
+    handler = 'index.main'
+    timeout = 5
+    installDependency = $false
+  })
+} | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $phase2CliDir 'cloudbaserc.json')
+
+Push-Location $phase2CliDir
+try {
+  npx -y --package @cloudbase/cli@3.7.2 tcb fn deploy planning-api --runtime Nodejs20.19 --install-dependency false
+  npx -y --package @cloudbase/cli@3.7.2 tcb fn detail planning-api --json
+} finally {
+  Pop-Location
+  Remove-Item -LiteralPath $phase2CliDir -Recurse -Force
+}
 ```
 
-部署前先使用开发者工具 CLI 的 `islogin` 和 `cloud env list` 核对登录状态、AppID 与环境 ID。任何一项与本地授权值不一致时停止，不部署到其他环境。
+只有 `fn detail` 同时显示 `Runtime: Nodejs20.19`、`Timeout: 5`、`Handler: index.main`、`Status: Active` 才算部署配置通过。一次性配置必须在命令结束后删除，不得提交环境 ID。
 
 ## 数据与权限规则
 

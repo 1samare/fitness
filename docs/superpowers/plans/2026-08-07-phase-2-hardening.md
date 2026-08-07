@@ -879,9 +879,9 @@ Expected: local and remote SHA match; only intentional personal/local evidence f
 
 Use the installed Developer Tools CLI to run `islogin` and `cloud env list` for this project. Confirm the returned AppID and EnvId match the user-provided local values. If either differs, stop before deployment and request correction.
 
-- [ ] **Step 5: Deploy the generated function and verify its presence**
+- [x] **Step 5: Deploy the generated function and verify its presence**
 
-Run the documented `cloud functions deploy` command against `.build/cloudfunctions/planning-api`, then `cloud functions list` for the same environment. Record the function name, runtime/version information returned by the tool, timestamp, and command exit status in ignored `logs/phase-2-cloudbase-acceptance.md`. If this is a new environment, create the `planning_user_states` collection before publishing its database rule; do not seed user data from the console.
+Run the documented CloudBase CLI deployment against `.build/cloudfunctions/planning-api`, then query `fn detail` for the same environment. Record the function name, runtime/version information returned by the tool, timestamp, and command exit status in ignored `logs/phase-2-cloudbase-acceptance.md`. If this is a new environment, create the `planning_user_states` collection before publishing its database rule; do not seed user data from the console. The authorized development function was independently verified as `Nodejs20.19`, timeout 5, handler `index.main`, and Active after a controlled same-name replacement; the temporary canary was removed.
 
 Apply `cloudbase/database.rules.json` and `cloudbase/function.rules.json` through the authenticated CloudBase console. Capture rule publication timestamps in the local acceptance record; do not store account names, OpenID, tokens, cookies, or screenshots containing personal data in Git.
 
