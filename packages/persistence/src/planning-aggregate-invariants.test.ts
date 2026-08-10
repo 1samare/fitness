@@ -180,13 +180,19 @@ async function createPendingCandidateState(changedTargetCount = 1) {
   const nextTargetsByDate = new Map(
     nextNutritionTargets.map((target) => [target.businessDate, target])
   );
-  const candidate = {
+  const protectedActivePlan = {
     ...activePlan,
+    days: activePlan.days.map((day, index) => (
+      index < changedTargetCount ? { ...day, locked: true } : day
+    ))
+  };
+  const candidate = {
+    ...protectedActivePlan,
     id: 'meal-plan-2',
     version: 2,
-    supersedesVersionId: activePlan.id,
+    supersedesVersionId: protectedActivePlan.id,
     readiness: 'pending_confirmation' as const,
-    days: activePlan.days.map((day) => {
+    days: protectedActivePlan.days.map((day) => {
       const nextTarget = nextTargetsByDate.get(day.businessDate);
       return nextTarget === undefined
         ? day
@@ -211,7 +217,7 @@ async function createPendingCandidateState(changedTargetCount = 1) {
     ...state,
     dailyEnergyTargets: [...state.dailyEnergyTargets, ...nextEnergyTargets],
     dailyNutritionTargets: [...state.dailyNutritionTargets, ...nextNutritionTargets],
-    mealPlans: [activePlan, candidate],
+    mealPlans: [protectedActivePlan, candidate],
     mealPlanTargetDiffs: [diff]
   };
 }
@@ -241,6 +247,50 @@ async function createCandidateJobState() {
       candidateMealPlanVersionId: candidate.id,
       activatedMealPlanVersionId: null,
       failureCode: null
+    }]
+  };
+}
+
+async function createCompletedCandidateJobState(
+  decision: 'keep_existing' | 'overwrite_locked'
+) {
+  const state = await createCandidateJobState();
+  const previous = state.mealPlans[0];
+  const candidate = state.mealPlans[1];
+  const job = state.recalculationJobs[0];
+  if (previous === undefined || candidate === undefined || job === undefined) {
+    throw new Error('Expected completed candidate job fixture');
+  }
+  const activated = decision === 'overwrite_locked'
+    ? {
+        ...candidate,
+        id: 'meal-plan-3',
+        version: 3,
+        supersedesVersionId: candidate.id,
+        readiness: 'complete' as const
+      }
+    : undefined;
+  return {
+    ...state,
+    mealPlans: activated === undefined
+      ? state.mealPlans
+      : [...state.mealPlans, activated],
+    mealPlanDecisions: [{
+      kind: 'meal_plan_decision' as const,
+      id: 'meal-decision-1',
+      userId: 'user-a',
+      version: 1,
+      candidateMealPlanVersionId: candidate.id,
+      previousActiveMealPlanVersionId: previous.id,
+      decision,
+      decidedAt: '2026-08-10T02:00:00.000Z',
+      activatedMealPlanVersionId: activated?.id ?? null
+    }],
+    recalculationJobs: [{
+      ...job,
+      status: 'completed' as const,
+      completedAt: '2026-08-10T02:00:00.000Z',
+      activatedMealPlanVersionId: activated?.id ?? null
     }]
   };
 }
@@ -493,6 +543,57 @@ describe('planning aggregate invariants', () => {
     expectCorrupt(state);
   });
 
+  test('rejects a missing diff when a candidate clears one of two changed protected days', async () => {
+    const state = await createPendingCandidateState(2);
+    const previous = state.mealPlans[0];
+    const candidate = state.mealPlans[1];
+    const secondDay = candidate?.days[1];
+    if (previous === undefined || candidate === undefined || secondDay === undefined) {
+      throw new Error('Expected cleared protection fixture');
+    }
+    expectCorrupt({
+      ...state,
+      mealPlans: [
+        previous,
+        {
+          ...candidate,
+          days: candidate.days.map((day) => (
+            day.businessDate === secondDay.businessDate
+              ? { ...day, locked: false }
+              : day
+          ))
+        }
+      ]
+    });
+  });
+
+  test.each(['locked', 'manuallyModified'] as const)(
+    'rejects clearing the superseded day %s flag even when its target is unchanged',
+    async (flag) => {
+      const state = await createPendingCandidateState();
+      const previous = state.mealPlans[0];
+      const candidate = state.mealPlans[1];
+      const previousDay = previous?.days[1];
+      if (previous === undefined || candidate === undefined || previousDay === undefined) {
+        throw new Error('Expected unchanged protected-day fixture');
+      }
+      expectCorrupt({
+        ...state,
+        mealPlans: [
+          {
+            ...previous,
+            days: previous.days.map((day) => (
+              day.businessDate === previousDay.businessDate
+                ? { ...day, [flag]: true }
+                : day
+            ))
+          },
+          candidate
+        ]
+      });
+    }
+  );
+
   test('rejects an extra diff for a protected day whose target did not change', async () => {
     const state = await createPendingCandidateState();
     const previous = state.mealPlans[0];
@@ -576,37 +677,104 @@ describe('planning aggregate invariants', () => {
     });
   });
 
-  test('accepts overwrite_locked only with a complete successor of the pending candidate', async () => {
-    const state = await createPendingCandidateState();
-    const previous = state.mealPlans[0];
-    const candidate = state.mealPlans[1];
-    if (previous === undefined || candidate === undefined) {
-      throw new Error('Expected overwrite decision fixture');
+  test.each(['keep_existing', 'overwrite_locked'] as const)(
+    'accepts a completed candidate job closed by one %s decision',
+    async (decision) => {
+      const state = await createCompletedCandidateJobState(decision);
+      expect(() => {
+        assertPlanningAggregateInvariants(state, 'user-a');
+      }).not.toThrow();
     }
-    const activated = {
-      ...candidate,
-      id: 'meal-plan-3',
-      version: 3,
-      supersedesVersionId: candidate.id,
-      readiness: 'complete' as const
-    };
-    expect(() => {
-      assertPlanningAggregateInvariants({
+  );
+
+  test('rejects an orphan decision without its candidate recalculation job', async () => {
+    const state = await createCompletedCandidateJobState('keep_existing');
+    expectCorrupt({ ...state, recalculationJobs: [] });
+  });
+
+  test('rejects a completed candidate job without a decision', async () => {
+    const state = await createCompletedCandidateJobState('keep_existing');
+    expectCorrupt({ ...state, mealPlanDecisions: [] });
+  });
+
+  test.each(['pending', 'failed_retryable'] as const)(
+    'rejects a %s candidate job that already has a decision',
+    async (status) => {
+      const state = await createCompletedCandidateJobState('keep_existing');
+      const job = state.recalculationJobs[0];
+      if (job === undefined) throw new Error('Expected unfinished decision fixture');
+      expectCorrupt({
         ...state,
-        mealPlans: [...state.mealPlans, activated],
-        mealPlanDecisions: [{
-          kind: 'meal_plan_decision',
-          id: 'meal-decision-1',
-          userId: 'user-a',
-          version: 1,
-          candidateMealPlanVersionId: candidate.id,
-          previousActiveMealPlanVersionId: previous.id,
-          decision: 'overwrite_locked',
-          decidedAt: '2026-08-10T01:00:00.000Z',
-          activatedMealPlanVersionId: activated.id
+        recalculationJobs: [{
+          ...job,
+          status,
+          completedAt: null,
+          failureCode: status === 'failed_retryable' ? 'provider_unavailable' : null
         }]
-      }, 'user-a');
-    }).not.toThrow();
+      });
+    }
+  );
+
+  test.each(['job_missing_activation', 'decision_keep_existing'] as const)(
+    'rejects a completed candidate lifecycle with mismatched result: %s',
+    async (mismatch) => {
+      const state = await createCompletedCandidateJobState('overwrite_locked');
+      const decision = state.mealPlanDecisions[0];
+      const job = state.recalculationJobs[0];
+      if (decision === undefined || job === undefined) {
+        throw new Error('Expected mismatched decision fixture');
+      }
+      expectCorrupt({
+        ...state,
+        mealPlanDecisions: mismatch === 'decision_keep_existing'
+          ? [{
+              ...decision,
+              decision: 'keep_existing',
+              activatedMealPlanVersionId: null
+            }]
+          : state.mealPlanDecisions,
+        recalculationJobs: mismatch === 'job_missing_activation'
+          ? [{ ...job, activatedMealPlanVersionId: null }]
+          : state.recalculationJobs
+      });
+    }
+  );
+
+  test('rejects two recalculation jobs that share one candidate', async () => {
+    const state = await createCandidateJobState();
+    const event = state.outboxEvents[0];
+    const job = state.recalculationJobs[0];
+    if (event === undefined || job === undefined) {
+      throw new Error('Expected duplicate candidate job fixture');
+    }
+    expectCorrupt({
+      ...state,
+      outboxEvents: [
+        event,
+        { ...event, eventId: 'training-plan-changed-second' }
+      ],
+      recalculationJobs: [
+        job,
+        {
+          ...job,
+          id: 'recalculation-job-candidate-second',
+          triggerEventId: 'training-plan-changed-second'
+        }
+      ]
+    });
+  });
+
+  test('rejects two decisions that share one candidate', async () => {
+    const state = await createCompletedCandidateJobState('keep_existing');
+    const decision = state.mealPlanDecisions[0];
+    if (decision === undefined) throw new Error('Expected duplicate candidate decision fixture');
+    expectCorrupt({
+      ...state,
+      mealPlanDecisions: [
+        decision,
+        { ...decision, id: 'meal-decision-2', version: 2 }
+      ]
+    });
   });
 
   test.each(['candidate', 'previous', 'unrelated_complete'] as const)(
@@ -681,34 +849,6 @@ describe('planning aggregate invariants', () => {
     const state = await createCandidateJobState();
     expect(() => {
       assertPlanningAggregateInvariants(state, 'user-a');
-    }).not.toThrow();
-  });
-
-  test('accepts an activated job result only as the complete candidate successor', async () => {
-    const state = await createCandidateJobState();
-    const candidate = state.mealPlans[1];
-    const job = state.recalculationJobs[0];
-    if (candidate === undefined || job === undefined) {
-      throw new Error('Expected activated job fixture');
-    }
-    const activated = {
-      ...candidate,
-      id: 'meal-plan-3',
-      version: 3,
-      supersedesVersionId: candidate.id,
-      readiness: 'complete' as const
-    };
-    expect(() => {
-      assertPlanningAggregateInvariants({
-        ...state,
-        mealPlans: [...state.mealPlans, activated],
-        recalculationJobs: [{
-          ...job,
-          status: 'completed',
-          completedAt: '2026-08-10T02:00:00.000Z',
-          activatedMealPlanVersionId: activated.id
-        }]
-      }, 'user-a');
     }).not.toThrow();
   });
 

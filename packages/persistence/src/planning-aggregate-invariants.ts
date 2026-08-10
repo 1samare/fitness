@@ -531,7 +531,13 @@ export function assertPlanningAggregateInvariants(
       const previousDay = previousDays.get(candidateDay.businessDate);
       if (previousDay === undefined) corrupt();
       if (
-        (candidateDay.locked || candidateDay.manuallyModified)
+        candidateDay.locked !== previousDay.locked
+        || candidateDay.manuallyModified !== previousDay.manuallyModified
+      ) {
+        corrupt();
+      }
+      if (
+        (previousDay.locked || previousDay.manuallyModified)
         && previousDay.dailyNutritionTargetVersionId
           !== candidateDay.dailyNutritionTargetVersionId
       ) {
@@ -581,7 +587,10 @@ export function assertPlanningAggregateInvariants(
     }
   }
 
-  const decidedCandidates = new Set<string>();
+  const decisionsByCandidate = new Map<
+    string,
+    PlanningAggregateState['mealPlanDecisions'][number]
+  >();
   for (const decision of state.mealPlanDecisions) {
     const candidate = mealPlans.get(decision.candidateMealPlanVersionId);
     const previous = mealPlans.get(decision.previousActiveMealPlanVersionId);
@@ -594,7 +603,7 @@ export function assertPlanningAggregateInvariants(
       || previous === undefined
       || previous.readiness !== 'complete'
       || candidate.supersedesVersionId !== previous.id
-      || decidedCandidates.has(candidate.id)
+      || decisionsByCandidate.has(candidate.id)
       || (decision.decision === 'keep_existing' && decision.activatedMealPlanVersionId !== null)
       || (
         decision.decision === 'overwrite_locked'
@@ -607,10 +616,14 @@ export function assertPlanningAggregateInvariants(
     ) {
       corrupt();
     }
-    decidedCandidates.add(candidate.id);
+    decisionsByCandidate.set(candidate.id, decision);
   }
 
   const triggerEventIds = new Set<string>();
+  const jobsByCandidate = new Map<
+    string,
+    PlanningAggregateState['recalculationJobs'][number]
+  >();
   for (const job of state.recalculationJobs) {
     assertSortedUniqueDates(job.affectedDates);
     if (triggerEventIds.has(job.triggerEventId)) corrupt();
@@ -632,6 +645,24 @@ export function assertPlanningAggregateInvariants(
       || (job.activatedMealPlanVersionId !== null && activated === undefined)
     ) {
       corrupt();
+    }
+    if (candidate !== undefined) {
+      const decision = decisionsByCandidate.get(candidate.id);
+      if (
+        jobsByCandidate.has(candidate.id)
+        || (
+          job.status === 'completed'
+          && (
+            decision === undefined
+            || decision.activatedMealPlanVersionId
+              !== job.activatedMealPlanVersionId
+          )
+        )
+        || (job.status !== 'completed' && decision !== undefined)
+      ) {
+        corrupt();
+      }
+      jobsByCandidate.set(candidate.id, job);
     }
     const triggerTrainingPlanVersionId = job.triggerType === 'training_plan_changed'
       ? events.get(job.triggerEventId)?.trainingPlanVersionId
@@ -722,6 +753,9 @@ export function assertPlanningAggregateInvariants(
     ) {
       corrupt();
     }
+  }
+  for (const candidateId of decisionsByCandidate.keys()) {
+    if (!jobsByCandidate.has(candidateId)) corrupt();
   }
 
   const idSets: EntityIds = {

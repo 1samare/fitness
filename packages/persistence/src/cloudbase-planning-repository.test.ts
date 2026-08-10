@@ -182,7 +182,7 @@ async function createPhase4State(repository: PlanningRepository): Promise<Planni
       businessDate: target.businessDate,
       dailyNutritionTargetVersionId: target.id,
       dailyMenuTemplateVersionId: `menu-${target.businessDate}`,
-      locked: false,
+      locked: target.businessDate === nextNutritionTarget.businessDate,
       manuallyModified: false,
       meals: [{
         slot: 'breakfast' as const,
