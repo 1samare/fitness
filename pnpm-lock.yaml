@@ -66,6 +66,15 @@ importers:
 
   data/met-sessions: {}
 
+  data/nutrition-fixtures:
+    dependencies:
+      '@fitness/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@fitness/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+
   packages/application:
     dependencies:
       '@fitness/calculation':
@@ -100,6 +109,15 @@ importers:
       '@fitness/application':
         specifier: workspace:*
         version: link:../application
+      '@fitness/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@fitness/domain':
+        specifier: workspace:*
+        version: link:../domain
+
+  packages/providers:
+    dependencies:
       '@fitness/contracts':
         specifier: workspace:*
         version: link:../contracts
