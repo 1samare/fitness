@@ -14,11 +14,3 @@ export const CALCULATION_POLICY_V2 = Object.freeze({
   }
 });
 
-export const NUTRITION_POLICY_V1 = Object.freeze({
-  policyVersion: 'nutrition-policy-v1' as const,
-  sourceIds: ['CN-DRI-2023', 'CN-DRI-MACRO-2017'] as const,
-  applicableAgeRange: { minInclusive: 18 as const, maxInclusive: 45 as const },
-  applicableBmiRange: { minInclusive: 18.5 as const, maxExclusive: 24 as const },
-  effectiveDate: '2026-08-07',
-  reviewedAt: '2026-08-07'
-});
