@@ -477,6 +477,9 @@ export function assertPlanningAggregateInvariants(
   for (const target of state.dailyEnergyTargets) {
     const goal = goals.get(target.goalVersionId);
     const plan = trainingPlans.get(target.trainingPlanVersionId);
+    const completion = target.trainingCompletionEventId === undefined
+      ? undefined
+      : completions.get(target.trainingCompletionEventId);
     if (
       !bodyProfiles.has(target.bodyProfileVersionId)
       || goal === undefined
@@ -484,6 +487,14 @@ export function assertPlanningAggregateInvariants(
       || goal.bodyProfileVersionId !== target.bodyProfileVersionId
       || plan.bodyProfileVersionId !== target.bodyProfileVersionId
       || plan.goalVersionId !== target.goalVersionId
+      || (
+        target.trainingCompletionEventId !== undefined
+        && (
+          completion === undefined
+          || completion.trainingPlanVersionId !== target.trainingPlanVersionId
+          || completion.businessDate !== target.businessDate
+        )
+      )
     ) {
       corrupt();
     }
@@ -492,6 +503,9 @@ export function assertPlanningAggregateInvariants(
     const goal = goals.get(target.goalVersionId);
     const plan = trainingPlans.get(target.trainingPlanVersionId);
     const energyTarget = dailyTargets.get(target.dailyEnergyTargetVersionId);
+    const completion = target.trainingCompletionEventId === undefined
+      ? undefined
+      : completions.get(target.trainingCompletionEventId);
     if (
       !bodyProfiles.has(target.bodyProfileVersionId)
       || goal === undefined
@@ -504,6 +518,15 @@ export function assertPlanningAggregateInvariants(
       || energyTarget.bodyProfileVersionId !== target.bodyProfileVersionId
       || energyTarget.goalVersionId !== target.goalVersionId
       || energyTarget.trainingPlanVersionId !== target.trainingPlanVersionId
+      || energyTarget.trainingCompletionEventId !== target.trainingCompletionEventId
+      || (
+        target.trainingCompletionEventId !== undefined
+        && (
+          completion === undefined
+          || completion.trainingPlanVersionId !== target.trainingPlanVersionId
+          || completion.businessDate !== target.businessDate
+        )
+      )
       || JSON.stringify(energyTarget.energy) !== JSON.stringify(target.energy)
     ) {
       corrupt();

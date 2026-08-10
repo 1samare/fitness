@@ -277,6 +277,90 @@ describe('planning API contracts', () => {
     })).toThrow();
   });
 
+  it('accepts strict completion, candidate-decision, and retry commands without client identity', () => {
+    const completion = {
+      action: 'recordTrainingCompletion',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'completion-api-001',
+        payload: { businessDate: '2026-08-19', completedDurationMinutes: 0 }
+      }
+    } as const;
+    const decision = {
+      action: 'decideMealPlanCandidate',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'candidate-api-001',
+        payload: {
+          candidateMealPlanVersionId: 'meal-plan-candidate-1',
+          decision: 'keep_existing'
+        }
+      }
+    } as const;
+    const retry = {
+      action: 'retryPendingRecalculation',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'retry-api-001',
+        payload: { recalculationJobId: 'recalculation-job-1' }
+      }
+    } as const;
+
+    expect(planningApiRequestSchema.parse(completion)).toEqual(completion);
+    expect(planningApiRequestSchema.parse(decision)).toEqual(decision);
+    expect(planningApiRequestSchema.parse(retry)).toEqual(retry);
+    for (const request of [completion, decision, retry]) {
+      expect(() => planningApiRequestSchema.parse({
+        ...request,
+        payload: { ...request.payload, userId: 'attacker' }
+      })).toThrow();
+    }
+    expect(() => planningApiRequestSchema.parse({
+      ...completion,
+      payload: {
+        ...completion.payload,
+        payload: { ...completion.payload.payload, occurredAt: 'client-time' }
+      }
+    })).toThrow();
+    expect(() => planningApiRequestSchema.parse({
+      ...decision,
+      payload: {
+        ...decision.payload,
+        payload: { ...decision.payload.payload, decision: 'force_activate' }
+      }
+    })).toThrow();
+  });
+
+  it('parses a public past completion response and rejects stored identity', () => {
+    const response = {
+      success: true,
+      data: {
+        kind: 'training_completion_recorded',
+        event: {
+          kind: 'training_completion_event',
+          id: 'training-completion-1',
+          version: 1,
+          trainingPlanVersionId: 'training-plan-1',
+          businessDate: '2026-08-18',
+          completedDurationMinutes: 0,
+          occurredAt: '2026-08-19T04:00:00.000Z'
+        },
+        dailyEnergyTargets: [],
+        dailyNutritionTargets: [],
+        recalculationJob: null,
+        candidateMealPlan: null,
+        targetDiffs: [],
+        recalculationStatus: 'not_required'
+      }
+    } as const;
+
+    expect(planningApiResponseSchema.parse(response)).toEqual(response);
+    expect(() => planningApiResponseSchema.parse({
+      ...response,
+      data: { ...response.data, event: { ...response.data.event, userId: 'private-user' } }
+    })).toThrow();
+  });
+
   it('parses public inventory responses and rejects stored user identity', () => {
     const response = {
       success: true,

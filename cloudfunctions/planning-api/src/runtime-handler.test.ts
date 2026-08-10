@@ -166,4 +166,54 @@ describe('runtime planning handler', () => {
       }
     });
   });
+
+  test('records a past completion fact through the CloudBase runtime without requiring providers', async () => {
+    const database = new FakeDatabase();
+    let sequence = 0;
+    let instant = '2026-08-07T00:00:00.000Z';
+    const handler = createRuntimePlanningHandler({
+      runtimeMode: 'cloud',
+      database,
+      now: () => instant,
+      nextId: (prefix) => `${prefix}-${String(++sequence)}`
+    });
+    await handler({
+      ...completeSetup,
+      payload: {
+        ...completeSetup.payload,
+        trainingPlan: {
+          ...completeSetup.payload.trainingPlan,
+          sessions: [{
+            businessDate: '2026-08-11',
+            sessionCode: '02054',
+            durationMinutes: 60
+          }]
+        }
+      }
+    }, { userId: 'wx-openid-completion' });
+    instant = '2026-08-12T04:00:00.000Z';
+
+    const recorded = await handler({
+      action: 'recordTrainingCompletion',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'completion-runtime-001',
+        payload: { businessDate: '2026-08-11', completedDurationMinutes: 0 }
+      }
+    }, { userId: 'wx-openid-completion' });
+
+    expect(recorded).toMatchObject({
+      success: true,
+      data: {
+        kind: 'training_completion_recorded',
+        event: { completedDurationMinutes: 0 },
+        dailyEnergyTargets: [],
+        dailyNutritionTargets: [],
+        recalculationJob: null,
+        recalculationStatus: 'not_required'
+      }
+    });
+    expect(JSON.stringify(recorded)).not.toContain('userId');
+    expect(JSON.stringify(recorded)).not.toContain('wx-openid-completion');
+  });
 });

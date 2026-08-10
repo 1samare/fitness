@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  CandidateNotPendingError,
   IdempotencyKeyReuseError,
   InvalidGoalError,
   InvalidTrainingPlanError,
@@ -14,6 +15,7 @@ import {
   VersionConflictError,
   type createMealPlanGenerationService,
   type createMealPlanEditingService,
+  type createMealPlanRecalculationService,
   createVersionedPlanningService,
   previewDailyEnergy
 } from '@fitness/application';
@@ -32,6 +34,9 @@ import type {
   InventoryVersion,
   MealPlanTargetDiff,
   MealPlanVersion,
+  MealPlanDecision,
+  RecalculationJob,
+  TrainingCompletionEvent,
   TrainingPlanVersion
 } from '@fitness/domain';
 import { InMemoryPlanningRepository } from '@fitness/persistence';
@@ -48,6 +53,9 @@ const knownActions = new Set([
   'generateWeeklyMealPlan',
   'setMealPlanDayLock',
   'updateMealPlanDay',
+  'recordTrainingCompletion',
+  'decideMealPlanCandidate',
+  'retryPendingRecalculation',
   'getCurrentContext'
 ]);
 
@@ -61,6 +69,9 @@ const authenticatedActions = new Set([
   'generateWeeklyMealPlan',
   'setMealPlanDayLock',
   'updateMealPlanDay',
+  'recordTrainingCompletion',
+  'decideMealPlanCandidate',
+  'retryPendingRecalculation',
   'getCurrentContext'
 ]);
 
@@ -74,7 +85,8 @@ const planningService = createVersionedPlanningService({
 export type VersionedPlanningService =
   | ReturnType<typeof createVersionedPlanningService>
   | ReturnType<typeof createMealPlanGenerationService>
-  | ReturnType<typeof createMealPlanEditingService>;
+  | ReturnType<typeof createMealPlanEditingService>
+  | ReturnType<typeof createMealPlanRecalculationService>;
 
 export interface TrustedRequestContext {
   readonly userId: string;
@@ -137,6 +149,9 @@ function publicDailyEnergyTarget(version: DailyEnergyTargetVersion) {
     trainingPlanVersionId: version.trainingPlanVersionId,
     energyPolicyVersion: version.energyPolicyVersion,
     nutritionPolicyVersion: version.nutritionPolicyVersion,
+    ...(version.trainingCompletionEventId === undefined
+      ? {}
+      : { trainingCompletionEventId: version.trainingCompletionEventId }),
     energy: version.energy
   };
 }
@@ -154,6 +169,9 @@ function publicDailyNutritionTarget(version: DailyNutritionTargetVersion) {
     dailyEnergyTargetVersionId: version.dailyEnergyTargetVersionId,
     energyPolicyVersion: version.energyPolicyVersion,
     nutritionPolicyVersion: version.nutritionPolicyVersion,
+    ...(version.trainingCompletionEventId === undefined
+      ? {}
+      : { trainingCompletionEventId: version.trainingCompletionEventId }),
     energy: version.energy,
     nutrition: version.nutrition
   });
@@ -202,6 +220,47 @@ function publicMealPlanTargetDiff(diff: MealPlanTargetDiff) {
     previousNutritionTargetVersionId: diff.previousNutritionTargetVersionId,
     proposedNutritionTargetVersionId: diff.proposedNutritionTargetVersionId,
     reason: diff.reason
+  };
+}
+
+function publicTrainingCompletionEvent(event: TrainingCompletionEvent) {
+  return {
+    kind: event.kind,
+    id: event.id,
+    version: event.version,
+    trainingPlanVersionId: event.trainingPlanVersionId,
+    businessDate: event.businessDate,
+    completedDurationMinutes: event.completedDurationMinutes,
+    occurredAt: event.occurredAt
+  };
+}
+
+function publicRecalculationJob(job: RecalculationJob) {
+  return {
+    kind: job.kind,
+    id: job.id,
+    triggerEventId: job.triggerEventId,
+    triggerType: job.triggerType,
+    affectedDates: [...job.affectedDates],
+    status: job.status,
+    createdAt: job.createdAt,
+    completedAt: job.completedAt,
+    candidateMealPlanVersionId: job.candidateMealPlanVersionId,
+    activatedMealPlanVersionId: job.activatedMealPlanVersionId,
+    failureCode: job.failureCode
+  };
+}
+
+function publicMealPlanDecision(decision: MealPlanDecision) {
+  return {
+    kind: decision.kind,
+    id: decision.id,
+    version: decision.version,
+    candidateMealPlanVersionId: decision.candidateMealPlanVersionId,
+    previousActiveMealPlanVersionId: decision.previousActiveMealPlanVersionId,
+    decision: decision.decision,
+    decidedAt: decision.decidedAt,
+    activatedMealPlanVersionId: decision.activatedMealPlanVersionId
   };
 }
 
@@ -321,6 +380,66 @@ async function executeAuthenticatedAction(
       data: { kind: 'meal_plan_updated', version: publicMealPlan(version) }
     };
   }
+  if (request.action === 'recordTrainingCompletion') {
+    if (!('recordTrainingCompletion' in service)) {
+      throw new ProviderUnavailableError('meal_catalog_unavailable');
+    }
+    const result = await service.recordTrainingCompletion(context.userId, request.payload);
+    return {
+      success: true,
+      data: {
+        kind: 'training_completion_recorded',
+        event: publicTrainingCompletionEvent(result.event),
+        dailyEnergyTargets: result.dailyEnergyTargets.map(publicDailyEnergyTarget),
+        dailyNutritionTargets: result.dailyNutritionTargets.map(publicDailyNutritionTarget),
+        recalculationJob: result.recalculationJob === null
+          ? null
+          : publicRecalculationJob(result.recalculationJob),
+        candidateMealPlan: result.candidateMealPlan === null
+          ? null
+          : publicMealPlan(result.candidateMealPlan),
+        targetDiffs: result.targetDiffs.map(publicMealPlanTargetDiff),
+        recalculationStatus: result.recalculationStatus
+      }
+    };
+  }
+  if (request.action === 'decideMealPlanCandidate') {
+    if (!('decideMealPlanCandidate' in service)) {
+      throw new ProviderUnavailableError('meal_catalog_unavailable');
+    }
+    const result = await service.decideMealPlanCandidate(context.userId, request.payload);
+    return {
+      success: true,
+      data: {
+        kind: 'meal_plan_candidate_decided',
+        decision: publicMealPlanDecision(result.decision),
+        recalculationJob: publicRecalculationJob(result.recalculationJob),
+        activatedMealPlan: result.activatedMealPlan === null
+          ? null
+          : publicMealPlan(result.activatedMealPlan)
+      }
+    };
+  }
+  if (request.action === 'retryPendingRecalculation') {
+    if (!('retryPendingRecalculation' in service)) {
+      throw new ProviderUnavailableError('meal_catalog_unavailable');
+    }
+    const result = await service.retryPendingRecalculation(context.userId, request.payload);
+    return {
+      success: true,
+      data: {
+        kind: 'meal_plan_recalculation_processed',
+        recalculationJob: publicRecalculationJob(result.recalculationJob),
+        candidateMealPlan: result.candidateMealPlan === null
+          ? null
+          : publicMealPlan(result.candidateMealPlan),
+        activatedMealPlan: result.activatedMealPlan === null
+          ? null
+          : publicMealPlan(result.activatedMealPlan),
+        targetDiffs: result.targetDiffs.map(publicMealPlanTargetDiff)
+      }
+    };
+  }
   const current = await service.getCurrentContext(context.userId);
   return { success: true, data: currentContextResponse(current) };
 }
@@ -416,6 +535,9 @@ async function handlePlanningApiResult(
     }
     if (error instanceof RecipeNotSelectableError) {
       return errorResponse(error.code, '请选择当前上下文提供的备选菜品。');
+    }
+    if (error instanceof CandidateNotPendingError) {
+      return errorResponse(error.code, '餐单候选已处理或不再等待确认。');
     }
     if (error instanceof NutritionConstraintsInfeasibleError) {
       return errorResponse(error.code, '当前食材与营养目标无法生成可行的一周餐单。');

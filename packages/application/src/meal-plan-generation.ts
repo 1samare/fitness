@@ -87,7 +87,7 @@ interface ResolvedInventoryItem {
   readonly availableGrams: number;
 }
 
-interface GenerationPrerequisites {
+export interface GenerationPrerequisites {
   readonly bodyProfile: BodyProfileVersion;
   readonly goal: GoalVersion;
   readonly trainingPlan: TrainingPlanVersion;
@@ -96,7 +96,7 @@ interface GenerationPrerequisites {
   readonly compareToken: MealGenerationCompareToken;
 }
 
-interface ProviderSnapshot {
+export interface ProviderSnapshot {
   readonly catalog: DailyMenuCatalogVersion;
   readonly menus: readonly DailyMenuTemplateVersion[];
   readonly recipes: readonly RecipeTemplateVersion[];
@@ -217,7 +217,7 @@ async function normalizeInventory(
   return [...merged.values()].sort((left, right) => left.foodId.localeCompare(right.foodId));
 }
 
-function targetsForActiveWeek(
+export function targetsForActiveWeek(
   state: PlanningAggregateState,
   bodyProfile: BodyProfileVersion,
   goal: GoalVersion,
@@ -247,7 +247,7 @@ function targetsForActiveWeek(
   ));
 }
 
-function generationPrerequisites(
+export function generationPrerequisites(
   state: PlanningAggregateState,
   weekStartDate: string
 ): GenerationPrerequisites {
@@ -296,7 +296,7 @@ function generationPrerequisites(
   };
 }
 
-async function loadProviderSnapshot(
+export async function loadProviderSnapshot(
   providers: MealPlanningProviders
 ): Promise<ProviderSnapshot> {
   try {
@@ -350,7 +350,10 @@ async function loadProviderSnapshot(
   }
 }
 
-function tokensEqual(left: MealGenerationCompareToken, right: MealGenerationCompareToken): boolean {
+export function mealGenerationTokensEqual(
+  left: MealGenerationCompareToken,
+  right: MealGenerationCompareToken
+): boolean {
   return left.bodyProfileVersionId === right.bodyProfileVersionId
     && left.goalVersionId === right.goalVersionId
     && left.trainingPlanVersionId === right.trainingPlanVersionId
@@ -483,7 +486,7 @@ export function createMealPlanGenerationService(
           throw new VersionConflictError(envelope.expectedVersion, state.mealPlans.length);
         }
         const current = generationPrerequisites(state, envelope.payload.weekStartDate);
-        if (!tokensEqual(prerequisites.compareToken, current.compareToken)) {
+        if (!mealGenerationTokensEqual(prerequisites.compareToken, current.compareToken)) {
           throw new VersionConflictError(envelope.expectedVersion, state.mealPlans.length);
         }
         const mealPlan: MealPlanVersion = {

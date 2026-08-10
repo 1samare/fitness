@@ -635,6 +635,13 @@ describe('versioned planning service', () => {
       trainingPlanVersionId: changed.trainingPlan.id,
       affectedDates: ['2026-08-11', '2026-08-13']
     }));
+    expect(state.recalculationJobs).toHaveLength(1);
+    expect(state.recalculationJobs[0]).toEqual(expect.objectContaining({
+      triggerEventId: state.outboxEvents.at(-1)?.eventId,
+      triggerType: 'training_plan_changed',
+      affectedDates: ['2026-08-11', '2026-08-13'],
+      status: 'pending'
+    }));
     const context = await service.getCurrentContext('user-a');
     expect(context.dailyEnergyTargets).toHaveLength(7);
     expect(context.dailyNutritionTargets).toHaveLength(7);

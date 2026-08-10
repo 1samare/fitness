@@ -79,6 +79,7 @@ export interface DailyEnergyTargetVersion extends VersionMetadata {
   readonly trainingPlanVersionId: string;
   readonly energyPolicyVersion: 'calculation-policy-v2';
   readonly nutritionPolicyVersion: 'nutrition-policy-v1';
+  readonly trainingCompletionEventId?: string | undefined;
   readonly energy: DailyEnergyResult;
 }
 
@@ -91,6 +92,7 @@ export interface DailyNutritionTargetVersion extends VersionMetadata {
   readonly dailyEnergyTargetVersionId: string;
   readonly energyPolicyVersion: 'calculation-policy-v2';
   readonly nutritionPolicyVersion: 'nutrition-policy-v1';
+  readonly trainingCompletionEventId?: string | undefined;
   readonly energy: DailyEnergyResult;
   readonly nutrition: NutritionTargetResult | null;
 }

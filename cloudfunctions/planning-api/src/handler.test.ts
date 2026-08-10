@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createMealPlanEditingService,
+  createMealPlanRecalculationService,
   createVersionedPlanningService
 } from '@fitness/application';
 import {
@@ -103,6 +104,102 @@ function createMealHarness() {
       allowTestFixtures: true
     }
   }));
+}
+
+function createCompletionHarness() {
+  const repository = new InMemoryPlanningRepository();
+  let sequence = 0;
+  let instant = '2026-08-10T00:00:00.000Z';
+  let providerAvailable = true;
+  const snapshots = balancedNutritionSnapshots.map((snapshot) => ({
+    ...snapshot,
+    nutrientsPer100g: { ...snapshot.nutrientsPer100g, proteinG: 6.7 }
+  }));
+  const nutrition = new ReviewedNutritionCache({ mode: 'test', snapshots });
+  const recipes = new StaticRecipeTemplateProvider({
+    mode: 'test',
+    templates: TEST_RECIPE_TEMPLATES
+  });
+  const menus = new StaticDailyMenuCatalogProvider({
+    mode: 'test',
+    catalog: TEST_DAILY_MENU_CATALOG,
+    menus: TEST_DAILY_MENU_TEMPLATES
+  });
+  const handler = createPlanningApiHandler(createMealPlanRecalculationService({
+    repository,
+    now: () => instant,
+    nextId: (prefix) => `${prefix}-${String(++sequence)}`,
+    providers: {
+      nutrition,
+      recipes,
+      menus: {
+        getActiveCatalog: () => providerAvailable
+          ? menus.getActiveCatalog()
+          : Promise.reject(new Error('offline')),
+        getMenuByVersionId: (id) => menus.getMenuByVersionId(id)
+      },
+      allowTestFixtures: true
+    }
+  }));
+  return {
+    handler,
+    setNow(value: string) {
+      instant = value;
+    },
+    setProviderAvailable(value: boolean) {
+      providerAvailable = value;
+    }
+  };
+}
+
+async function prepareCompletionPlan(harness: ReturnType<typeof createCompletionHarness>) {
+  await harness.handler({
+    ...completeSetup,
+    payload: {
+      ...completeSetup.payload,
+      bodyProfile: {
+        ...completeSetup.payload.bodyProfile,
+        weightKg: 60,
+        allergens: [],
+        avoidFoods: []
+      },
+      goal: {
+        goal: 'muscle_gain',
+        effectiveDate: '2026-08-10',
+        targetDate: '2026-10-30'
+      },
+      trainingPlan: {
+        weekStartDate: '2026-08-17',
+        businessTimezone: 'Asia/Shanghai',
+        sessions: [{
+          businessDate: '2026-08-19',
+          sessionCode: '02054',
+          durationMinutes: 60
+        }]
+      }
+    }
+  }, { userId: 'trusted-user-a' });
+  await harness.handler({
+    action: 'saveInventory',
+    payload: {
+      expectedVersion: 0,
+      idempotencyKey: 'inventory-completion-api-001',
+      payload: {
+        items: TEST_NUTRITION_SNAPSHOTS.map((snapshot) => ({
+          name: snapshot.canonicalNameZh,
+          availableGrams: 50_000
+        }))
+      }
+    }
+  }, { userId: 'trusted-user-a' });
+  await harness.handler({
+    action: 'generateWeeklyMealPlan',
+    payload: {
+      expectedVersion: 0,
+      idempotencyKey: 'meal-completion-api-001',
+      payload: { weekStartDate: '2026-08-17' }
+    }
+  }, { userId: 'trusted-user-a' });
 }
 
 async function prepareApiMealPlan(handler: ReturnType<typeof createMealHarness>) {
@@ -610,5 +707,106 @@ describe('handlePlanningApi', () => {
         message: '请选择当前上下文提供的备选菜品。'
       }
     });
+  });
+
+  it('returns completion facts independently with exact public target references', async () => {
+    const harness = createCompletionHarness();
+    await prepareCompletionPlan(harness);
+    harness.setNow('2026-08-19T04:00:00.000Z');
+
+    const result = await harness.handler({
+      action: 'recordTrainingCompletion',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'completion-api-001',
+        payload: { businessDate: '2026-08-19', completedDurationMinutes: 30 }
+      }
+    }, { userId: 'trusted-user-a' });
+
+    expect(result.success).toBe(true);
+    if (!result.success || result.data.kind !== 'training_completion_recorded') {
+      throw new Error('Expected completion response');
+    }
+    expect(result.data.dailyEnergyTargets).toHaveLength(1);
+    expect(result.data.dailyNutritionTargets).toHaveLength(1);
+    expect(result.data.dailyEnergyTargets[0]?.trainingCompletionEventId).toBe(
+      result.data.event.id
+    );
+    expect(result.data.dailyNutritionTargets[0]?.trainingCompletionEventId).toBe(
+      result.data.event.id
+    );
+    expect(JSON.stringify(result)).not.toContain('userId');
+    expect(JSON.stringify(result)).not.toContain('trusted-user-a');
+  });
+
+  it('keeps completion success visible when immediate meal recalculation is retryable', async () => {
+    const harness = createCompletionHarness();
+    await prepareCompletionPlan(harness);
+    harness.setNow('2026-08-19T04:00:00.000Z');
+    harness.setProviderAvailable(false);
+
+    const result = await harness.handler({
+      action: 'recordTrainingCompletion',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'completion-api-offline',
+        payload: { businessDate: '2026-08-19', completedDurationMinutes: 30 }
+      }
+    }, { userId: 'trusted-user-a' });
+
+    expect(result).toMatchObject({
+      success: true,
+      data: {
+        kind: 'training_completion_recorded',
+        recalculationStatus: 'failed_retryable',
+        recalculationJob: { status: 'failed_retryable', failureCode: 'provider_unavailable' }
+      }
+    });
+    if (!result.success || result.data.kind !== 'training_completion_recorded') {
+      throw new Error('Expected completion response');
+    }
+    const jobId = result.data.recalculationJob?.id;
+    if (jobId === undefined) throw new Error('Expected retryable job');
+    const retry = await harness.handler({
+      action: 'retryPendingRecalculation',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'retry-api-offline',
+        payload: { recalculationJobId: jobId }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(retry.success).toBe(false);
+    if (!retry.success) expect(retry.error.code).toBe('provider_unavailable');
+  });
+
+  it('maps future completion and a non-pending candidate to stable public errors', async () => {
+    const harness = createCompletionHarness();
+    await prepareCompletionPlan(harness);
+    harness.setNow('2026-08-18T04:00:00.000Z');
+
+    const future = await harness.handler({
+      action: 'recordTrainingCompletion',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'completion-api-future',
+        payload: { businessDate: '2026-08-19', completedDurationMinutes: 30 }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(future.success).toBe(false);
+    if (!future.success) expect(future.error.code).toBe('past_fact_immutable');
+
+    const candidate = await harness.handler({
+      action: 'decideMealPlanCandidate',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'candidate-api-missing',
+        payload: {
+          candidateMealPlanVersionId: 'missing-candidate',
+          decision: 'keep_existing'
+        }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(candidate.success).toBe(false);
+    if (!candidate.success) expect(candidate.error.code).toBe('candidate_not_pending');
   });
 });

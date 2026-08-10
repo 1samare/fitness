@@ -11,6 +11,7 @@ import type {
   GoalVersion,
   IdempotencyRecord,
   PlanningAggregateState,
+  RecalculationJob,
   TrainingPlanChangedEvent,
   TrainingPlanPayload,
   TrainingPlanVersion,
@@ -88,7 +89,10 @@ export class InvalidTrainingPlanError extends Error {
   public readonly code = 'invalid_training_plan' as const;
 
   public constructor(
-    public readonly reason: 'date_outside_week' | 'duplicate_training_date'
+    public readonly reason:
+      | 'date_outside_week'
+      | 'duplicate_training_date'
+      | 'completion_not_planned'
   ) {
     super(`Invalid training plan: ${reason}`);
     this.name = 'InvalidTrainingPlanError';
@@ -658,9 +662,24 @@ export function createVersionedPlanningService(
           requestFingerprint: expectedFingerprint,
           resultVersionId: appended.result.trainingPlan.id
         };
+        const job: RecalculationJob = {
+          kind: 'recalculation_job',
+          id: nextId('recalculation-job'),
+          userId,
+          triggerEventId: appended.result.event.eventId,
+          triggerType: 'training_plan_changed',
+          affectedDates: appended.result.affectedDates,
+          status: 'pending',
+          createdAt: appended.result.event.occurredAt,
+          completedAt: null,
+          candidateMealPlanVersionId: null,
+          activatedMealPlanVersionId: null,
+          failureCode: null
+        };
         return {
           nextState: {
             ...appended.nextState,
+            recalculationJobs: [...appended.nextState.recalculationJobs, job],
             idempotencyRecords: [...appended.nextState.idempotencyRecords, record]
           },
           result: {
