@@ -184,6 +184,77 @@ describe('planning API contracts', () => {
     expect(planningApiRequestSchema.parse(supportedRequest)).toEqual(supportedRequest);
   });
 
+  it('accepts strict phase-four inventory and generation actions without client identity', () => {
+    const resolve = {
+      action: 'resolveFoodName',
+      payload: { name: '测试米饭' }
+    } as const;
+    const save = {
+      action: 'saveInventory',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'inventory-save-001',
+        payload: { items: [{ name: '测试米饭', availableGrams: 5000 }] }
+      }
+    } as const;
+    const generate = {
+      action: 'generateWeeklyMealPlan',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'meal-generate-001',
+        payload: { weekStartDate: '2026-08-17' }
+      }
+    } as const;
+
+    expect(planningApiRequestSchema.parse(resolve)).toEqual(resolve);
+    expect(planningApiRequestSchema.parse(save)).toEqual(save);
+    expect(planningApiRequestSchema.parse(generate)).toEqual(generate);
+    expect(() => planningApiRequestSchema.parse({
+      ...save,
+      payload: { ...save.payload, userId: 'attacker' }
+    })).toThrow();
+    expect(() => planningApiRequestSchema.parse({
+      ...generate,
+      payload: {
+        ...generate.payload,
+        payload: { ...generate.payload.payload, nutritionTotals: { energyKcal: 1 } }
+      }
+    })).toThrow();
+    expect(() => planningApiRequestSchema.parse({
+      ...resolve,
+      payload: { ...resolve.payload, foodId: 'client-selected' }
+    })).toThrow();
+  });
+
+  it('parses public inventory responses and rejects stored user identity', () => {
+    const response = {
+      success: true,
+      data: {
+        kind: 'inventory_saved',
+        version: {
+          kind: 'inventory_version',
+          id: 'inventory-1',
+          version: 1,
+          createdAt: '2026-08-10T00:00:00.000Z',
+          items: [{
+            foodId: 'fixture-rice',
+            nutritionSnapshotId: 'snapshot-fixture-rice-v1',
+            availableGrams: 5000
+          }]
+        }
+      }
+    } as const;
+
+    expect(planningApiResponseSchema.parse(response)).toEqual(response);
+    expect(() => planningApiResponseSchema.parse({
+      ...response,
+      data: {
+        ...response.data,
+        version: { ...response.data.version, userId: 'private-user' }
+      }
+    })).toThrow();
+  });
+
   it('rejects malformed numbers', () => {
     expect(() => planningApiRequestSchema.parse({
       ...supportedRequest,

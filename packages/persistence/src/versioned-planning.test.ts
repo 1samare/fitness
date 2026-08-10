@@ -5,9 +5,10 @@ import {
   PastTrainingChangeError,
   PlanningPrerequisiteError,
   VersionConflictError,
+  createMealPlanGenerationService,
   createVersionedPlanningService
 } from '@fitness/application';
-import type { CompletePlanningSetupCommand } from '@fitness/domain';
+import type { CompletePlanningSetupCommand, NutritionDataSnapshot } from '@fitness/domain';
 import { InMemoryPlanningRepository } from './in-memory-planning-repository';
 
 const profilePayload = {
@@ -33,6 +34,32 @@ function createHarness(now = '2026-08-03T08:00:00.000Z') {
   });
   return { repository, service };
 }
+
+const reviewedRiceSnapshot: NutritionDataSnapshot = {
+  id: 'snapshot-rice-reviewed-v1',
+  foodId: 'rice-reviewed',
+  canonicalNameZh: '审核米饭',
+  foodGroupId: 'grains_tubers',
+  sourceId: 'reviewed-source',
+  sourceRecordId: 'reviewed-rice-1',
+  provider: 'reviewed-cache',
+  originalUnit: 'per_100_g_edible_portion',
+  foodState: 'cooked',
+  datasetVersion: 'reviewed-v1',
+  snapshotVersion: 1,
+  reviewedAt: '2026-08-01T00:00:00.000Z',
+  qualityStatus: 'reviewed',
+  allergens: [],
+  nutrientsPer100g: {
+    energyKcal: 116,
+    proteinG: 2.6,
+    fatG: 0.3,
+    carbohydrateG: 25.9,
+    fiberG: 0.3,
+    saturatedFatG: 0.1,
+    addedSugarG: 0
+  }
+};
 
 function planningSetup(
   overrides: Partial<CompletePlanningSetupCommand> = {}
@@ -205,6 +232,11 @@ describe('versioned planning service', () => {
       trainingPlan: null,
       dailyEnergyTargets: [],
       dailyNutritionTargets: [],
+      inventory: null,
+      mealPlan: null,
+      mealPlanStale: false,
+      pendingMealPlanCandidate: null,
+      pendingMealPlanTargetDiffs: [],
       latestVersions: {
         bodyProfile: 0,
         goal: 0,
@@ -386,6 +418,11 @@ describe('versioned planning service', () => {
       trainingPlan: null,
       dailyEnergyTargets: [],
       dailyNutritionTargets: [],
+      inventory: null,
+      mealPlan: null,
+      mealPlanStale: false,
+      pendingMealPlanCandidate: null,
+      pendingMealPlanTargetDiffs: [],
       latestVersions: {
         bodyProfile: 2,
         goal: 1,
@@ -418,6 +455,11 @@ describe('versioned planning service', () => {
       trainingPlan: null,
       dailyEnergyTargets: [],
       dailyNutritionTargets: [],
+      inventory: null,
+      mealPlan: null,
+      mealPlanStale: false,
+      pendingMealPlanCandidate: null,
+      pendingMealPlanTargetDiffs: [],
       latestVersions: {
         bodyProfile: 1,
         goal: 2,
@@ -535,5 +577,54 @@ describe('versioned planning service', () => {
     expect(result.dailyNutritionTargets.every((target) => (
       target.energy.kind === 'unsupported' && target.nutrition === null
     ))).toBe(true);
+  });
+
+  test('persists and replays an immutable inventory version through the repository transaction', async () => {
+    const repository = new InMemoryPlanningRepository();
+    let sequence = 0;
+    const service = createMealPlanGenerationService({
+      repository,
+      now: () => '2026-08-10T00:00:00.000Z',
+      nextId: (prefix) => `${prefix}-${String(++sequence)}`,
+      providers: {
+        allowTestFixtures: false,
+        nutrition: {
+          getSnapshot: (id) => id === reviewedRiceSnapshot.id
+            ? Promise.resolve(structuredClone(reviewedRiceSnapshot))
+            : Promise.reject(new Error('missing snapshot')),
+          resolveCanonicalName: (name) => name.trim() === reviewedRiceSnapshot.canonicalNameZh
+            ? Promise.resolve({
+                foodId: reviewedRiceSnapshot.foodId,
+                canonicalNameZh: reviewedRiceSnapshot.canonicalNameZh,
+                nutritionSnapshotId: reviewedRiceSnapshot.id
+              })
+            : Promise.resolve(null)
+        },
+        recipes: {
+          getByVersionId: () => Promise.reject(new Error('unused'))
+        },
+        menus: {
+          getActiveCatalog: () => Promise.reject(new Error('unused')),
+          getMenuByVersionId: () => Promise.reject(new Error('unused'))
+        }
+      }
+    });
+    const command = {
+      expectedVersion: 0,
+      idempotencyKey: 'inventory-persistence-001',
+      payload: { items: [{ name: '审核米饭', availableGrams: 5000 }] }
+    } as const;
+
+    const first = await service.saveInventory('user-a', command);
+    const replay = await service.saveInventory('user-a', command);
+    const state = await repository.read('user-a');
+
+    expect(replay).toEqual(first);
+    expect(state.inventories).toEqual([first]);
+    expect(state.activeInventoryVersionId).toBe(first.id);
+    expect(state.idempotencyRecords.at(-1)).toMatchObject({
+      operation: 'saveInventory',
+      resultVersionId: first.id
+    });
   });
 });

@@ -1,6 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { createVersionedPlanningService } from '@fitness/application';
+import {
+  createMealPlanGenerationService,
+  createVersionedPlanningService
+} from '@fitness/application';
+import {
+  TEST_DAILY_MENU_CATALOG,
+  TEST_DAILY_MENU_TEMPLATES,
+  TEST_NUTRITION_SNAPSHOTS,
+  TEST_RECIPE_TEMPLATES
+} from '@fitness/nutrition-fixtures';
 import { InMemoryPlanningRepository } from '@fitness/persistence';
+import {
+  ReviewedNutritionCache,
+  StaticDailyMenuCatalogProvider,
+  StaticRecipeTemplateProvider
+} from '@fitness/providers';
 import { createPlanningApiHandler, handlePlanningApi } from './handler';
 
 const profileWrite = {
@@ -44,12 +58,50 @@ const completeSetup = {
   }
 } as const;
 
+const balancedNutritionSnapshots = TEST_NUTRITION_SNAPSHOTS.map((snapshot) => ({
+  ...snapshot,
+  nutrientsPer100g: {
+    energyKcal: 160,
+    proteinG: 5,
+    fatG: 4.5,
+    carbohydrateG: 24,
+    fiberG: 2.2,
+    saturatedFatG: 0.4,
+    addedSugarG: 0
+  }
+}));
+
 function createHarness() {
   let sequence = 0;
   return createPlanningApiHandler(createVersionedPlanningService({
     repository: new InMemoryPlanningRepository(),
     now: () => '2026-08-07T00:00:00.000Z',
     nextId: (prefix) => `${prefix}-${String(++sequence)}`
+  }));
+}
+
+function createMealHarness() {
+  let sequence = 0;
+  return createPlanningApiHandler(createMealPlanGenerationService({
+    repository: new InMemoryPlanningRepository(),
+    now: () => '2026-08-10T00:00:00.000Z',
+    nextId: (prefix) => `${prefix}-${String(++sequence)}`,
+    providers: {
+      nutrition: new ReviewedNutritionCache({
+        mode: 'test',
+        snapshots: balancedNutritionSnapshots
+      }),
+      recipes: new StaticRecipeTemplateProvider({
+        mode: 'test',
+        templates: TEST_RECIPE_TEMPLATES
+      }),
+      menus: new StaticDailyMenuCatalogProvider({
+        mode: 'test',
+        catalog: TEST_DAILY_MENU_CATALOG,
+        menus: TEST_DAILY_MENU_TEMPLATES
+      }),
+      allowTestFixtures: true
+    }
   }));
 }
 
@@ -278,6 +330,11 @@ describe('handlePlanningApi', () => {
         trainingPlan: null,
         dailyEnergyTargets: [],
         dailyNutritionTargets: [],
+        inventory: null,
+        mealPlan: null,
+        mealPlanStale: false,
+        pendingMealPlanCandidate: null,
+        pendingMealPlanTargetDiffs: [],
         latestVersions: {
           bodyProfile: 0,
           goal: 0,
@@ -287,6 +344,125 @@ describe('handlePlanningApi', () => {
           mealPlanDecision: 0,
           trainingCompletion: 0
         }
+      }
+    });
+  });
+
+  it('saves inventory and generates a public weekly meal plan using only trusted identity', async () => {
+    const handler = createMealHarness();
+    const setup = await handler({
+      ...completeSetup,
+      payload: {
+        ...completeSetup.payload,
+        bodyProfile: {
+          ...completeSetup.payload.bodyProfile,
+          weightKg: 60
+        },
+        goal: {
+          ...completeSetup.payload.goal,
+          goal: 'fat_loss',
+          effectiveDate: '2026-08-10'
+        },
+        trainingPlan: {
+          weekStartDate: '2026-08-17',
+          businessTimezone: 'Asia/Shanghai',
+          sessions: []
+        }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(setup.success).toBe(true);
+
+    const resolved = await handler({
+      action: 'resolveFoodName',
+      payload: { name: '测试米饭' }
+    }, { userId: 'trusted-user-a' });
+    expect(resolved).toEqual({
+      success: true,
+      data: {
+        kind: 'food_name_resolved',
+        resolution: {
+          foodId: 'fixture-rice',
+          canonicalNameZh: '测试米饭',
+          nutritionSnapshotId: 'snapshot-fixture-rice-v1'
+        }
+      }
+    });
+
+    const saved = await handler({
+      action: 'saveInventory',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'inventory-api-save-001',
+        payload: {
+          items: TEST_NUTRITION_SNAPSHOTS.map((snapshot) => ({
+            name: snapshot.canonicalNameZh,
+            availableGrams: 50_000
+          }))
+        }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(saved.success).toBe(true);
+    expect(JSON.stringify(saved)).not.toContain('userId');
+
+    const generated = await handler({
+      action: 'generateWeeklyMealPlan',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'meal-api-generate-001',
+        payload: { weekStartDate: '2026-08-17' }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(generated.success).toBe(true);
+    if (generated.success && generated.data.kind === 'weekly_meal_plan_generated') {
+      expect(generated.data.version.days).toHaveLength(7);
+      expect(generated.data.version.readiness).toBe('complete');
+    }
+    expect(JSON.stringify(generated)).not.toContain('userId');
+    expect(JSON.stringify(generated)).not.toContain('trusted-user-a');
+  });
+
+  it('maps deterministic weekly infeasibility to its stable public error', async () => {
+    const handler = createMealHarness();
+    await handler({
+      ...completeSetup,
+      payload: {
+        ...completeSetup.payload,
+        bodyProfile: { ...completeSetup.payload.bodyProfile, weightKg: 60 },
+        goal: {
+          ...completeSetup.payload.goal,
+          goal: 'fat_loss',
+          effectiveDate: '2026-08-10'
+        },
+        trainingPlan: {
+          weekStartDate: '2026-08-17',
+          businessTimezone: 'Asia/Shanghai',
+          sessions: []
+        }
+      }
+    }, { userId: 'trusted-user-a' });
+    await handler({
+      action: 'saveInventory',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'inventory-api-infeasible-001',
+        payload: { items: [{ name: '测试米饭', availableGrams: 100 }] }
+      }
+    }, { userId: 'trusted-user-a' });
+
+    const result = await handler({
+      action: 'generateWeeklyMealPlan',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'meal-api-infeasible-001',
+        payload: { weekStartDate: '2026-08-17' }
+      }
+    }, { userId: 'trusted-user-a' });
+
+    expect(result).toEqual({
+      success: false,
+      error: {
+        code: 'nutrition_constraints_infeasible',
+        message: '当前食材与营养目标无法生成可行的一周餐单。'
       }
     });
   });

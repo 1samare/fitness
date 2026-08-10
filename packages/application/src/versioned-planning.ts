@@ -62,7 +62,14 @@ export class IdempotencyKeyReuseError extends Error {
 export class PlanningPrerequisiteError extends Error {
   public readonly code = 'planning_prerequisite_missing' as const;
 
-  public constructor(public readonly prerequisite: 'body_profile' | 'goal') {
+  public constructor(
+    public readonly prerequisite:
+      | 'body_profile'
+      | 'goal'
+      | 'training_plan'
+      | 'inventory'
+      | 'daily_nutrition_targets'
+  ) {
     super(`Planning prerequisite is missing: ${prerequisite}`);
     this.name = 'PlanningPrerequisiteError';
   }
@@ -751,12 +758,47 @@ export function createVersionedPlanningService(
       const dailyEnergyTargets = bodyProfile === null || goal === null || trainingPlan === null
         ? []
         : latestTargetsForActivePlan(state, bodyProfile, goal, trainingPlan);
+      const dailyNutritionTargets = nutritionTargetsForEnergyTargets(state, dailyEnergyTargets);
+      const inventory = findById(state.inventories, state.activeInventoryVersionId);
+      const mealPlan = findById(state.mealPlans, state.activeMealPlanVersionId);
+      const decidedCandidateIds = new Set(
+        state.mealPlanDecisions.map((decision) => decision.candidateMealPlanVersionId)
+      );
+      const pendingMealPlanCandidate = [...state.mealPlans]
+        .filter((candidate) => (
+          candidate.readiness === 'pending_confirmation'
+          && !decidedCandidateIds.has(candidate.id)
+        ))
+        .sort((left, right) => right.version - left.version)[0] ?? null;
+      const currentTargetIds = dailyNutritionTargets.map((target) => target.id).sort();
+      const mealPlanTargetIds = mealPlan?.days
+        .map((day) => day.dailyNutritionTargetVersionId)
+        .sort() ?? [];
+      const mealPlanStale = mealPlan !== null && (
+        bodyProfile === null
+        || goal === null
+        || trainingPlan === null
+        || mealPlan.bodyProfileVersionId !== bodyProfile.id
+        || mealPlan.goalVersionId !== goal.id
+        || mealPlan.trainingPlanVersionId !== trainingPlan.id
+        || mealPlanTargetIds.length !== currentTargetIds.length
+        || mealPlanTargetIds.some((id, index) => id !== currentTargetIds[index])
+      );
       return {
         bodyProfile,
         goal,
         trainingPlan,
         dailyEnergyTargets,
-        dailyNutritionTargets: nutritionTargetsForEnergyTargets(state, dailyEnergyTargets),
+        dailyNutritionTargets,
+        inventory,
+        mealPlan,
+        mealPlanStale,
+        pendingMealPlanCandidate,
+        pendingMealPlanTargetDiffs: pendingMealPlanCandidate === null
+          ? []
+          : state.mealPlanTargetDiffs.filter((diff) => (
+              diff.candidateMealPlanVersionId === pendingMealPlanCandidate.id
+            )),
         latestVersions: {
           bodyProfile: state.bodyProfiles.length,
           goal: state.goals.length,

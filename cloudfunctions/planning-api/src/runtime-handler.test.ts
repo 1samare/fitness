@@ -138,4 +138,32 @@ describe('runtime planning handler', () => {
       expect(current.data.dailyEnergyTargets).toHaveLength(7);
     }
   });
+
+  test('loads fixture providers only in local mode and fails closed in cloud mode', async () => {
+    const local = createRuntimePlanningHandler({ runtimeMode: 'local' });
+    const localResolution = await local({
+      action: 'resolveFoodName',
+      payload: { name: '测试米饭' }
+    }, { userId: 'local-user' });
+    expect(localResolution.success).toBe(true);
+    if (localResolution.success && localResolution.data.kind === 'food_name_resolved') {
+      expect(localResolution.data.resolution?.foodId).toBe('fixture-rice');
+    }
+
+    const cloud = createRuntimePlanningHandler({
+      runtimeMode: 'cloud',
+      database: new FakeDatabase()
+    });
+    const cloudResolution = await cloud({
+      action: 'resolveFoodName',
+      payload: { name: '测试米饭' }
+    }, { userId: 'cloud-user' });
+    expect(cloudResolution).toEqual({
+      success: false,
+      error: {
+        code: 'provider_unavailable',
+        message: '营养数据暂时不可用。'
+      }
+    });
+  });
 });

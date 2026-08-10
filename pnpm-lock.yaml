@@ -50,9 +50,15 @@ importers:
       '@fitness/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@fitness/nutrition-fixtures':
+        specifier: workspace:*
+        version: link:../../data/nutrition-fixtures
       '@fitness/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
+      '@fitness/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
       wx-server-sdk:
         specifier: ^4.0.2
         version: 4.0.2(ws@8.21.2)
@@ -88,6 +94,16 @@ importers:
       '@fitness/domain':
         specifier: workspace:*
         version: link:../domain
+    devDependencies:
+      '@fitness/nutrition-fixtures':
+        specifier: workspace:*
+        version: link:../../data/nutrition-fixtures
+      '@fitness/persistence':
+        specifier: workspace:*
+        version: link:../persistence
+      '@fitness/providers':
+        specifier: workspace:*
+        version: link:../providers
 
   packages/calculation:
     dependencies:

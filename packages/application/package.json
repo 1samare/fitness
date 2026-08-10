@@ -20,5 +20,10 @@
     "@fitness/calculation": "workspace:*",
     "@fitness/contracts": "workspace:*",
     "@fitness/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@fitness/nutrition-fixtures": "workspace:*",
+    "@fitness/persistence": "workspace:*",
+    "@fitness/providers": "workspace:*"
   }
 }

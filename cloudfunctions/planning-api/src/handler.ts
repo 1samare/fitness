@@ -5,9 +5,12 @@ import {
   InvalidTrainingPlanError,
   PastTrainingChangeError,
   PlanningPrerequisiteError,
+  ProviderUnavailableError,
+  NutritionConstraintsInfeasibleError,
   TrainingDateOutsideGoalPeriodError,
   UnknownTrainingSessionError,
   VersionConflictError,
+  type createMealPlanGenerationService,
   createVersionedPlanningService,
   previewDailyEnergy
 } from '@fitness/application';
@@ -23,6 +26,9 @@ import type {
   DailyEnergyTargetVersion,
   DailyNutritionTargetVersion,
   GoalVersion,
+  InventoryVersion,
+  MealPlanTargetDiff,
+  MealPlanVersion,
   TrainingPlanVersion
 } from '@fitness/domain';
 import { InMemoryPlanningRepository } from '@fitness/persistence';
@@ -34,6 +40,9 @@ const knownActions = new Set([
   'saveGoal',
   'saveTrainingPlan',
   'completePlanningSetup',
+  'resolveFoodName',
+  'saveInventory',
+  'generateWeeklyMealPlan',
   'getCurrentContext'
 ]);
 
@@ -42,6 +51,9 @@ const authenticatedActions = new Set([
   'saveGoal',
   'saveTrainingPlan',
   'completePlanningSetup',
+  'resolveFoodName',
+  'saveInventory',
+  'generateWeeklyMealPlan',
   'getCurrentContext'
 ]);
 
@@ -52,7 +64,9 @@ const planningService = createVersionedPlanningService({
   nextId: (prefix) => `${prefix}-${randomUUID()}`
 });
 
-export type VersionedPlanningService = ReturnType<typeof createVersionedPlanningService>;
+export type VersionedPlanningService =
+  | ReturnType<typeof createVersionedPlanningService>
+  | ReturnType<typeof createMealPlanGenerationService>;
 
 export interface TrustedRequestContext {
   readonly userId: string;
@@ -137,6 +151,52 @@ function publicDailyNutritionTarget(version: DailyNutritionTargetVersion) {
   });
 }
 
+function publicInventory(version: InventoryVersion) {
+  return {
+    kind: version.kind,
+    id: version.id,
+    version: version.version,
+    createdAt: version.createdAt,
+    items: version.items.map((item) => ({ ...item }))
+  };
+}
+
+function publicMealPlan(version: MealPlanVersion) {
+  return {
+    kind: version.kind,
+    id: version.id,
+    version: version.version,
+    createdAt: version.createdAt,
+    weekStartDate: version.weekStartDate,
+    bodyProfileVersionId: version.bodyProfileVersionId,
+    goalVersionId: version.goalVersionId,
+    trainingPlanVersionId: version.trainingPlanVersionId,
+    inventoryVersionId: version.inventoryVersionId,
+    catalogVersionId: version.catalogVersionId,
+    generationPolicyVersion: version.generationPolicyVersion,
+    supersedesVersionId: version.supersedesVersionId,
+    readiness: version.readiness,
+    days: version.days.map((day) => ({
+      ...day,
+      meals: day.meals.map((meal) => ({ ...meal })),
+      ingredientAmounts: day.ingredientAmounts.map((item) => ({ ...item })),
+      nutritionTotals: { ...day.nutritionTotals },
+      nutritionSourceSnapshotIds: [...day.nutritionSourceSnapshotIds]
+    }))
+  };
+}
+
+function publicMealPlanTargetDiff(diff: MealPlanTargetDiff) {
+  return {
+    id: diff.id,
+    candidateMealPlanVersionId: diff.candidateMealPlanVersionId,
+    businessDate: diff.businessDate,
+    previousNutritionTargetVersionId: diff.previousNutritionTargetVersionId,
+    proposedNutritionTargetVersionId: diff.proposedNutritionTargetVersionId,
+    reason: diff.reason
+  };
+}
+
 function currentContextResponse(context: CurrentPlanningContext) {
   return {
     kind: 'current_context' as const,
@@ -145,6 +205,13 @@ function currentContextResponse(context: CurrentPlanningContext) {
     trainingPlan: context.trainingPlan === null ? null : publicTrainingPlan(context.trainingPlan),
     dailyEnergyTargets: context.dailyEnergyTargets.map(publicDailyEnergyTarget),
     dailyNutritionTargets: context.dailyNutritionTargets.map(publicDailyNutritionTarget),
+    inventory: context.inventory === null ? null : publicInventory(context.inventory),
+    mealPlan: context.mealPlan === null ? null : publicMealPlan(context.mealPlan),
+    mealPlanStale: context.mealPlanStale,
+    pendingMealPlanCandidate: context.pendingMealPlanCandidate === null
+      ? null
+      : publicMealPlan(context.pendingMealPlanCandidate),
+    pendingMealPlanTargetDiffs: context.pendingMealPlanTargetDiffs.map(publicMealPlanTargetDiff),
     latestVersions: context.latestVersions
   };
 }
@@ -197,6 +264,32 @@ async function executeAuthenticatedAction(
         dailyNutritionTargets: result.dailyNutritionTargets.map(publicDailyNutritionTarget),
         affectedDates: [...result.affectedDates]
       }
+    };
+  }
+  if (request.action === 'resolveFoodName') {
+    if (!('resolveFoodName' in service)) throw new ProviderUnavailableError('nutrition_source_unavailable');
+    const resolution = await service.resolveFoodName(request.payload.name);
+    return {
+      success: true,
+      data: { kind: 'food_name_resolved', resolution }
+    };
+  }
+  if (request.action === 'saveInventory') {
+    if (!('saveInventory' in service)) throw new ProviderUnavailableError('nutrition_source_unavailable');
+    const version = await service.saveInventory(context.userId, request.payload);
+    return {
+      success: true,
+      data: { kind: 'inventory_saved', version: publicInventory(version) }
+    };
+  }
+  if (request.action === 'generateWeeklyMealPlan') {
+    if (!('generateWeeklyMealPlan' in service)) {
+      throw new ProviderUnavailableError('meal_catalog_unavailable');
+    }
+    const version = await service.generateWeeklyMealPlan(context.userId, request.payload);
+    return {
+      success: true,
+      data: { kind: 'weekly_meal_plan_generated', version: publicMealPlan(version) }
     };
   }
   const current = await service.getCurrentContext(context.userId);
@@ -285,6 +378,12 @@ async function handlePlanningApiResult(
     }
     if (error instanceof UnknownTrainingSessionError) {
       return errorResponse(error.code, '训练会话缺少已审核的 MET 映射。');
+    }
+    if (error instanceof ProviderUnavailableError) {
+      return errorResponse(error.code, '营养数据暂时不可用。');
+    }
+    if (error instanceof NutritionConstraintsInfeasibleError) {
+      return errorResponse(error.code, '当前食材与营养目标无法生成可行的一周餐单。');
     }
     return errorResponse('internal_error', '规划服务暂时不可用。');
   }

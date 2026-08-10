@@ -200,6 +200,11 @@ export interface CurrentPlanningContext {
   readonly trainingPlan: TrainingPlanVersion | null;
   readonly dailyEnergyTargets: readonly DailyEnergyTargetVersion[];
   readonly dailyNutritionTargets: readonly DailyNutritionTargetVersion[];
+  readonly inventory: InventoryVersion | null;
+  readonly mealPlan: MealPlanVersion | null;
+  readonly mealPlanStale: boolean;
+  readonly pendingMealPlanCandidate: MealPlanVersion | null;
+  readonly pendingMealPlanTargetDiffs: readonly MealPlanTargetDiff[];
   readonly latestVersions: LatestPlanningVersions;
 }
 
