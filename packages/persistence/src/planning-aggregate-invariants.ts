@@ -757,6 +757,9 @@ export function assertPlanningAggregateInvariants(
   for (const candidateId of decisionsByCandidate.keys()) {
     if (!jobsByCandidate.has(candidateId)) corrupt();
   }
+  for (const candidateId of expectedDiffsByCandidate.keys()) {
+    if (!jobsByCandidate.has(candidateId)) corrupt();
+  }
 
   const idSets: EntityIds = {
     bodyProfiles: new Set(bodyProfiles.keys()),

@@ -521,11 +521,16 @@ describe('planning aggregate invariants', () => {
     });
   });
 
-  test('accepts a pending candidate with an exact protected-day target diff', async () => {
-    const state = await createPendingCandidateState();
+  test('accepts a pending candidate with an exact protected-day target diff and job', async () => {
+    const state = await createCandidateJobState();
     expect(() => {
       assertPlanningAggregateInvariants(state, 'user-a');
     }).not.toThrow();
+  });
+
+  test('rejects a pending candidate with an exact diff but no recalculation job', async () => {
+    const state = await createPendingCandidateState();
+    expectCorrupt(state);
   });
 
   test('rejects a target diff that does not link to its candidate day and targets', async () => {

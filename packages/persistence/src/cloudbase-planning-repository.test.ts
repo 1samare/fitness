@@ -121,6 +121,7 @@ async function createPhase4State(repository: PlanningRepository): Promise<Planni
   const profile = state.bodyProfiles[0];
   const goal = state.goals[0];
   const trainingPlan = state.trainingPlans[0];
+  const event = state.outboxEvents[0];
   const firstEnergyTarget = state.dailyEnergyTargets.find(
     (target) => target.businessDate === '2026-08-10'
   );
@@ -131,6 +132,7 @@ async function createPhase4State(repository: PlanningRepository): Promise<Planni
     profile === undefined
     || goal === undefined
     || trainingPlan === undefined
+    || event === undefined
     || firstEnergyTarget === undefined
     || firstNutritionTarget === undefined
     || state.dailyNutritionTargets.length !== 7
@@ -227,13 +229,32 @@ async function createPhase4State(repository: PlanningRepository): Promise<Planni
     proposedNutritionTargetVersionId: nextNutritionTarget.id,
     reason: 'locked_or_manually_modified' as const
   };
+  const linkedEvent = {
+    ...event,
+    affectedDates: [nextNutritionTarget.businessDate]
+  };
   const nextState: PlanningAggregateState = {
     ...state,
+    outboxEvents: [linkedEvent],
     dailyEnergyTargets: [...state.dailyEnergyTargets, nextEnergyTarget],
     dailyNutritionTargets: [...state.dailyNutritionTargets, nextNutritionTarget],
     inventories: [inventory],
     mealPlans: [completePlan, candidatePlan],
     mealPlanTargetDiffs: [diff],
+    recalculationJobs: [{
+      kind: 'recalculation_job',
+      id: 'recalculation-job-candidate',
+      userId: 'user-a',
+      triggerEventId: linkedEvent.eventId,
+      triggerType: 'training_plan_changed',
+      affectedDates: linkedEvent.affectedDates,
+      status: 'pending',
+      createdAt: '2026-08-10T01:00:00.000Z',
+      completedAt: null,
+      candidateMealPlanVersionId: candidatePlan.id,
+      activatedMealPlanVersionId: null,
+      failureCode: null
+    }],
     activeInventoryVersionId: inventory.id,
     activeMealPlanVersionId: completePlan.id
   };
