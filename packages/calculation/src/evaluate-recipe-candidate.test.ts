@@ -137,6 +137,54 @@ describe('evaluateRecipeCandidate', () => {
     });
   });
 
+  it('rounds actual grams before recomputing nutrients', () => {
+    const result = evaluate({
+      template: {
+        ...template,
+        ingredients: [
+          { ...template.ingredients[0], grams: 33.35 },
+          ...template.ingredients.slice(1)
+        ]
+      },
+      snapshots: [
+        {
+          ...snapshots[0],
+          nutrientsPer100g: { ...snapshots[0].nutrientsPer100g, energyKcal: 200 }
+        },
+        ...snapshots.slice(1)
+      ]
+    });
+
+    expect(result).toMatchObject({ kind: 'accepted' });
+    if (result.kind !== 'accepted') throw new Error('expected accepted candidate');
+    expect(result.totals.energyKcal).toBe(231.8);
+  });
+
+  it('merges repeated food grams before enforcing inventory', () => {
+    const result = evaluate({
+      template: {
+        ...template,
+        ingredients: [
+          { foodId: 'fixture-tofu', nutritionSnapshotId: 'snapshot-fixture-tofu-v1', grams: 30 },
+          { foodId: 'fixture-tofu', nutritionSnapshotId: 'snapshot-fixture-tofu-v1', grams: 30 },
+          ...template.ingredients.slice(1)
+        ]
+      }
+    });
+
+    expect(result).toMatchObject({
+      kind: 'infeasible',
+      code: 'nutrition_constraints_infeasible'
+    });
+    if (result.kind !== 'infeasible') throw new Error('expected infeasible candidate');
+    expect(result.conflicts).toContainEqual({
+      code: 'inventory_insufficient',
+      foodId: 'fixture-tofu',
+      requiredGrams: 60,
+      availableGrams: 50
+    });
+  });
+
   it('never relaxes any allergen declared by a source snapshot', () => {
     for (const snapshot of snapshots) {
       for (const allergen of snapshot.allergens) {

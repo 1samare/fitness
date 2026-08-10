@@ -2,6 +2,8 @@ export * from './calculate-daily-energy';
 export * from './calculate-nutrition-targets';
 export * from './eligibility';
 export * from './evaluate-recipe-candidate';
+export * from './generate-weekly-meal-plan';
+export * from './meal-plan-policy';
 export * from './nutrition-policy';
 export * from './policy';
 export * from './reviewed-training-session';

@@ -35,6 +35,19 @@ function addScaled(
   };
 }
 
+function scaleNutrients(nutrients: NutrientValues, grams: number): NutrientValues {
+  const factor = grams / 100;
+  return {
+    energyKcal: roundHalfUp(nutrients.energyKcal * factor, 1),
+    proteinG: roundHalfUp(nutrients.proteinG * factor, 1),
+    fatG: roundHalfUp(nutrients.fatG * factor, 1),
+    carbohydrateG: roundHalfUp(nutrients.carbohydrateG * factor, 1),
+    fiberG: roundHalfUp(nutrients.fiberG * factor, 1),
+    saturatedFatG: roundHalfUp(nutrients.saturatedFatG * factor, 1),
+    addedSugarG: roundHalfUp(nutrients.addedSugarG * factor, 1)
+  };
+}
+
 function roundTotals(totals: NutrientValues): NutrientValues {
   return {
     energyKcal: roundHalfUp(totals.energyKcal, 1),
@@ -98,6 +111,7 @@ export function evaluateRecipeCandidate(
   const declaredAllergens = new Set(input.allergens.map(canonicalizeAllergenTerm));
   const foodGroupIds: FoodGroupId[] = [];
   const sourceSnapshotIds: string[] = [];
+  const requiredGramsByFood = new Map<string, number>();
   let totals = ZERO_TOTALS;
 
   for (const ingredient of input.template.ingredients) {
@@ -122,20 +136,27 @@ export function evaluateRecipeCandidate(
     if (avoidedFoodIds.has(ingredient.foodId)) {
       conflicts.push({ code: 'avoided_food', foodId: ingredient.foodId });
     }
-    const availableGrams = inventory.get(ingredient.foodId) ?? 0;
-    if (availableGrams < ingredient.grams) {
-      conflicts.push({
-        code: 'inventory_insufficient',
-        foodId: ingredient.foodId,
-        requiredGrams: ingredient.grams,
-        availableGrams
-      });
-    }
-
-    totals = addScaled(totals, snapshot.nutrientsPer100g, ingredient.grams / 100);
-    sourceSnapshotIds.push(snapshot.id);
+    const actualGrams = roundHalfUp(ingredient.grams, 1);
+    requiredGramsByFood.set(
+      ingredient.foodId,
+      roundHalfUp((requiredGramsByFood.get(ingredient.foodId) ?? 0) + actualGrams, 1)
+    );
+    totals = addScaled(totals, scaleNutrients(snapshot.nutrientsPer100g, actualGrams), 1);
+    if (!sourceSnapshotIds.includes(snapshot.id)) sourceSnapshotIds.push(snapshot.id);
     if (!foodGroupIds.includes(snapshot.foodGroupId)) {
       foodGroupIds.push(snapshot.foodGroupId);
+    }
+  }
+
+  for (const [foodId, requiredGrams] of requiredGramsByFood) {
+    const availableGrams = inventory.get(foodId) ?? 0;
+    if (availableGrams < requiredGrams) {
+      conflicts.push({
+        code: 'inventory_insufficient',
+        foodId,
+        requiredGrams,
+        availableGrams
+      });
     }
   }
 
