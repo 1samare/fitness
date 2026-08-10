@@ -19,6 +19,7 @@ export interface ReviewedTrainingSession {
   readonly sourceId: 'MET-COMPENDIUM-2024';
   readonly originalUnit: 'MET';
   readonly activityCategory: 'conditioning_exercise';
+  readonly trainingKind: 'regular_resistance';
   readonly datasetVersion: string;
   readonly reviewedAt: string;
   readonly description: string;

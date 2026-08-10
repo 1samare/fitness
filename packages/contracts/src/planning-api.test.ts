@@ -60,6 +60,24 @@ describe('planning API contracts', () => {
         training: { sessionCode: '02054', durationMinutes: 60, met: 3.5 }
       }
     })).toThrow();
+
+    expect(() => planningApiRequestSchema.parse({
+      action: 'saveTrainingPlan',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'training-client-met-001',
+        payload: {
+          weekStartDate: '2026-08-10',
+          businessTimezone: 'Asia/Shanghai',
+          sessions: [{
+            businessDate: '2026-08-10',
+            sessionCode: '02050',
+            durationMinutes: 60,
+            met: 6
+          }]
+        }
+      }
+    })).toThrow();
   });
 
   it('parses a supported response envelope', () => {
