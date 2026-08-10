@@ -140,7 +140,7 @@ async function createValidMealState(includeProfileV2 = false) {
   };
 }
 
-async function createPendingCandidateState(changedTargetCount = 1) {
+async function createOrphanPendingCandidateState(changedTargetCount = 1) {
   const state = await createValidMealState();
   const activePlan = state.mealPlans[0];
   const firstDay = activePlan?.days[0];
@@ -222,18 +222,43 @@ async function createPendingCandidateState(changedTargetCount = 1) {
   };
 }
 
-async function createCandidateJobState() {
-  const state = await createPendingCandidateState();
+async function createCandidateJobState(changedTargetCount = 1) {
+  const state = await createOrphanPendingCandidateState(changedTargetCount);
   const event = state.outboxEvents[0];
-  const diff = state.mealPlanTargetDiffs[0];
+  const previous = state.mealPlans[0];
   const candidate = state.mealPlans[1];
-  if (event === undefined || diff === undefined || candidate === undefined) {
+  if (event === undefined || previous === undefined || candidate === undefined) {
     throw new Error('Expected candidate job fixture');
   }
-  const linkedEvent = { ...event, affectedDates: [diff.businessDate] };
-  return {
+  const exactDiffs: PlanningAggregateState['mealPlanTargetDiffs'][number][] = [];
+  for (const candidateDay of candidate.days) {
+    const previousDay = previous.days.find(
+      (day) => day.businessDate === candidateDay.businessDate
+    );
+    if (previousDay === undefined) throw new Error('Expected previous candidate day fixture');
+    if (
+      previousDay.dailyNutritionTargetVersionId
+      !== candidateDay.dailyNutritionTargetVersionId
+    ) {
+      exactDiffs.push({
+        id: `meal-diff-${(exactDiffs.length + 1).toString()}`,
+        userId: 'user-a',
+        candidateMealPlanVersionId: candidate.id,
+        businessDate: candidateDay.businessDate,
+        previousNutritionTargetVersionId: previousDay.dailyNutritionTargetVersionId,
+        proposedNutritionTargetVersionId: candidateDay.dailyNutritionTargetVersionId,
+        reason: 'locked_or_manually_modified'
+      });
+    }
+  }
+  const linkedEvent = {
+    ...event,
+    affectedDates: exactDiffs.map((diff) => diff.businessDate)
+  };
+  const validState: PlanningAggregateState = {
     ...state,
     outboxEvents: [linkedEvent],
+    mealPlanTargetDiffs: exactDiffs,
     recalculationJobs: [{
       kind: 'recalculation_job' as const,
       id: 'recalculation-job-candidate',
@@ -249,6 +274,10 @@ async function createCandidateJobState() {
       failureCode: null
     }]
   };
+  expect(() => {
+    assertPlanningAggregateInvariants(validState, 'user-a');
+  }).not.toThrow();
+  return validState;
 }
 
 async function createCompletedCandidateJobState(
@@ -270,7 +299,7 @@ async function createCompletedCandidateJobState(
         readiness: 'complete' as const
       }
     : undefined;
-  return {
+  const validState: PlanningAggregateState = {
     ...state,
     mealPlans: activated === undefined
       ? state.mealPlans
@@ -293,13 +322,47 @@ async function createCompletedCandidateJobState(
       activatedMealPlanVersionId: activated?.id ?? null
     }]
   };
+  expect(() => {
+    assertPlanningAggregateInvariants(validState, 'user-a');
+  }).not.toThrow();
+  return validState;
+}
+
+async function createCompletedCandidateJobStateWithCompletion() {
+  const state = await createCompletedCandidateJobState('keep_existing');
+  const trainingPlan = state.trainingPlans[0];
+  if (trainingPlan === undefined) throw new Error('Expected completion training plan fixture');
+  const validState: PlanningAggregateState = {
+    ...state,
+    trainingCompletionEvents: [{
+      kind: 'training_completion_event',
+      id: 'training-completion-1',
+      userId: 'user-a',
+      version: 1,
+      trainingPlanVersionId: trainingPlan.id,
+      businessDate: '2026-08-11',
+      completedDurationMinutes: 30,
+      occurredAt: '2026-08-11T01:00:00.000Z'
+    }]
+  };
+  expect(() => {
+    assertPlanningAggregateInvariants(validState, 'user-a');
+  }).not.toThrow();
+  return validState;
 }
 
 function expectCorrupt(state: PlanningAggregateState): void {
-  expect(() => {
+  let thrown: unknown;
+  try {
     assertPlanningAggregateInvariants(state, 'user-a');
-  })
-    .toThrow(CorruptPlanningStateError);
+  } catch (error: unknown) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(CorruptPlanningStateError);
+  expect(thrown).toMatchObject({
+    code: 'corrupt_planning_state',
+    message: 'Stored planning state failed runtime validation'
+  });
 }
 
 describe('planning aggregate invariants', () => {
@@ -326,121 +389,56 @@ describe('planning aggregate invariants', () => {
     'trainingCompletionEvent',
     'recalculationJob'
   ] as const)('rejects a phase-4 %s record owned by another trusted user', async (recordType) => {
-    const candidateState = await createPendingCandidateState();
+    const candidateState = await createCompletedCandidateJobStateWithCompletion();
     const candidate = candidateState.mealPlans[1];
-    const activePlan = candidateState.mealPlans[0];
-    const trainingPlan = candidateState.trainingPlans[0];
-    const outboxEvent = candidateState.outboxEvents[0];
-    if (
-      candidate === undefined
-      || activePlan === undefined
-      || trainingPlan === undefined
-      || outboxEvent === undefined
-    ) {
-      throw new Error('Expected phase-4 ownership fixture');
-    }
-    const decision = {
-      kind: 'meal_plan_decision' as const,
-      id: 'meal-decision-1',
-      userId: 'user-a',
-      version: 1,
-      candidateMealPlanVersionId: candidate.id,
-      previousActiveMealPlanVersionId: activePlan.id,
-      decision: 'keep_existing' as const,
-      decidedAt: '2026-08-10T01:00:00.000Z',
-      activatedMealPlanVersionId: null
-    };
-    const completion = {
-      kind: 'training_completion_event' as const,
-      id: 'training-completion-1',
-      userId: 'user-a',
-      version: 1,
-      trainingPlanVersionId: trainingPlan.id,
-      businessDate: '2026-08-11',
-      completedDurationMinutes: 30,
-      occurredAt: '2026-08-11T01:00:00.000Z'
-    };
-    const job = {
-      kind: 'recalculation_job' as const,
-      id: 'recalculation-job-1',
-      userId: 'user-a',
-      triggerEventId: outboxEvent.eventId,
-      triggerType: 'training_plan_changed' as const,
-      affectedDates: outboxEvent.affectedDates,
-      status: 'pending' as const,
-      createdAt: '2026-08-10T01:00:00.000Z',
-      completedAt: null,
-      candidateMealPlanVersionId: candidate.id,
-      activatedMealPlanVersionId: null,
-      failureCode: null
-    };
+    if (candidate === undefined) throw new Error('Expected phase-4 ownership fixture');
     expectCorrupt({
       ...candidateState,
       inventories: candidateState.inventories.map((value) => (
         recordType === 'inventory' ? { ...value, userId: 'user-b' } : value
       )),
       mealPlans: candidateState.mealPlans.map((value) => (
-        recordType === 'mealPlan' ? { ...value, userId: 'user-b' } : value
+        recordType === 'mealPlan' && value.id === candidate.id
+          ? { ...value, userId: 'user-b' }
+          : value
       )),
       mealPlanTargetDiffs: candidateState.mealPlanTargetDiffs.map((value) => (
         recordType === 'mealPlanTargetDiff' ? { ...value, userId: 'user-b' } : value
       )),
-      mealPlanDecisions: [{
-        ...decision,
-        userId: recordType === 'mealPlanDecision' ? 'user-b' : 'user-a'
-      }],
-      trainingCompletionEvents: [{
-        ...completion,
-        userId: recordType === 'trainingCompletionEvent' ? 'user-b' : 'user-a'
-      }],
-      recalculationJobs: [{
-        ...job,
-        userId: recordType === 'recalculationJob' ? 'user-b' : 'user-a'
-      }]
+      mealPlanDecisions: candidateState.mealPlanDecisions.map((value) => (
+        recordType === 'mealPlanDecision' ? { ...value, userId: 'user-b' } : value
+      )),
+      trainingCompletionEvents: candidateState.trainingCompletionEvents.map((value) => (
+        recordType === 'trainingCompletionEvent' ? { ...value, userId: 'user-b' } : value
+      )),
+      recalculationJobs: candidateState.recalculationJobs.map((value) => (
+        recordType === 'recalculationJob' ? { ...value, userId: 'user-b' } : value
+      ))
     });
   });
 
   test.each(['inventory', 'mealPlan', 'mealPlanDecision', 'trainingCompletion'] as const)(
     'rejects a noncontiguous %s version sequence',
     async (recordType) => {
-      const state = await createPendingCandidateState();
-      const activePlan = state.mealPlans[0];
+      const state = await createCompletedCandidateJobStateWithCompletion();
       const candidate = state.mealPlans[1];
-      const trainingPlan = state.trainingPlans[0];
-      if (activePlan === undefined || candidate === undefined || trainingPlan === undefined) {
-        throw new Error('Expected version fixture');
-      }
-      const decision = {
-        kind: 'meal_plan_decision' as const,
-        id: 'meal-decision-gap',
-        userId: 'user-a',
-        version: 2,
-        candidateMealPlanVersionId: candidate.id,
-        previousActiveMealPlanVersionId: activePlan.id,
-        decision: 'keep_existing' as const,
-        decidedAt: '2026-08-10T01:00:00.000Z',
-        activatedMealPlanVersionId: null
-      };
-      const completion = {
-        kind: 'training_completion_event' as const,
-        id: 'training-completion-gap',
-        userId: 'user-a',
-        version: 2,
-        trainingPlanVersionId: trainingPlan.id,
-        businessDate: '2026-08-11',
-        completedDurationMinutes: 30,
-        occurredAt: '2026-08-11T01:00:00.000Z'
-      };
+      if (candidate === undefined) throw new Error('Expected version fixture');
       expectCorrupt({
         ...state,
         inventories: state.inventories.map((value) => (
           recordType === 'inventory' ? { ...value, version: 2 } : value
         )),
         mealPlans: state.mealPlans.map((value) => (
-          recordType === 'mealPlan' && value.version === 2 ? { ...value, version: 3 } : value
+          recordType === 'mealPlan' && value.id === candidate.id
+            ? { ...value, version: 3 }
+            : value
         )),
-        mealPlanDecisions: recordType === 'mealPlanDecision' ? [decision] : [],
-        trainingCompletionEvents: recordType === 'trainingCompletion' ? [completion] : []
+        mealPlanDecisions: state.mealPlanDecisions.map((value) => (
+          recordType === 'mealPlanDecision' ? { ...value, version: 2 } : value
+        )),
+        trainingCompletionEvents: state.trainingCompletionEvents.map((value) => (
+          recordType === 'trainingCompletion' ? { ...value, version: 2 } : value
+        ))
       });
     }
   );
@@ -529,12 +527,12 @@ describe('planning aggregate invariants', () => {
   });
 
   test('rejects a pending candidate with an exact diff but no recalculation job', async () => {
-    const state = await createPendingCandidateState();
+    const state = await createOrphanPendingCandidateState();
     expectCorrupt(state);
   });
 
   test('rejects a target diff that does not link to its candidate day and targets', async () => {
-    const state = await createPendingCandidateState();
+    const state = await createCandidateJobState();
     const diff = state.mealPlanTargetDiffs[0];
     if (diff === undefined) throw new Error('Expected target diff fixture');
     expectCorrupt({
@@ -544,12 +542,12 @@ describe('planning aggregate invariants', () => {
   });
 
   test('rejects a pending candidate missing one changed protected-day diff', async () => {
-    const state = await createPendingCandidateState(2);
-    expectCorrupt(state);
+    const state = await createCandidateJobState(2);
+    expectCorrupt({ ...state, mealPlanTargetDiffs: state.mealPlanTargetDiffs.slice(0, 1) });
   });
 
-  test('rejects a missing diff when a candidate clears one of two changed protected days', async () => {
-    const state = await createPendingCandidateState(2);
+  test('rejects clearing a changed protected day on the candidate', async () => {
+    const state = await createCandidateJobState(2);
     const previous = state.mealPlans[0];
     const candidate = state.mealPlans[1];
     const secondDay = candidate?.days[1];
@@ -575,7 +573,7 @@ describe('planning aggregate invariants', () => {
   test.each(['locked', 'manuallyModified'] as const)(
     'rejects clearing the superseded day %s flag even when its target is unchanged',
     async (flag) => {
-      const state = await createPendingCandidateState();
+      const state = await createCandidateJobState();
       const previous = state.mealPlans[0];
       const candidate = state.mealPlans[1];
       const previousDay = previous?.days[1];
@@ -600,19 +598,15 @@ describe('planning aggregate invariants', () => {
   );
 
   test('rejects an extra diff for a protected day whose target did not change', async () => {
-    const state = await createPendingCandidateState();
+    const state = await createCandidateJobState();
     const previous = state.mealPlans[0];
     const candidate = state.mealPlans[1];
     const secondPreviousDay = previous?.days[1];
     if (previous === undefined || candidate === undefined || secondPreviousDay === undefined) {
       throw new Error('Expected extra diff fixture');
     }
-    const candidateDays = candidate.days.map((day) => (
-      day.businessDate === secondPreviousDay.businessDate ? { ...day, locked: true } : day
-    ));
     expectCorrupt({
       ...state,
-      mealPlans: [previous, { ...candidate, days: candidateDays }],
       mealPlanTargetDiffs: [
         ...state.mealPlanTargetDiffs,
         {
@@ -629,32 +623,11 @@ describe('planning aggregate invariants', () => {
   });
 
   test('rejects a pending diff whose previous and proposed target IDs are equal', async () => {
-    const state = await createPendingCandidateState();
-    const previous = state.mealPlans[0];
-    const candidate = state.mealPlans[1];
+    const state = await createCandidateJobState();
     const diff = state.mealPlanTargetDiffs[0];
-    const previousDay = previous?.days[0];
-    if (
-      previous === undefined
-      || candidate === undefined
-      || diff === undefined
-      || previousDay === undefined
-    ) {
-      throw new Error('Expected same-target diff fixture');
-    }
+    if (diff === undefined) throw new Error('Expected same-target diff fixture');
     expectCorrupt({
       ...state,
-      mealPlans: [
-        previous,
-        {
-          ...candidate,
-          days: candidate.days.map((day, index) => (
-            index === 0
-              ? { ...day, dailyNutritionTargetVersionId: previousDay.dailyNutritionTargetVersionId }
-              : day
-          ))
-        }
-      ],
       mealPlanTargetDiffs: [{
         ...diff,
         proposedNutritionTargetVersionId: diff.previousNutritionTargetVersionId
@@ -663,21 +636,17 @@ describe('planning aggregate invariants', () => {
   });
 
   test('rejects decisions that reference a complete plan instead of a pending candidate', async () => {
-    const state = await createValidMealState();
-    const activePlan = state.mealPlans[0];
-    if (activePlan === undefined) throw new Error('Expected active meal plan fixture');
+    const state = await createCompletedCandidateJobState('keep_existing');
+    const previous = state.mealPlans[0];
+    const decision = state.mealPlanDecisions[0];
+    if (previous === undefined || decision === undefined) {
+      throw new Error('Expected complete decision fixture');
+    }
     expectCorrupt({
       ...state,
       mealPlanDecisions: [{
-        kind: 'meal_plan_decision',
-        id: 'meal-decision-1',
-        userId: 'user-a',
-        version: 1,
-        candidateMealPlanVersionId: activePlan.id,
-        previousActiveMealPlanVersionId: activePlan.id,
-        decision: 'keep_existing',
-        decidedAt: '2026-08-10T01:00:00.000Z',
-        activatedMealPlanVersionId: null
+        ...decision,
+        candidateMealPlanVersionId: previous.id
       }]
     });
   });
@@ -785,40 +754,41 @@ describe('planning aggregate invariants', () => {
   test.each(['candidate', 'previous', 'unrelated_complete'] as const)(
     'rejects overwrite_locked activation of the %s plan',
     async (activatedPlanKind) => {
-      const state = await createPendingCandidateState();
+      const state = await createCompletedCandidateJobState('overwrite_locked');
       const previous = state.mealPlans[0];
       const candidate = state.mealPlans[1];
-      if (previous === undefined || candidate === undefined) {
+      const activated = state.mealPlans[2];
+      const decision = state.mealPlanDecisions[0];
+      const job = state.recalculationJobs[0];
+      if (
+        previous === undefined
+        || candidate === undefined
+        || activated === undefined
+        || decision === undefined
+        || job === undefined
+      ) {
         throw new Error('Expected invalid overwrite fixture');
       }
-      const unrelated = {
-        ...candidate,
-        id: 'meal-plan-3',
-        version: 3,
-        supersedesVersionId: previous.id,
-        readiness: 'complete' as const
-      };
       const activatedMealPlanVersionId = activatedPlanKind === 'candidate'
         ? candidate.id
         : activatedPlanKind === 'previous'
           ? previous.id
-          : unrelated.id;
+          : activated.id;
       expectCorrupt({
         ...state,
         mealPlans: activatedPlanKind === 'unrelated_complete'
-          ? [...state.mealPlans, unrelated]
+          ? state.mealPlans.map((plan) => (
+              plan.id === activated.id
+                ? { ...plan, supersedesVersionId: previous.id }
+                : plan
+            ))
           : state.mealPlans,
-        mealPlanDecisions: [{
-          kind: 'meal_plan_decision',
-          id: 'meal-decision-1',
-          userId: 'user-a',
-          version: 1,
-          candidateMealPlanVersionId: candidate.id,
-          previousActiveMealPlanVersionId: previous.id,
-          decision: 'overwrite_locked',
-          decidedAt: '2026-08-10T01:00:00.000Z',
-          activatedMealPlanVersionId
-        }]
+        mealPlanDecisions: activatedPlanKind === 'unrelated_complete'
+          ? state.mealPlanDecisions
+          : [{ ...decision, activatedMealPlanVersionId }],
+        recalculationJobs: activatedPlanKind === 'unrelated_complete'
+          ? state.recalculationJobs
+          : [{ ...job, activatedMealPlanVersionId }]
       });
     }
   );
@@ -881,33 +851,6 @@ describe('planning aggregate invariants', () => {
     });
   });
 
-  test('rejects an unrelated complete plan as a candidate job activation result', async () => {
-    const state = await createCandidateJobState();
-    const previous = state.mealPlans[0];
-    const candidate = state.mealPlans[1];
-    const job = state.recalculationJobs[0];
-    if (previous === undefined || candidate === undefined || job === undefined) {
-      throw new Error('Expected unrelated job result fixture');
-    }
-    const unrelated = {
-      ...candidate,
-      id: 'meal-plan-3',
-      version: 3,
-      supersedesVersionId: previous.id,
-      readiness: 'complete' as const
-    };
-    expectCorrupt({
-      ...state,
-      mealPlans: [...state.mealPlans, unrelated],
-      recalculationJobs: [{
-        ...job,
-        status: 'completed',
-        completedAt: '2026-08-10T02:00:00.000Z',
-        activatedMealPlanVersionId: unrelated.id
-      }]
-    });
-  });
-
   test('rejects job affected dates that do not match the result target changes', async () => {
     const state = await createCandidateJobState();
     const event = state.outboxEvents[0];
@@ -924,7 +867,7 @@ describe('planning aggregate invariants', () => {
   });
 
   test('rejects a pending-confirmation meal plan as the active plan', async () => {
-    const state = await createPendingCandidateState();
+    const state = await createCandidateJobState();
     const candidate = state.mealPlans[1];
     if (candidate === undefined) throw new Error('Expected pending candidate fixture');
     expectCorrupt({
