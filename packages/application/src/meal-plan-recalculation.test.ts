@@ -669,7 +669,7 @@ describe('training-change recalculation lifecycle', () => {
     expect(locked.days.find((day) => day.businessDate === '2026-08-20')?.locked).toBe(true);
   });
 
-  test('overwrite provider failure leaves the candidate undecided and marks only its job retryable', async () => {
+  test('retry rejects a failed overwrite candidate while the decision remains retryable', async () => {
     const baseProviders = fixtureProviders();
     const harness = createHarness({ providers: baseProviders });
     const previous = await prepareGeneratedPlan(harness);
@@ -721,6 +721,57 @@ describe('training-change recalculation lifecycle', () => {
       candidateMealPlanVersionId: saved.candidateMealPlan.id,
       activatedMealPlanVersionId: null
     });
+
+    let providerCalls = 0;
+    harness.setProviders({
+      ...baseProviders,
+      menus: {
+        getActiveCatalog: async () => {
+          providerCalls += 1;
+          return baseProviders.menus.getActiveCatalog();
+        },
+        getMenuByVersionId: (id) => baseProviders.menus.getMenuByVersionId(id)
+      }
+    });
+    const retryCommand = {
+      expectedVersion: state.recalculationJobs.length,
+      idempotencyKey: 'retry-failed-overwrite-candidate',
+      payload: { recalculationJobId: saved.recalculationJob.id }
+    } as const;
+
+    await expect(
+      harness.service.retryPendingRecalculation('user-a', retryCommand)
+    ).rejects.toMatchObject({ code: 'candidate_not_pending' });
+    await expect(
+      harness.service.retryPendingRecalculation('user-a', retryCommand)
+    ).rejects.toMatchObject({ code: 'candidate_not_pending' });
+    await expect(harness.service.retryPendingRecalculation('user-a', {
+      ...retryCommand,
+      idempotencyKey: 'retry-failed-overwrite-candidate-other'
+    })).rejects.toMatchObject({ code: 'candidate_not_pending' });
+
+    const afterRejectedRetries = await harness.repository.read('user-a');
+    expect(providerCalls).toBe(0);
+    expect(afterRejectedRetries).toEqual(state);
+    expect(afterRejectedRetries.idempotencyRecords.filter(
+      (record) => record.operation === 'retryPendingRecalculation'
+    )).toHaveLength(0);
+
+    const decided = await harness.service.decideMealPlanCandidate('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'candidate-overwrite-fail',
+      payload: {
+        candidateMealPlanVersionId: saved.candidateMealPlan.id,
+        decision: 'overwrite_locked'
+      }
+    });
+    const afterDecisionRetry = await harness.repository.read('user-a');
+
+    expect(providerCalls).toBeGreaterThan(0);
+    expect(decided.activatedMealPlan?.readiness).toBe('complete');
+    expect(decided.recalculationJob.status).toBe('completed');
+    expect(afterDecisionRetry.activeMealPlanVersionId).toBe(decided.activatedMealPlan?.id);
+    expect(afterDecisionRetry.mealPlanDecisions).toHaveLength(1);
   });
 
   test('duplicate event processing replays one job, targets, candidate, and decision lifecycle', async () => {

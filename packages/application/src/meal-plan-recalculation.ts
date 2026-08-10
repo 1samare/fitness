@@ -277,6 +277,11 @@ function resultForJob(state: PlanningAggregateState, job: RecalculationJob): Rec
   };
 }
 
+function hasReplayableJobResult(job: RecalculationJob): boolean {
+  return job.status === 'completed'
+    || (job.status === 'pending' && job.candidateMealPlanVersionId !== null);
+}
+
 function statusForResult(result: RecalculationResult): RecordedTrainingCompletion['recalculationStatus'] {
   if (result.recalculationJob.status === 'failed_retryable') return 'failed_retryable';
   if (result.candidateMealPlan !== null) return 'pending_confirmation';
@@ -366,10 +371,7 @@ export function createMealPlanRecalculationService(
   ): Promise<RecalculationResult> {
     return repository.transact(userId, (state) => {
       const job = findById(state.recalculationJobs, jobId);
-      if (
-        job === null
-        || (job.status !== 'completed' && job.candidateMealPlanVersionId === null)
-      ) {
+      if (job === null || !hasReplayableJobResult(job)) {
         throw new CandidateNotPendingError(jobId);
       }
       const nextState = withRetryIdempotencyRecord(state, job.id, retryCommit);
@@ -385,10 +387,14 @@ export function createMealPlanRecalculationService(
     const initialState = await repository.read(userId);
     const initialJob = findById(initialState.recalculationJobs, jobId);
     if (initialJob === null) throw new PlanningPrerequisiteError('daily_nutrition_targets');
-    if (initialJob.status === 'completed' || initialJob.candidateMealPlanVersionId !== null) {
+    if (hasReplayableJobResult(initialJob)) {
       return retryCommit === undefined
         ? resultForJob(initialState, initialJob)
         : commitExistingJobResult(userId, initialJob.id, retryCommit);
+    }
+    if (initialJob.candidateMealPlanVersionId !== null) {
+      if (retryCommit !== undefined) throw new CandidateNotPendingError(initialJob.id);
+      return resultForJob(initialState, initialJob);
     }
     if (initialJob.affectedDates.length === 0 || initialState.activeMealPlanVersionId === null) {
       return completeEmptyJob(userId, initialJob.id, retryCommit);
@@ -433,9 +439,13 @@ export function createMealPlanRecalculationService(
     return repository.transact(userId, (state) => {
       const job = findById(state.recalculationJobs, jobId);
       if (job === null) throw new PlanningPrerequisiteError('daily_nutrition_targets');
-      if (job.status === 'completed' || job.candidateMealPlanVersionId !== null) {
+      if (hasReplayableJobResult(job)) {
         const replayState = withRetryIdempotencyRecord(state, job.id, retryCommit);
         return { nextState: replayState, result: resultForJob(replayState, job) };
+      }
+      if (job.candidateMealPlanVersionId !== null) {
+        if (retryCommit !== undefined) throw new CandidateNotPendingError(job.id);
+        return { nextState: state, result: resultForJob(state, job) };
       }
       const current = prerequisitesForJob(state, job, commitProviderSnapshotToken);
       if (!compareTokensEqual(initial.compareToken, current.compareToken)) {
@@ -1060,9 +1070,7 @@ export function createMealPlanRecalculationService(
         );
       }
       const job = findById(initialState.recalculationJobs, envelope.payload.recalculationJobId);
-      const hasExistingResult = job !== null && (
-        job.status === 'completed' || job.candidateMealPlanVersionId !== null
-      );
+      const hasExistingResult = job !== null && hasReplayableJobResult(job);
       const canStartRetry = job !== null
         && job.status === 'failed_retryable'
         && job.candidateMealPlanVersionId === null;
