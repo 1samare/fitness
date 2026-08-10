@@ -182,6 +182,84 @@ function inventoryItemsByFood(inventory: InventoryVersion): Map<string, Inventor
   return byFood;
 }
 
+interface TrainingPlanLineage {
+  readonly enteredAt: ReadonlyMap<string, number>;
+  readonly exitedAt: ReadonlyMap<string, number>;
+}
+
+function buildTrainingPlanLineage(
+  trainingPlans: ReadonlyMap<string, PlanningAggregateState['trainingPlans'][number]>,
+  events: readonly TrainingPlanChangedEvent[]
+): TrainingPlanLineage {
+  const predecessors = new Map<string, string | null>();
+  const successors = new Map<string, string[]>();
+  for (const event of events) {
+    if (predecessors.has(event.trainingPlanVersionId)) corrupt();
+    const plan = trainingPlans.get(event.trainingPlanVersionId);
+    if (plan === undefined) corrupt();
+    const previousId = event.previousTrainingPlanVersionId;
+    if (previousId !== null) {
+      const previous = trainingPlans.get(previousId);
+      if (previous === undefined || previous.version >= plan.version) corrupt();
+      const children = successors.get(previousId) ?? [];
+      children.push(plan.id);
+      successors.set(previousId, children);
+    }
+    predecessors.set(plan.id, previousId);
+  }
+
+  const enteredAt = new Map<string, number>();
+  const exitedAt = new Map<string, number>();
+  let clock = 0;
+  const roots = [...trainingPlans.keys()].filter((id) => {
+    const previousId = predecessors.get(id);
+    return previousId === undefined || previousId === null;
+  });
+  for (const rootId of roots) {
+    const stack: { readonly id: string; readonly exiting: boolean }[] = [
+      { id: rootId, exiting: false }
+    ];
+    while (stack.length > 0) {
+      const frame = stack.pop();
+      if (frame === undefined) corrupt();
+      if (frame.exiting) {
+        exitedAt.set(frame.id, clock);
+        clock += 1;
+        continue;
+      }
+      if (enteredAt.has(frame.id)) corrupt();
+      enteredAt.set(frame.id, clock);
+      clock += 1;
+      stack.push({ id: frame.id, exiting: true });
+      const children = successors.get(frame.id) ?? [];
+      for (let index = children.length - 1; index >= 0; index -= 1) {
+        const childId = children[index];
+        if (childId === undefined) corrupt();
+        stack.push({ id: childId, exiting: false });
+      }
+    }
+  }
+  if (enteredAt.size !== trainingPlans.size || exitedAt.size !== trainingPlans.size) corrupt();
+  return { enteredAt, exitedAt };
+}
+
+function isTrainingPlanAncestor(
+  lineage: TrainingPlanLineage,
+  ancestorId: string,
+  descendantId: string
+): boolean {
+  const ancestorEnteredAt = lineage.enteredAt.get(ancestorId);
+  const ancestorExitedAt = lineage.exitedAt.get(ancestorId);
+  const descendantEnteredAt = lineage.enteredAt.get(descendantId);
+  const descendantExitedAt = lineage.exitedAt.get(descendantId);
+  return ancestorEnteredAt !== undefined
+    && ancestorExitedAt !== undefined
+    && descendantEnteredAt !== undefined
+    && descendantExitedAt !== undefined
+    && ancestorEnteredAt <= descendantEnteredAt
+    && ancestorExitedAt >= descendantExitedAt;
+}
+
 function assertMealPlan(
   plan: MealPlanVersion,
   references: {
@@ -195,6 +273,7 @@ function assertMealPlan(
     readonly inventories: ReadonlyMap<string, InventoryVersion>;
     readonly mealPlans: ReadonlyMap<string, MealPlanVersion>;
     readonly inventoryItems: ReadonlyMap<string, ReadonlyMap<string, InventoryVersion['items'][number]>>;
+    readonly trainingPlanLineage: TrainingPlanLineage;
   }
 ): void {
   const profile = references.bodyProfiles.get(plan.bodyProfileVersionId);
@@ -232,12 +311,24 @@ function assertMealPlan(
       corrupt();
     }
     const target = references.nutritionTargets.get(day.dailyNutritionTargetVersionId);
+    const targetTrainingPlan = target === undefined
+      ? undefined
+      : references.trainingPlans.get(target.trainingPlanVersionId);
     if (
       target === undefined
+      || targetTrainingPlan === undefined
       || target.businessDate !== day.businessDate
       || target.bodyProfileVersionId !== plan.bodyProfileVersionId
       || target.goalVersionId !== plan.goalVersionId
-      || target.trainingPlanVersionId !== plan.trainingPlanVersionId
+      || targetTrainingPlan.bodyProfileVersionId !== plan.bodyProfileVersionId
+      || targetTrainingPlan.goalVersionId !== plan.goalVersionId
+      || targetTrainingPlan.payload.weekStartDate !== plan.weekStartDate
+      || targetTrainingPlan.version > trainingPlan.version
+      || !isTrainingPlanAncestor(
+        references.trainingPlanLineage,
+        targetTrainingPlan.id,
+        trainingPlan.id
+      )
     ) {
       corrupt();
     }
@@ -368,6 +459,7 @@ export function assertPlanningAggregateInvariants(
   for (const inventory of state.inventories) {
     inventoryItems.set(inventory.id, inventoryItemsByFood(inventory));
   }
+  const trainingPlanLineage = buildTrainingPlanLineage(trainingPlans, state.outboxEvents);
 
   for (const goal of state.goals) {
     if (!bodyProfiles.has(goal.bodyProfileVersionId)) corrupt();
@@ -425,7 +517,8 @@ export function assertPlanningAggregateInvariants(
       nutritionTargets,
       inventories,
       mealPlans,
-      inventoryItems
+      inventoryItems,
+      trainingPlanLineage
     });
   }
 

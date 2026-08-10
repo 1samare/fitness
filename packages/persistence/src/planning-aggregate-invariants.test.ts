@@ -7,7 +7,10 @@ import {
   assertPlanningAggregateInvariants
 } from './planning-aggregate-invariants';
 
-async function createValidState(includeProfileV2 = false): Promise<PlanningAggregateState> {
+async function createValidState(
+  includeProfileV2 = false,
+  includeTrainingV2 = false
+): Promise<PlanningAggregateState> {
   const repository = new InMemoryPlanningRepository();
   let sequence = 0;
   const service = createVersionedPlanningService({
@@ -61,12 +64,35 @@ async function createValidState(includeProfileV2 = false): Promise<PlanningAggre
       }
     });
   }
+  if (includeTrainingV2) {
+    await service.saveTrainingPlan('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'training-update-001',
+      payload: {
+        weekStartDate: '2026-08-10',
+        businessTimezone: 'Asia/Shanghai',
+        sessions: [
+          { businessDate: '2026-08-11', sessionCode: '02054', durationMinutes: 45 }
+        ]
+      }
+    });
+  }
   return repository.read('user-a');
 }
 
-async function createValidMealState(includeProfileV2 = false) {
-  const state = await createValidState(includeProfileV2);
-  const targets = [...state.dailyNutritionTargets].sort((left, right) => (
+async function createValidMealState(
+  includeProfileV2 = false,
+  includeTrainingV2 = false
+) {
+  const state = await createValidState(includeProfileV2, includeTrainingV2);
+  const latestTargetsByDate = new Map<string, PlanningAggregateState['dailyNutritionTargets'][number]>();
+  for (const target of state.dailyNutritionTargets) {
+    const current = latestTargetsByDate.get(target.businessDate);
+    if (current === undefined || target.version > current.version) {
+      latestTargetsByDate.set(target.businessDate, target);
+    }
+  }
+  const targets = [...latestTargetsByDate.values()].sort((left, right) => (
     left.businessDate.localeCompare(right.businessDate)
   ));
   if (targets.length !== 7) throw new Error('Expected seven nutrition targets');
@@ -82,9 +108,13 @@ async function createValidMealState(includeProfileV2 = false) {
       availableGrams: 10_000
     }]
   };
-  const profile = state.bodyProfiles[0];
-  const goal = state.goals[0];
-  const trainingPlan = state.trainingPlans[0];
+  const profile = state.bodyProfiles.find((value) => value.id === state.activeBodyProfileVersionId)
+    ?? state.bodyProfiles[0];
+  const goal = state.goals.find((value) => value.id === state.activeGoalVersionId)
+    ?? state.goals[0];
+  const trainingPlan = state.trainingPlans.find(
+    (value) => value.id === state.activeTrainingPlanVersionId
+  ) ?? state.trainingPlans[0];
   if (profile === undefined || goal === undefined || trainingPlan === undefined) {
     throw new Error('Expected complete planning chain');
   }
@@ -413,6 +443,134 @@ describe('planning aggregate invariants', () => {
     }).not.toThrow();
   });
 
+  test('accepts meal days backed by latest targets across one training supersession chain', async () => {
+    const state = await createValidMealState(false, true);
+    const plan = state.mealPlans[0];
+    const firstTrainingPlan = state.trainingPlans[0];
+    const secondTrainingPlan = state.trainingPlans[1];
+    if (plan === undefined || firstTrainingPlan === undefined || secondTrainingPlan === undefined) {
+      throw new Error('Expected mixed training target fixture');
+    }
+    const targetTrainingPlanIds = plan.days.map((day) => state.dailyNutritionTargets.find(
+      (target) => target.id === day.dailyNutritionTargetVersionId
+    )?.trainingPlanVersionId);
+    expect(targetTrainingPlanIds.filter((id) => id === firstTrainingPlan.id)).toHaveLength(6);
+    expect(targetTrainingPlanIds.filter((id) => id === secondTrainingPlan.id)).toHaveLength(1);
+
+    expect(() => {
+      assertPlanningAggregateInvariants(state, 'user-a');
+    }).not.toThrow();
+  });
+
+  test('rejects a meal target from a parallel same-week training supersession branch', async () => {
+    const state = await createValidMealState(false, true);
+    const rootPlan = state.trainingPlans[0];
+    const branchPlan = state.trainingPlans[1];
+    const mealPlan = state.mealPlans[0];
+    const sourceEvent = state.outboxEvents[1];
+    if (
+      rootPlan === undefined
+      || branchPlan === undefined
+      || mealPlan === undefined
+      || sourceEvent === undefined
+    ) {
+      throw new Error('Expected parallel training branch fixture');
+    }
+    const currentPlan = {
+      ...branchPlan,
+      id: 'training-plan-parallel-current',
+      version: 3
+    };
+    const currentEvent = {
+      ...sourceEvent,
+      eventId: 'training-plan-changed-parallel-current',
+      previousTrainingPlanVersionId: rootPlan.id,
+      trainingPlanVersionId: currentPlan.id
+    };
+
+    expectCorrupt({
+      ...state,
+      trainingPlans: [...state.trainingPlans, currentPlan],
+      outboxEvents: [...state.outboxEvents, currentEvent],
+      mealPlans: [{ ...mealPlan, trainingPlanVersionId: currentPlan.id }],
+      activeTrainingPlanVersionId: currentPlan.id,
+      idempotencyRecords: []
+    });
+  });
+
+  test('rejects a meal target from after its top-level training plan version', async () => {
+    const state = await createValidMealState(false, true);
+    const topLevelPlan = state.trainingPlans[1];
+    const mealPlan = state.mealPlans[0];
+    const sourceEvent = state.outboxEvents[1];
+    const firstDay = mealPlan?.days[0];
+    const sourceTarget = state.dailyNutritionTargets.find(
+      (target) => target.id === firstDay?.dailyNutritionTargetVersionId
+    );
+    const sourceEnergy = state.dailyEnergyTargets.find(
+      (target) => target.id === sourceTarget?.dailyEnergyTargetVersionId
+    );
+    if (
+      topLevelPlan === undefined
+      || mealPlan === undefined
+      || sourceEvent === undefined
+      || sourceTarget === undefined
+      || sourceEnergy === undefined
+    ) {
+      throw new Error('Expected future training target fixture');
+    }
+    const futurePlan = {
+      ...topLevelPlan,
+      id: 'training-plan-future',
+      version: 3
+    };
+    const futureEvent = {
+      ...sourceEvent,
+      eventId: 'training-plan-changed-future',
+      previousTrainingPlanVersionId: topLevelPlan.id,
+      trainingPlanVersionId: futurePlan.id
+    };
+
+    expectCorrupt({
+      ...state,
+      trainingPlans: [...state.trainingPlans, futurePlan],
+      outboxEvents: [...state.outboxEvents, futureEvent],
+      dailyEnergyTargets: state.dailyEnergyTargets.map((target) => (
+        target.id === sourceEnergy.id
+          ? { ...target, trainingPlanVersionId: futurePlan.id }
+          : target
+      )),
+      dailyNutritionTargets: state.dailyNutritionTargets.map((target) => (
+        target.id === sourceTarget.id
+          ? { ...target, trainingPlanVersionId: futurePlan.id }
+          : target
+      )),
+      activeTrainingPlanVersionId: futurePlan.id,
+      idempotencyRecords: []
+    });
+  });
+
+  test('rejects a meal day whose target belongs to another date', async () => {
+    const state = await createValidMealState();
+    const mealPlan = state.mealPlans[0];
+    const firstDay = mealPlan?.days[0];
+    const secondDay = mealPlan?.days[1];
+    if (mealPlan === undefined || firstDay === undefined || secondDay === undefined) {
+      throw new Error('Expected meal target date fixture');
+    }
+    expectCorrupt({
+      ...state,
+      mealPlans: [{
+        ...mealPlan,
+        days: mealPlan.days.map((day) => (
+          day.businessDate === firstDay.businessDate
+            ? { ...day, dailyNutritionTargetVersionId: secondDay.dailyNutritionTargetVersionId }
+            : day
+        ))
+      }]
+    });
+  });
+
   test.each([
     'inventory',
     'mealPlan',
@@ -532,6 +690,22 @@ describe('planning aggregate invariants', () => {
     expectCorrupt({
       ...state,
       mealPlans: [{ ...plan, bodyProfileVersionId: secondProfile.id }]
+    });
+  });
+
+  test('rejects a meal plan whose existing goal is outside its training chain', async () => {
+    const state = await createValidMealState();
+    const plan = state.mealPlans[0];
+    const goal = state.goals[0];
+    if (plan === undefined || goal === undefined) {
+      throw new Error('Expected cross-goal fixture');
+    }
+    const otherGoal = { ...goal, id: 'goal-other', version: 2 };
+    expectCorrupt({
+      ...state,
+      goals: [...state.goals, otherGoal],
+      mealPlans: [{ ...plan, goalVersionId: otherGoal.id }],
+      idempotencyRecords: []
     });
   });
 

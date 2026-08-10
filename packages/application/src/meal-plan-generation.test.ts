@@ -13,7 +13,8 @@ import {
 import type {
   DailyMenuCatalogProvider,
   DailyMenuCatalogVersion,
-  DailyMenuTemplateVersion
+  DailyMenuTemplateVersion,
+  TrainingSessionPayload
 } from '@fitness/domain';
 import { InMemoryPlanningRepository } from '@fitness/persistence';
 import {
@@ -79,7 +80,12 @@ function createHarness(options: {
 
 async function completeSetup(
   service: ReturnType<typeof createMealPlanGenerationService>,
-  overrides: { readonly weightKg?: number } = {}
+  overrides: {
+    readonly heightCm?: number;
+    readonly weightKg?: number;
+    readonly nonTrainingActivity?: 'light' | 'moderate' | 'heavy';
+    readonly trainingSessions?: readonly TrainingSessionPayload[];
+  } = {}
 ) {
   return service.completePlanningSetup('user-a', {
     expectedVersions: { bodyProfile: 0, goal: 0, trainingPlan: 0 },
@@ -87,10 +93,10 @@ async function completeSetup(
     bodyProfile: {
       ageYears: 30,
       sexCode: 0,
-      heightCm: 175,
+      heightCm: overrides.heightCm ?? 175,
       weightKg: overrides.weightKg ?? 60,
       healthScopeConfirmed: true,
-      nonTrainingActivity: 'light',
+      nonTrainingActivity: overrides.nonTrainingActivity ?? 'light',
       allergens: [],
       avoidFoods: [],
       dietPreferences: [],
@@ -104,7 +110,7 @@ async function completeSetup(
     trainingPlan: {
       weekStartDate: WEEK_START,
       businessTimezone: 'Asia/Shanghai',
-      sessions: []
+      sessions: overrides.trainingSessions ?? []
     }
   });
 }
@@ -242,6 +248,61 @@ describe('meal plan generation application service', () => {
     const state = await repository.read('user-a');
     expect(state.mealPlans).toHaveLength(1);
     expect(state.activeMealPlanVersionId).toBe(generated.id);
+  });
+
+  test('generates after one training day changes by retaining unaffected prior targets', async () => {
+    const { repository, service } = createHarness();
+    const setup = await completeSetup(service, {
+      heightCm: 145,
+      weightKg: 41,
+      nonTrainingActivity: 'moderate',
+      trainingSessions: [{
+        businessDate: '2026-08-18',
+        sessionCode: '02054',
+        durationMinutes: 60
+      }]
+    });
+    await saveFullInventory(service);
+    const updatedTrainingPlan = await service.saveTrainingPlan('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'training-before-first-meal-002',
+      payload: {
+        weekStartDate: WEEK_START,
+        businessTimezone: 'Asia/Shanghai',
+        sessions: [{
+          businessDate: '2026-08-18',
+          sessionCode: '02050',
+          durationMinutes: 30
+        }]
+      }
+    });
+    const beforeGeneration = await repository.read('user-a');
+    const latestTargetsByDate = new Map<string, typeof beforeGeneration.dailyNutritionTargets[number]>();
+    for (const target of beforeGeneration.dailyNutritionTargets) {
+      const current = latestTargetsByDate.get(target.businessDate);
+      if (current === undefined || target.version > current.version) {
+        latestTargetsByDate.set(target.businessDate, target);
+      }
+    }
+    const latestTargets = [...latestTargetsByDate.values()];
+    expect(latestTargets.filter(
+      (target) => target.trainingPlanVersionId === setup.trainingPlan.id
+    )).toHaveLength(6);
+    expect(latestTargets.filter(
+      (target) => target.trainingPlanVersionId === updatedTrainingPlan.trainingPlan.id
+    )).toHaveLength(1);
+
+    const generated = await service.generateWeeklyMealPlan('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'meal-generate-after-training-change-001',
+      payload: { weekStartDate: WEEK_START }
+    });
+
+    expect(generated.trainingPlanVersionId).toBe(updatedTrainingPlan.trainingPlan.id);
+    expect(generated.days.map((day) => day.dailyNutritionTargetVersionId).sort()).toEqual(
+      latestTargets.map((target) => target.id).sort()
+    );
+    expect((await repository.read('user-a')).activeMealPlanVersionId).toBe(generated.id);
   });
 
   test('does not partially write when deterministic generation is infeasible', async () => {
