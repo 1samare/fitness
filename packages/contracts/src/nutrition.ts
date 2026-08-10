@@ -83,6 +83,12 @@ export const recipeTemplateVersionSchema = z.object({
 
 const mealSlotSchema = z.enum(['breakfast', 'lunch', 'dinner', 'snack']);
 
+export const mealAssignmentSchema = z.object({
+  slot: mealSlotSchema,
+  recipeTemplateVersionId: traceableIdSchema,
+  servingMultiplier: z.number().min(0.5).max(1.5)
+}).strict();
+
 export const dailyMenuTemplateVersionSchema = z.object({
   id: traceableIdSchema,
   datasetVersion: traceableIdSchema,

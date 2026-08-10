@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   dailyMenuCatalogVersionSchema,
   dailyMenuTemplateVersionSchema,
+  mealAssignmentSchema,
   nutritionDataSnapshotSchema,
   recipeTemplateVersionSchema
 } from './nutrition';
@@ -120,5 +121,17 @@ describe('nutrition runtime contracts', () => {
       ]
     };
     expect(dailyMenuTemplateVersionSchema.safeParse(menu).success).toBe(false);
+  });
+
+  it('accepts inclusive serving multiplier boundaries and rejects quantities outside them', () => {
+    const assignment = {
+      slot: 'breakfast',
+      recipeTemplateVersionId: 'recipe-version-fixture-rice-v1',
+      servingMultiplier: 1
+    };
+    expect(mealAssignmentSchema.safeParse({ ...assignment, servingMultiplier: 0.5 }).success).toBe(true);
+    expect(mealAssignmentSchema.safeParse({ ...assignment, servingMultiplier: 1.5 }).success).toBe(true);
+    expect(mealAssignmentSchema.safeParse({ ...assignment, servingMultiplier: 0.49 }).success).toBe(false);
+    expect(mealAssignmentSchema.safeParse({ ...assignment, servingMultiplier: 1.51 }).success).toBe(false);
   });
 });
