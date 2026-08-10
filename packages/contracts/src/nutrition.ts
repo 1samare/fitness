@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 const traceableIdSchema = z.string().trim().min(1).max(256);
-const nonNegativeNutrientSchema = z.number().finite().nonnegative();
+const nonNegativeNutrientSchema = z.number().nonnegative();
 
 export const nutrientValuesSchema = z.object({
   energyKcal: nonNegativeNutrientSchema,
@@ -45,7 +45,7 @@ export const nutritionDataSnapshotSchema = z.object({
 const recipeIngredientSchema = z.object({
   foodId: traceableIdSchema,
   nutritionSnapshotId: traceableIdSchema,
-  grams: z.number().finite().positive().max(10_000)
+  grams: z.number().positive().max(10_000)
 }).strict();
 
 export const recipeTemplateVersionSchema = z.object({

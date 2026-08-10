@@ -148,8 +148,13 @@ describe('handlePlanningApi', () => {
       }));
       if (first.data.kind === 'planning_setup_completed') {
         expect(first.data.dailyEnergyTargets).toHaveLength(7);
+        expect(first.data.dailyNutritionTargets).toHaveLength(7);
         expect(first.data.dailyEnergyTargets[0]).toEqual(expect.objectContaining({
           energyPolicyVersion: 'calculation-policy-v2',
+          nutritionPolicyVersion: 'nutrition-policy-v1'
+        }));
+        expect(first.data.dailyNutritionTargets[0]).toEqual(expect.objectContaining({
+          dailyEnergyTargetVersionId: first.data.dailyEnergyTargets[0]?.id,
           nutritionPolicyVersion: 'nutrition-policy-v1'
         }));
       }
@@ -169,6 +174,7 @@ describe('handlePlanningApi', () => {
         goal: 1,
         trainingPlan: 1
       });
+      expect(current.data.dailyNutritionTargets).toHaveLength(7);
     }
   });
 
@@ -267,6 +273,7 @@ describe('handlePlanningApi', () => {
         goal: null,
         trainingPlan: null,
         dailyEnergyTargets: [],
+        dailyNutritionTargets: [],
         latestVersions: { bodyProfile: 0, goal: 0, trainingPlan: 0 }
       }
     });

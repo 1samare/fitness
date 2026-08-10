@@ -17,6 +17,7 @@ function createEmptyState(): PlanningAggregateState {
     goals: [],
     trainingPlans: [],
     dailyEnergyTargets: [],
+    dailyNutritionTargets: [],
     outboxEvents: [],
     idempotencyRecords: [],
     activeBodyProfileVersionId: null,
@@ -45,7 +46,7 @@ export interface CloudBaseDatabase extends CloudBaseTransaction {
 }
 
 interface StoredPlanningDocument {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly state: PlanningAggregateState;
 }
 
@@ -54,10 +55,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function decodeDocument(value: unknown, userId: string): PlanningAggregateState {
-  if (!isRecord(value) || value.schemaVersion !== 2 || !('state' in value)) {
+  if (
+    !isRecord(value)
+    || (value.schemaVersion !== 2 && value.schemaVersion !== 3)
+    || !isRecord(value.state)
+  ) {
     throw new CorruptPlanningStateError();
   }
-  const parsed = planningAggregateStateSchema.safeParse(value.state);
+  const candidateState = value.schemaVersion === 2
+    ? { ...value.state, dailyNutritionTargets: [] }
+    : value.state;
+  const parsed = planningAggregateStateSchema.safeParse(candidateState);
   if (!parsed.success) throw new CorruptPlanningStateError();
   assertPlanningAggregateInvariants(parsed.data, userId);
   return parsed.data;
@@ -70,7 +78,7 @@ function encodeDocument(
   const parsed = planningAggregateStateSchema.safeParse(state);
   if (!parsed.success) throw new CorruptPlanningStateError();
   assertPlanningAggregateInvariants(parsed.data, userId);
-  return { schemaVersion: 2, state: parsed.data };
+  return { schemaVersion: 3, state: parsed.data };
 }
 
 export class CloudBasePlanningRepository implements PlanningRepository {

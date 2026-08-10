@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { businessDateSchema } from './business-date';
+import { nutritionTargetResultSchema } from './nutrition';
 
 const policyMetadataSchema = z.object({
   policyVersion: z.literal('calculation-policy-v2'),
@@ -194,6 +195,19 @@ const dailyEnergyTargetVersionSchema = versionMetadataSchema.extend({
   energy: energyResultSchema
 }).strict();
 
+export const dailyNutritionTargetVersionSchema = versionMetadataSchema.extend({
+  kind: z.literal('daily_nutrition_target_version'),
+  businessDate: businessDateSchema,
+  bodyProfileVersionId: z.string().min(1),
+  goalVersionId: z.string().min(1),
+  trainingPlanVersionId: z.string().min(1),
+  dailyEnergyTargetVersionId: z.string().min(1),
+  energyPolicyVersion: z.literal('calculation-policy-v2'),
+  nutritionPolicyVersion: z.literal('nutrition-policy-v1'),
+  energy: energyResultSchema,
+  nutrition: nutritionTargetResultSchema.nullable()
+}).strict();
+
 const bodyProfileSavedSchema = z.object({
   kind: z.literal('body_profile_saved'),
   version: bodyProfileVersionSchema
@@ -207,7 +221,8 @@ const goalSavedSchema = z.object({
 const trainingPlanSavedSchema = z.object({
   kind: z.literal('training_plan_saved'),
   trainingPlan: trainingPlanVersionSchema,
-  dailyEnergyTargets: z.array(dailyEnergyTargetVersionSchema).max(7)
+  dailyEnergyTargets: z.array(dailyEnergyTargetVersionSchema).max(7),
+  dailyNutritionTargets: z.array(dailyNutritionTargetVersionSchema).max(7)
 }).strict();
 
 const planningSetupCompletedSchema = z.object({
@@ -216,6 +231,7 @@ const planningSetupCompletedSchema = z.object({
   goal: goalVersionSchema,
   trainingPlan: trainingPlanVersionSchema,
   dailyEnergyTargets: z.array(dailyEnergyTargetVersionSchema).max(7),
+  dailyNutritionTargets: z.array(dailyNutritionTargetVersionSchema).max(7),
   affectedDates: z.array(businessDateSchema).max(7)
 }).strict();
 
@@ -225,6 +241,7 @@ const currentContextSchema = z.object({
   goal: goalVersionSchema.nullable(),
   trainingPlan: trainingPlanVersionSchema.nullable(),
   dailyEnergyTargets: z.array(dailyEnergyTargetVersionSchema),
+  dailyNutritionTargets: z.array(dailyNutritionTargetVersionSchema),
   latestVersions: latestPlanningVersionsSchema
 }).strict();
 
@@ -241,6 +258,10 @@ const storedTrainingPlanVersionSchema = trainingPlanVersionSchema.extend({
 }).strict();
 
 const storedDailyEnergyTargetVersionSchema = dailyEnergyTargetVersionSchema.extend({
+  userId: z.string().min(1)
+}).strict();
+
+const storedDailyNutritionTargetVersionSchema = dailyNutritionTargetVersionSchema.extend({
   userId: z.string().min(1)
 }).strict();
 
@@ -297,6 +318,7 @@ export const planningAggregateStateSchema = z.object({
   goals: z.array(storedGoalVersionSchema),
   trainingPlans: z.array(storedTrainingPlanVersionSchema),
   dailyEnergyTargets: z.array(storedDailyEnergyTargetVersionSchema),
+  dailyNutritionTargets: z.array(storedDailyNutritionTargetVersionSchema),
   outboxEvents: z.array(storedTrainingPlanChangedEventSchema),
   idempotencyRecords: z.array(idempotencyRecordSchema),
   activeBodyProfileVersionId: z.string().min(1).nullable(),

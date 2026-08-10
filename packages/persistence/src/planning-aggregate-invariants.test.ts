@@ -134,6 +134,26 @@ describe('planning aggregate invariants', () => {
     });
   });
 
+  test('rejects a nutrition target with a missing or mismatched energy source', async () => {
+    const state = await createValidState();
+    const target = state.dailyNutritionTargets[0];
+    if (target === undefined) throw new Error('Expected a daily nutrition target');
+    expectCorrupt({
+      ...state,
+      dailyNutritionTargets: [{ ...target, dailyEnergyTargetVersionId: 'missing-energy' }]
+    });
+    const energyTarget = state.dailyEnergyTargets[0];
+    if (energyTarget === undefined) throw new Error('Expected a daily energy target');
+    expectCorrupt({
+      ...state,
+      dailyNutritionTargets: [{
+        ...target,
+        businessDate: '2026-08-12',
+        dailyEnergyTargetVersionId: energyTarget.id
+      }]
+    });
+  });
+
   test.each(['eventId', 'dailyEnergyTargetVersionIds'] as const)(
     'rejects a composite idempotency result with a missing %s reference',
     async (field) => {
@@ -167,7 +187,7 @@ describe('planning aggregate invariants', () => {
     });
   });
 
-  test.each(['bodyProfile', 'goal', 'trainingPlan', 'dailyTarget', 'event'] as const)(
+  test.each(['bodyProfile', 'goal', 'trainingPlan', 'dailyTarget', 'nutritionTarget', 'event'] as const)(
     'rejects a %s record owned by another trusted user',
     async (recordType) => {
       const state = await createValidState();
@@ -184,6 +204,9 @@ describe('planning aggregate invariants', () => {
         )),
         dailyEnergyTargets: state.dailyEnergyTargets.map((value) => (
           recordType === 'dailyTarget' ? { ...value, userId: 'user-b' } : value
+        )),
+        dailyNutritionTargets: state.dailyNutritionTargets.map((value) => (
+          recordType === 'nutritionTarget' ? { ...value, userId: 'user-b' } : value
         )),
         outboxEvents: state.outboxEvents.map((value) => (
           recordType === 'event' ? { ...value, userId: 'user-b' } : value

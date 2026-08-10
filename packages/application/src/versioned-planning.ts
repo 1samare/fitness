@@ -1,10 +1,12 @@
 import { addBusinessDays } from '@fitness/contracts';
+import { calculateNutritionTargets, findReviewedTrainingSession } from '@fitness/calculation';
 import type {
   BodyProfilePayload,
   BodyProfileVersion,
   CompletePlanningSetupCommand,
   CurrentPlanningContext,
   DailyEnergyTargetVersion,
+  DailyNutritionTargetVersion,
   GoalPayload,
   GoalVersion,
   IdempotencyRecord,
@@ -107,6 +109,7 @@ export class TrainingDateOutsideGoalPeriodError extends Error {
 export interface SavedTrainingPlan {
   readonly trainingPlan: TrainingPlanVersion;
   readonly dailyEnergyTargets: readonly DailyEnergyTargetVersion[];
+  readonly dailyNutritionTargets: readonly DailyNutritionTargetVersion[];
 }
 
 export interface SavedPlanningSetup extends SavedTrainingPlan {
@@ -378,6 +381,42 @@ function appendTrainingPlan(
     };
     return version;
   });
+  const dailyNutritionTargets = dailyEnergyTargets.map((dailyEnergyTarget) => {
+    const session = payload.sessions.find(
+      (candidate) => candidate.businessDate === dailyEnergyTarget.businessDate
+    );
+    const reviewedSession = session === undefined
+      ? undefined
+      : findReviewedTrainingSession(session.sessionCode);
+    const nutrition = dailyEnergyTarget.energy.kind === 'supported'
+      ? calculateNutritionTargets({
+          targetEnergyKcal: dailyEnergyTarget.energy.targetEnergyKcal,
+          weightKg: profile.payload.weightKg,
+          sexCode: profile.payload.sexCode,
+          goal: goal.payload.goal,
+          trainingKind: reviewedSession?.trainingKind ?? 'none'
+        })
+      : null;
+    const version: DailyNutritionTargetVersion = {
+      kind: 'daily_nutrition_target_version',
+      id: context.nextId('daily-nutrition-target'),
+      userId,
+      version: state.dailyNutritionTargets.filter(
+        (target) => target.businessDate === dailyEnergyTarget.businessDate
+      ).length + 1,
+      createdAt: context.createdAt,
+      businessDate: dailyEnergyTarget.businessDate,
+      bodyProfileVersionId: profile.id,
+      goalVersionId: goal.id,
+      trainingPlanVersionId: trainingPlan.id,
+      dailyEnergyTargetVersionId: dailyEnergyTarget.id,
+      energyPolicyVersion: 'calculation-policy-v2',
+      nutritionPolicyVersion: 'nutrition-policy-v1',
+      energy: dailyEnergyTarget.energy,
+      nutrition
+    };
+    return version;
+  });
   const event: TrainingPlanChangedEvent = {
     eventId: context.nextId('training-plan-change'),
     eventType: 'TrainingPlanChanged',
@@ -395,10 +434,20 @@ function appendTrainingPlan(
       ...state,
       trainingPlans: [...state.trainingPlans, trainingPlan],
       dailyEnergyTargets: [...state.dailyEnergyTargets, ...dailyEnergyTargets],
+      dailyNutritionTargets: [
+        ...state.dailyNutritionTargets,
+        ...dailyNutritionTargets
+      ],
       outboxEvents: [...state.outboxEvents, event],
       activeTrainingPlanVersionId: trainingPlan.id
     },
-    result: { trainingPlan, dailyEnergyTargets, affectedDates, event }
+    result: {
+      trainingPlan,
+      dailyEnergyTargets,
+      dailyNutritionTargets,
+      affectedDates,
+      event
+    }
   };
 }
 
@@ -417,6 +466,10 @@ function resolveCompositeReplay(
     if (target === null) throw new Error('Stored idempotency result is missing');
     return target;
   });
+  const energyTargetIds = new Set(dailyEnergyTargets.map((target) => target.id));
+  const dailyNutritionTargets = state.dailyNutritionTargets.filter((target) => (
+    energyTargetIds.has(target.dailyEnergyTargetVersionId)
+  ));
   const event = state.outboxEvents.find(
     (candidate) => candidate.eventId === record.resultVersionIds.eventId
   );
@@ -428,6 +481,7 @@ function resolveCompositeReplay(
     goal,
     trainingPlan,
     dailyEnergyTargets,
+    dailyNutritionTargets,
     affectedDates: event.affectedDates
   };
 }
@@ -458,6 +512,19 @@ function latestTargetsForActivePlan(
       ))
       .sort((left, right) => right.version - left.version)[0];
     return latest === undefined ? [] : [latest];
+  });
+}
+
+function nutritionTargetsForEnergyTargets(
+  state: PlanningAggregateState,
+  energyTargets: readonly DailyEnergyTargetVersion[]
+): DailyNutritionTargetVersion[] {
+  const byEnergyTargetId = new Map(
+    state.dailyNutritionTargets.map((target) => [target.dailyEnergyTargetVersionId, target])
+  );
+  return energyTargets.flatMap((energyTarget) => {
+    const nutritionTarget = byEnergyTargetId.get(energyTarget.id);
+    return nutritionTarget === undefined ? [] : [nutritionTarget];
   });
 }
 
@@ -564,6 +631,9 @@ export function createVersionedPlanningService(
               trainingPlan: previous,
               dailyEnergyTargets: state.dailyEnergyTargets.filter(
                 (target) => target.trainingPlanVersionId === previous.id
+              ),
+              dailyNutritionTargets: state.dailyNutritionTargets.filter(
+                (target) => target.trainingPlanVersionId === previous.id
               )
             }
           };
@@ -588,7 +658,8 @@ export function createVersionedPlanningService(
           },
           result: {
             trainingPlan: appended.result.trainingPlan,
-            dailyEnergyTargets: appended.result.dailyEnergyTargets
+            dailyEnergyTargets: appended.result.dailyEnergyTargets,
+            dailyNutritionTargets: appended.result.dailyNutritionTargets
           }
         };
       });
@@ -656,6 +727,7 @@ export function createVersionedPlanningService(
             goal: goal.result,
             trainingPlan: training.result.trainingPlan,
             dailyEnergyTargets: training.result.dailyEnergyTargets,
+            dailyNutritionTargets: training.result.dailyNutritionTargets,
             affectedDates: training.result.affectedDates
           }
         };
@@ -676,13 +748,15 @@ export function createVersionedPlanningService(
         && candidatePlan.goalVersionId === goal.id
         ? candidatePlan
         : null;
+      const dailyEnergyTargets = bodyProfile === null || goal === null || trainingPlan === null
+        ? []
+        : latestTargetsForActivePlan(state, bodyProfile, goal, trainingPlan);
       return {
         bodyProfile,
         goal,
         trainingPlan,
-        dailyEnergyTargets: bodyProfile === null || goal === null || trainingPlan === null
-          ? []
-          : latestTargetsForActivePlan(state, bodyProfile, goal, trainingPlan),
+        dailyEnergyTargets,
+        dailyNutritionTargets: nutritionTargetsForEnergyTargets(state, dailyEnergyTargets),
         latestVersions: {
           bodyProfile: state.bodyProfiles.length,
           goal: state.goals.length,

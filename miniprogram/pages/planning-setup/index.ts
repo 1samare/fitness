@@ -13,11 +13,10 @@ import {
   selectPlanningSetupCommand,
   type PendingPlanningSetup
 } from './pending-command';
+import { nutritionTargetText } from './target-display';
 
 type SuccessData = Extract<PlanningApiResponse, { success: true }>['data'];
 type CurrentContext = Extract<SuccessData, { kind: 'current_context' }>;
-type SetupCompleted = Extract<SuccessData, { kind: 'planning_setup_completed' }>;
-type DailyTarget = SetupCompleted['dailyEnergyTargets'][number];
 
 interface TextValueEvent { readonly detail: { readonly value: string } }
 interface SwitchValueEvent { readonly detail: { readonly value: boolean } }
@@ -32,7 +31,7 @@ interface TrainingDayPageInput extends TrainingDayFormInput {
 
 interface DisplayTarget {
   readonly businessDate: string;
-  readonly energyText: string;
+  readonly summaryText: string;
 }
 
 interface PageData extends PlanningSetupFormInput {
@@ -104,11 +103,6 @@ function currentContext(response: PlanningApiResponse): CurrentContext | undefin
   return response.success && response.data.kind === 'current_context'
     ? response.data
     : undefined;
-}
-
-function targetText(target: DailyTarget): string {
-  if (target.energy.kind === 'unsupported') return '暂不支持个性化能量目标';
-  return `${String(target.energy.targetEnergyKcal)} kcal（估算）`;
 }
 
 function decorateTrainingDays(input: {
@@ -340,10 +334,10 @@ Page<PageData, PageActions>({
       }
       wx.removeStorageSync(pendingStorageKey);
       this.setData({
-        successMessage: '档案、目标和一周训练计划已原子保存。',
-        displayTargets: response.data.dailyEnergyTargets.map((target) => ({
+        successMessage: '档案、目标、训练计划与每日能量/营养目标已原子保存。',
+        displayTargets: response.data.dailyNutritionTargets.map((target) => ({
           businessDate: target.businessDate,
-          energyText: targetText(target)
+          summaryText: nutritionTargetText(target)
         }))
       });
     } catch (error: unknown) {

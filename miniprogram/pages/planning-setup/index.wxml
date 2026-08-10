@@ -1,8 +1,8 @@
 <view class="page">
   <view class="hero">
     <text class="eyebrow">FITNESS · 版本化规划</text>
-    <text class="title">创建一周训练与能量目标</text>
-    <text class="subtitle">身体档案、目标、训练与每日能量目标会在一次提交中保存；网络中断后可安全重试。</text>
+    <text class="title">创建一周训练与能量/营养目标</text>
+    <text class="subtitle">身体档案、目标、训练与每日能量/营养目标会在一次提交中保存；网络中断后可安全重试。</text>
   </view>
 
   <view class="card">
@@ -144,16 +144,16 @@
 
     <text class="hint">动作选项来自人工审核的 2024 Adult Compendium 会话映射；客户端不提交 MET。</text>
     <button class="submit-button" type="primary" loading="{{loading}}" disabled="{{loading}}" bindtap="onSubmit">
-      {{loading ? '正在保存…' : '保存并生成能量目标'}}
+      {{loading ? '正在保存…' : '保存并生成能量与营养目标'}}
     </button>
   </view>
 
   <view wx:if="{{successMessage}}" class="card result-card" aria-live="polite">
     <text class="success">{{successMessage}}</text>
     <view wx:for="{{displayTargets}}" wx:key="businessDate" class="target-row">
-      <text>{{item.businessDate}}</text><text>{{item.energyText}}</text>
+      <text>{{item.businessDate}}</text><text>{{item.summaryText}}</text>
     </view>
-    <text class="hint">所有能量和训练消耗均为估算；当前仅生成确定性能量目标，宏量营养与食谱将在后续阶段加入。</text>
+    <text class="hint">能量和营养均为估算；食谱/餐单将在后续阶段加入；不构成医疗建议。</text>
   </view>
   <view wx:if="{{errorMessage}}" class="error" aria-role="alert" aria-live="assertive">{{errorMessage}}</view>
 </view>

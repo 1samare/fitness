@@ -167,6 +167,7 @@ describe('versioned planning service', () => {
 
     expect(result.trainingPlan.version).toBe(1);
     expect(result.dailyEnergyTargets).toHaveLength(7);
+    expect(result.dailyNutritionTargets).toHaveLength(7);
     expect(result.dailyEnergyTargets[1]?.energy.kind).toBe('supported');
     if (result.dailyEnergyTargets[1]?.energy.kind === 'supported') {
       expect(result.dailyEnergyTargets[1].energy.trainingNetKcal).toBe(184);
@@ -177,14 +178,33 @@ describe('versioned planning service', () => {
       expect(target.trainingPlanVersionId).toBe(result.trainingPlan.id);
       expect(target.energyPolicyVersion).toBe('calculation-policy-v2');
     }
+    for (const [index, target] of result.dailyNutritionTargets.entries()) {
+      const energyTarget = result.dailyEnergyTargets[index];
+      if (energyTarget === undefined) throw new Error('Expected paired energy target');
+      expect(target).toEqual(expect.objectContaining({
+        dailyEnergyTargetVersionId: energyTarget.id,
+        businessDate: energyTarget.businessDate,
+        bodyProfileVersionId: profile.id,
+        goalVersionId: goal.id,
+        trainingPlanVersionId: result.trainingPlan.id,
+        energyPolicyVersion: 'calculation-policy-v2',
+        nutritionPolicyVersion: 'nutrition-policy-v1'
+      }));
+    }
+    expect(result.dailyNutritionTargets[1]?.nutrition).toMatchObject({
+      kind: 'feasible',
+      proteinG: 112
+    });
 
     const state = await repository.read('user-a');
     expect(state.dailyEnergyTargets).toHaveLength(7);
+    expect(state.dailyNutritionTargets).toHaveLength(7);
     expect(await service.getCurrentContext('user-b')).toEqual({
       bodyProfile: null,
       goal: null,
       trainingPlan: null,
       dailyEnergyTargets: [],
+      dailyNutritionTargets: [],
       latestVersions: { bodyProfile: 0, goal: 0, trainingPlan: 0 }
     });
   });
@@ -256,6 +276,7 @@ describe('versioned planning service', () => {
     expect(result.goal.bodyProfileVersionId).toBe(result.bodyProfile.id);
     expect(result.trainingPlan.goalVersionId).toBe(result.goal.id);
     expect(result.dailyEnergyTargets).toHaveLength(7);
+    expect(result.dailyNutritionTargets).toHaveLength(7);
     expect(result.affectedDates).toEqual([
       '2026-08-10', '2026-08-11', '2026-08-12', '2026-08-13',
       '2026-08-14', '2026-08-15', '2026-08-16'
@@ -264,6 +285,7 @@ describe('versioned planning service', () => {
     expect(state.goals).toHaveLength(1);
     expect(state.trainingPlans).toHaveLength(1);
     expect(state.dailyEnergyTargets).toHaveLength(7);
+    expect(state.dailyNutritionTargets).toHaveLength(7);
     expect(state.idempotencyRecords).toHaveLength(1);
     expect(state.outboxEvents).toEqual([
       expect.objectContaining({
@@ -305,6 +327,7 @@ describe('versioned planning service', () => {
       goals: [],
       trainingPlans: [],
       dailyEnergyTargets: [],
+      dailyNutritionTargets: [],
       outboxEvents: [],
       idempotencyRecords: [],
       activeBodyProfileVersionId: null,
@@ -326,6 +349,7 @@ describe('versioned planning service', () => {
     expect(state.goals).toHaveLength(1);
     expect(state.trainingPlans).toHaveLength(1);
     expect(state.dailyEnergyTargets).toHaveLength(7);
+    expect(state.dailyNutritionTargets).toHaveLength(7);
     expect(state.outboxEvents).toHaveLength(1);
     expect(state.idempotencyRecords).toHaveLength(1);
   });
@@ -345,6 +369,7 @@ describe('versioned planning service', () => {
       goal: null,
       trainingPlan: null,
       dailyEnergyTargets: [],
+      dailyNutritionTargets: [],
       latestVersions: { bodyProfile: 2, goal: 1, trainingPlan: 1 }
     });
   });
@@ -368,6 +393,7 @@ describe('versioned planning service', () => {
       goal,
       trainingPlan: null,
       dailyEnergyTargets: [],
+      dailyNutritionTargets: [],
       latestVersions: { bodyProfile: 1, goal: 2, trainingPlan: 1 }
     });
   });
@@ -420,7 +446,10 @@ describe('versioned planning service', () => {
 
     expect(changed.dailyEnergyTargets.map((target) => target.businessDate))
       .toEqual(['2026-08-11', '2026-08-13']);
+    expect(changed.dailyNutritionTargets.map((target) => target.businessDate))
+      .toEqual(['2026-08-11', '2026-08-13']);
     expect(state.dailyEnergyTargets).toHaveLength(9);
+    expect(state.dailyNutritionTargets).toHaveLength(9);
     expect(state.outboxEvents.at(-1)).toEqual(expect.objectContaining({
       previousTrainingPlanVersionId: setup.trainingPlan.id,
       trainingPlanVersionId: changed.trainingPlan.id,
@@ -428,9 +457,14 @@ describe('versioned planning service', () => {
     }));
     const context = await service.getCurrentContext('user-a');
     expect(context.dailyEnergyTargets).toHaveLength(7);
+    expect(context.dailyNutritionTargets).toHaveLength(7);
     expect(context.dailyEnergyTargets.find((target) => target.businessDate === '2026-08-11')
       ?.trainingPlanVersionId).toBe(changed.trainingPlan.id);
     expect(context.dailyEnergyTargets.find((target) => target.businessDate === '2026-08-12')
+      ?.trainingPlanVersionId).toBe(setup.trainingPlan.id);
+    expect(context.dailyNutritionTargets.find((target) => target.businessDate === '2026-08-11')
+      ?.trainingPlanVersionId).toBe(changed.trainingPlan.id);
+    expect(context.dailyNutritionTargets.find((target) => target.businessDate === '2026-08-12')
       ?.trainingPlanVersionId).toBe(setup.trainingPlan.id);
   });
 
@@ -455,5 +489,19 @@ describe('versioned planning service', () => {
     expect(result.affectedDates).toEqual(['2026-08-12', '2026-08-13', '2026-08-14']);
     expect(result.dailyEnergyTargets.map((target) => target.businessDate))
       .toEqual(['2026-08-12', '2026-08-13', '2026-08-14']);
+    expect(result.dailyNutritionTargets.map((target) => target.businessDate))
+      .toEqual(['2026-08-12', '2026-08-13', '2026-08-14']);
+  });
+
+  test('records null nutrition without inventing a target for an unsupported profile', async () => {
+    const { service } = createHarness('2026-08-07T00:00:00.000Z');
+    const result = await service.completePlanningSetup('user-a', planningSetup({
+      bodyProfile: { ...profilePayload, ageYears: 46 }
+    }));
+
+    expect(result.dailyNutritionTargets).toHaveLength(7);
+    expect(result.dailyNutritionTargets.every((target) => (
+      target.energy.kind === 'unsupported' && target.nutrition === null
+    ))).toBe(true);
   });
 });

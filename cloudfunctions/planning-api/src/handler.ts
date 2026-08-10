@@ -12,6 +12,7 @@ import {
   previewDailyEnergy
 } from '@fitness/application';
 import {
+  dailyNutritionTargetVersionSchema,
   planningApiRequestSchema,
   planningApiResponseSchema,
   type PlanningApiResponse
@@ -20,6 +21,7 @@ import type {
   BodyProfileVersion,
   CurrentPlanningContext,
   DailyEnergyTargetVersion,
+  DailyNutritionTargetVersion,
   GoalVersion,
   TrainingPlanVersion
 } from '@fitness/domain';
@@ -117,6 +119,24 @@ function publicDailyEnergyTarget(version: DailyEnergyTargetVersion) {
   };
 }
 
+function publicDailyNutritionTarget(version: DailyNutritionTargetVersion) {
+  return dailyNutritionTargetVersionSchema.parse({
+    kind: version.kind,
+    id: version.id,
+    version: version.version,
+    createdAt: version.createdAt,
+    businessDate: version.businessDate,
+    bodyProfileVersionId: version.bodyProfileVersionId,
+    goalVersionId: version.goalVersionId,
+    trainingPlanVersionId: version.trainingPlanVersionId,
+    dailyEnergyTargetVersionId: version.dailyEnergyTargetVersionId,
+    energyPolicyVersion: version.energyPolicyVersion,
+    nutritionPolicyVersion: version.nutritionPolicyVersion,
+    energy: version.energy,
+    nutrition: version.nutrition
+  });
+}
+
 function currentContextResponse(context: CurrentPlanningContext) {
   return {
     kind: 'current_context' as const,
@@ -124,6 +144,7 @@ function currentContextResponse(context: CurrentPlanningContext) {
     goal: context.goal === null ? null : publicGoal(context.goal),
     trainingPlan: context.trainingPlan === null ? null : publicTrainingPlan(context.trainingPlan),
     dailyEnergyTargets: context.dailyEnergyTargets.map(publicDailyEnergyTarget),
+    dailyNutritionTargets: context.dailyNutritionTargets.map(publicDailyNutritionTarget),
     latestVersions: context.latestVersions
   };
 }
@@ -158,7 +179,8 @@ async function executeAuthenticatedAction(
       data: {
         kind: 'training_plan_saved',
         trainingPlan: publicTrainingPlan(result.trainingPlan),
-        dailyEnergyTargets: result.dailyEnergyTargets.map(publicDailyEnergyTarget)
+        dailyEnergyTargets: result.dailyEnergyTargets.map(publicDailyEnergyTarget),
+        dailyNutritionTargets: result.dailyNutritionTargets.map(publicDailyNutritionTarget)
       }
     };
   }
@@ -172,6 +194,7 @@ async function executeAuthenticatedAction(
         goal: publicGoal(result.goal),
         trainingPlan: publicTrainingPlan(result.trainingPlan),
         dailyEnergyTargets: result.dailyEnergyTargets.map(publicDailyEnergyTarget),
+        dailyNutritionTargets: result.dailyNutritionTargets.map(publicDailyNutritionTarget),
         affectedDates: [...result.affectedDates]
       }
     };

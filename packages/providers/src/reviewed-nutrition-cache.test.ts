@@ -1,26 +1,9 @@
 import { describe, expect, it } from 'vitest';
-
-interface Snapshot {
-  readonly id: string;
-  readonly foodId: string;
-  readonly nutrientsPer100g: { readonly proteinG: number };
-}
-
-interface Cache {
-  getSnapshot(snapshotId: string): Promise<Snapshot>;
-}
-
-interface CacheConstructor {
-  new(options: { readonly mode: 'production' | 'test'; readonly snapshots: readonly unknown[] }): Cache;
-}
-
-async function cacheConstructor(): Promise<CacheConstructor> {
-  const module: Record<string, unknown> = await import('./reviewed-nutrition-cache')
-    .catch(() => ({}));
-  const candidate = module.ReviewedNutritionCache;
-  expect(candidate, 'ReviewedNutritionCache must be exported').toBeTypeOf('function');
-  return candidate as CacheConstructor;
-}
+import { DuplicateReviewedRecordError } from './reviewed-records';
+import {
+  InvalidNutritionSnapshotError,
+  ReviewedNutritionCache
+} from './reviewed-nutrition-cache';
 
 const fixtureSnapshot = {
   id: 'snapshot-fixture-tofu-v1',
@@ -50,8 +33,7 @@ const fixtureSnapshot = {
 
 describe('ReviewedNutritionCache', () => {
   it('serves test fixtures only in explicit test mode and clones results', async () => {
-    const Constructor = await cacheConstructor();
-    const cache = new Constructor({ mode: 'test', snapshots: [fixtureSnapshot] });
+    const cache = new ReviewedNutritionCache({ mode: 'test', snapshots: [fixtureSnapshot] });
     const first = await cache.getSnapshot(fixtureSnapshot.id);
     expect(first).toEqual(fixtureSnapshot);
     (first.nutrientsPer100g as { proteinG: number }).proteinG = 999;
@@ -59,29 +41,28 @@ describe('ReviewedNutritionCache', () => {
   });
 
   it.each([
-    ['missing source metadata', (({ sourceRecordId: _, ...value }) => value)(fixtureSnapshot)],
+    ['missing source metadata', { ...fixtureSnapshot, sourceRecordId: undefined }],
     ['negative nutrition', {
       ...fixtureSnapshot,
       nutrientsPer100g: { ...fixtureSnapshot.nutrientsPer100g, proteinG: -1 }
     }]
-  ])('rejects invalid unknown input: %s', async (_name, value) => {
-    const Constructor = await cacheConstructor();
-    expect(() => new Constructor({ mode: 'test', snapshots: [value] })).toThrowError(
-      expect.objectContaining({ code: 'invalid_nutrition_snapshot' })
-    );
+  ])('rejects invalid unknown input: %s', (_name, value) => {
+    expect(() => new ReviewedNutritionCache({ mode: 'test', snapshots: [value] }))
+      .toThrowError(InvalidNutritionSnapshotError);
   });
 
-  it('rejects duplicate immutable snapshot IDs', async () => {
-    const Constructor = await cacheConstructor();
-    expect(() => new Constructor({
+  it('rejects duplicate immutable snapshot IDs', () => {
+    expect(() => new ReviewedNutritionCache({
       mode: 'test',
       snapshots: [fixtureSnapshot, { ...fixtureSnapshot }]
-    })).toThrowError(expect.objectContaining({ code: 'duplicate_reviewed_record' }));
+    })).toThrowError(DuplicateReviewedRecordError);
   });
 
   it('rejects test fixtures and missing records in production mode', async () => {
-    const Constructor = await cacheConstructor();
-    const cache = new Constructor({ mode: 'production', snapshots: [fixtureSnapshot] });
+    const cache = new ReviewedNutritionCache({
+      mode: 'production',
+      snapshots: [fixtureSnapshot]
+    });
     await expect(cache.getSnapshot(fixtureSnapshot.id)).rejects.toMatchObject({
       code: 'nutrition_snapshot_unavailable',
       snapshotId: fixtureSnapshot.id
@@ -92,9 +73,8 @@ describe('ReviewedNutritionCache', () => {
     });
   });
 
-  it('has no network, URL, credential, or request surface', async () => {
-    const Constructor = await cacheConstructor();
-    const cache = new Constructor({ mode: 'test', snapshots: [fixtureSnapshot] });
+  it('has no network, URL, credential, or request surface', () => {
+    const cache = new ReviewedNutritionCache({ mode: 'test', snapshots: [fixtureSnapshot] });
     expect(cache).not.toHaveProperty('fetch');
     expect(cache).not.toHaveProperty('request');
     expect(cache).not.toHaveProperty('url');

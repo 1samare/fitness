@@ -56,13 +56,16 @@ const validTemplate = {
   }]
 };
 
+const snapshotWithoutSourceRecord: Record<string, unknown> = { ...validSnapshot };
+delete snapshotWithoutSourceRecord.sourceRecordId;
+
 describe('nutrition runtime contracts', () => {
   it('accepts a complete traceable nutrition snapshot', () => {
     expect(schema('nutritionDataSnapshotSchema').safeParse(validSnapshot).success).toBe(true);
   });
 
   it.each([
-    ['missing source record', (({ sourceRecordId: _, ...value }) => value)(validSnapshot)],
+    ['missing source record', snapshotWithoutSourceRecord],
     ['unknown unit', { ...validSnapshot, originalUnit: 'serving' }],
     ['unknown food state', { ...validSnapshot, foodState: 'maybe-cooked' }],
     ['negative nutrient', {

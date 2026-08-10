@@ -4,6 +4,7 @@ import type {
   NonTrainingActivity,
   SexCode
 } from './daily-energy';
+import type { NutritionTargetResult } from './nutrition-target';
 
 export interface BodyProfilePayload {
   readonly ageYears: number;
@@ -71,6 +72,19 @@ export interface DailyEnergyTargetVersion extends VersionMetadata {
   readonly energyPolicyVersion: 'calculation-policy-v2';
   readonly nutritionPolicyVersion: 'nutrition-policy-v1';
   readonly energy: DailyEnergyResult;
+}
+
+export interface DailyNutritionTargetVersion extends VersionMetadata {
+  readonly kind: 'daily_nutrition_target_version';
+  readonly businessDate: string;
+  readonly bodyProfileVersionId: string;
+  readonly goalVersionId: string;
+  readonly trainingPlanVersionId: string;
+  readonly dailyEnergyTargetVersionId: string;
+  readonly energyPolicyVersion: 'calculation-policy-v2';
+  readonly nutritionPolicyVersion: 'nutrition-policy-v1';
+  readonly energy: DailyEnergyResult;
+  readonly nutrition: NutritionTargetResult | null;
 }
 
 export interface LatestPlanningVersions {
@@ -143,6 +157,7 @@ export interface PlanningAggregateState {
   readonly goals: readonly GoalVersion[];
   readonly trainingPlans: readonly TrainingPlanVersion[];
   readonly dailyEnergyTargets: readonly DailyEnergyTargetVersion[];
+  readonly dailyNutritionTargets: readonly DailyNutritionTargetVersion[];
   readonly outboxEvents: readonly TrainingPlanChangedEvent[];
   readonly idempotencyRecords: readonly IdempotencyRecord[];
   readonly activeBodyProfileVersionId: string | null;
@@ -155,6 +170,7 @@ export interface CurrentPlanningContext {
   readonly goal: GoalVersion | null;
   readonly trainingPlan: TrainingPlanVersion | null;
   readonly dailyEnergyTargets: readonly DailyEnergyTargetVersion[];
+  readonly dailyNutritionTargets: readonly DailyNutritionTargetVersion[];
   readonly latestVersions: LatestPlanningVersions;
 }
 

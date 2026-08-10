@@ -122,8 +122,41 @@ describe('CloudBasePlanningRepository', () => {
     expect(database.documents).toHaveLength(1);
     expect(database.requestedKeys.join('|')).not.toContain('wx-openid-sensitive');
     expect([...database.documents.values()][0]).toEqual(expect.objectContaining({
-      schemaVersion: 2
+      schemaVersion: 3
     }));
+  });
+
+  test('migrates schema v2 structurally without synthesizing historical nutrition values', async () => {
+    const database = new FakeDatabase();
+    const repository = new CloudBasePlanningRepository(database);
+    const documentKey = `planning_user_states/${repository.documentIdForUser('wx-openid-a')}`;
+    database.documents.set(documentKey, {
+      schemaVersion: 2,
+      state: {
+        bodyProfiles: [],
+        goals: [],
+        trainingPlans: [],
+        dailyEnergyTargets: [],
+        outboxEvents: [],
+        idempotencyRecords: [],
+        activeBodyProfileVersionId: null,
+        activeGoalVersionId: null,
+        activeTrainingPlanVersionId: null
+      }
+    });
+
+    await expect(repository.read('wx-openid-a')).resolves.toMatchObject({
+      dailyNutritionTargets: []
+    });
+    expect(database.documents.get(documentKey)).not.toHaveProperty(
+      'state.dailyNutritionTargets'
+    );
+    await repository.transact('wx-openid-a', (state) => ({ nextState: state, result: undefined }));
+    const migrated = database.documents.get(documentKey);
+    expect(isRecord(migrated) ? migrated.schemaVersion : undefined).toBe(3);
+    expect(isRecord(migrated) && isRecord(migrated.state)
+      ? migrated.state.dailyNutritionTargets
+      : undefined).toEqual([]);
   });
 
   test('fails closed instead of replacing a corrupt stored state', async () => {

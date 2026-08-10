@@ -1,14 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import * as calculation from './index';
-
-type CandidateEvaluator = (input: unknown) => unknown;
-
-function evaluator(): CandidateEvaluator {
-  const candidate: unknown = Reflect.get(calculation, 'evaluateRecipeCandidate');
-  expect(candidate, 'evaluateRecipeCandidate must be exported').toBeTypeOf('function');
-  if (typeof candidate !== 'function') throw new Error('candidate evaluator unavailable');
-  return candidate as CandidateEvaluator;
-}
+import type { RecipeCandidateInput } from '@fitness/domain';
+import { evaluateRecipeCandidate } from './evaluate-recipe-candidate';
 
 const snapshots = [
   {
@@ -110,8 +102,8 @@ const inventory = [
   { foodId: 'fixture-broccoli', availableGrams: 150 }
 ] as const;
 
-function evaluate(overrides: Readonly<Record<string, unknown>> = {}) {
-  return evaluator()({
+function evaluate(overrides: Partial<RecipeCandidateInput> = {}) {
+  return evaluateRecipeCandidate({
     template,
     snapshots,
     inventory,
@@ -151,12 +143,13 @@ describe('evaluateRecipeCandidate', () => {
         const result = evaluate({ allergens: [`  ${allergen}  `] });
         expect(result).toMatchObject({
           kind: 'infeasible',
-          code: 'nutrition_constraints_infeasible',
-          conflicts: expect.arrayContaining([{
-            code: 'allergen_detected',
-            foodId: snapshot.foodId,
-            allergen
-          }])
+          code: 'nutrition_constraints_infeasible'
+        });
+        if (result.kind !== 'infeasible') throw new Error('expected infeasible candidate');
+        expect(result.conflicts).toContainEqual({
+          code: 'allergen_detected',
+          foodId: snapshot.foodId,
+          allergen
         });
       }
     }
@@ -184,29 +177,39 @@ describe('evaluateRecipeCandidate', () => {
       { code: 'nutrition_snapshot_not_reviewed', foodId: 'fixture-tofu', snapshotId: 'snapshot-fixture-tofu-v1' }
     ]
   ])('returns a structured conflict for %s', (_name, overrides, conflict) => {
-    expect(evaluate(overrides)).toMatchObject({
+    const result = evaluate(overrides);
+    expect(result).toMatchObject({
       kind: 'infeasible',
-      code: 'nutrition_constraints_infeasible',
-      conflicts: expect.arrayContaining([conflict])
+      code: 'nutrition_constraints_infeasible'
     });
+    if (result.kind !== 'infeasible') throw new Error('expected infeasible candidate');
+    expect(result.conflicts).toContainEqual(conflict);
   });
 
   it('rejects missing and mismatched source-chain snapshots', () => {
-    expect(evaluate({ snapshots: snapshots.slice(1) })).toMatchObject({
-      conflicts: expect.arrayContaining([{
-        code: 'nutrition_snapshot_missing',
-        foodId: 'fixture-tofu',
-        snapshotId: 'snapshot-fixture-tofu-v1'
-      }])
+    const missing = evaluate({ snapshots: snapshots.slice(1) });
+    expect(missing).toMatchObject({
+      kind: 'infeasible',
+      code: 'nutrition_constraints_infeasible'
     });
-    expect(evaluate({
+    if (missing.kind !== 'infeasible') throw new Error('expected infeasible candidate');
+    expect(missing.conflicts).toContainEqual({
+      code: 'nutrition_snapshot_missing',
+      foodId: 'fixture-tofu',
+      snapshotId: 'snapshot-fixture-tofu-v1'
+    });
+    const mismatched = evaluate({
       snapshots: [{ ...snapshots[0], foodId: 'different-food' }, ...snapshots.slice(1)]
-    })).toMatchObject({
-      conflicts: expect.arrayContaining([{
-        code: 'nutrition_snapshot_identity_mismatch',
-        foodId: 'fixture-tofu',
-        snapshotId: 'snapshot-fixture-tofu-v1'
-      }])
+    });
+    expect(mismatched).toMatchObject({
+      kind: 'infeasible',
+      code: 'nutrition_constraints_infeasible'
+    });
+    if (mismatched.kind !== 'infeasible') throw new Error('expected infeasible candidate');
+    expect(mismatched.conflicts).toContainEqual({
+      code: 'nutrition_snapshot_identity_mismatch',
+      foodId: 'fixture-tofu',
+      snapshotId: 'snapshot-fixture-tofu-v1'
     });
   });
 });

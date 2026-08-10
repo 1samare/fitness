@@ -6,6 +6,7 @@ const emptyState: PlanningAggregateState = {
   goals: [],
   trainingPlans: [],
   dailyEnergyTargets: [],
+  dailyNutritionTargets: [],
   outboxEvents: [],
   idempotencyRecords: [],
   activeBodyProfileVersionId: null,

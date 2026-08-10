@@ -51,7 +51,7 @@ describe('calculateNutritionTargets', () => {
     });
 
     expect(result).toEqual(expect.objectContaining({ kind: 'feasible' }));
-    if (typeof result !== 'object' || result === null || !('kind' in result) || result.kind !== 'feasible') {
+    if (result.kind !== 'feasible') {
       throw new Error('expected feasible nutrition target');
     }
     expect(result.proteinG).toBe(101.4);
@@ -65,21 +65,23 @@ describe('calculateNutritionTargets', () => {
   });
 
   it('returns structured conflicts when the 120 g carbohydrate floor exceeds 65%E', () => {
-    expect(calculate({
+    const result = calculate({
       targetEnergyKcal: 700,
       trainingKind: 'regular_resistance'
-    })).toMatchObject({
-      kind: 'infeasible',
-      code: 'nutrition_constraints_infeasible',
-      conflicts: expect.arrayContaining([
-        {
-          code: 'carbohydrate_minimum_exceeds_share_maximum',
-          minimumG: 120,
-          maximumByEnergyG: 113.8
-        },
-        expect.objectContaining({ code: 'macro_energy_intersection_empty' })
-      ])
     });
+    expect(result).toMatchObject({
+      kind: 'infeasible',
+      code: 'nutrition_constraints_infeasible'
+    });
+    if (result.kind !== 'infeasible') throw new Error('expected infeasible target');
+    expect(result.conflicts).toContainEqual({
+      code: 'carbohydrate_minimum_exceeds_share_maximum',
+      minimumG: 120,
+      maximumByEnergyG: 113.8
+    });
+    expect(result.conflicts.some((conflict) => (
+      conflict.code === 'macro_energy_intersection_empty'
+    ))).toBe(true);
   });
 
   it('stops when a fixed RNI would exceed the automatic 2.0 g/kg ceiling', () => {
