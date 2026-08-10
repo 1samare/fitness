@@ -1,5 +1,5 @@
 import { nutritionDataSnapshotSchema } from '@fitness/contracts';
-import type { NutritionDataSnapshot, NutritionProvider } from '@fitness/domain';
+import type { FoodResolution, NutritionDataSnapshot, NutritionProvider } from '@fitness/domain';
 import { assertUniqueRecordIds } from './reviewed-records';
 
 export class InvalidNutritionSnapshotError extends Error {
@@ -28,6 +28,7 @@ export interface ReviewedNutritionCacheOptions {
 export class ReviewedNutritionCache implements NutritionProvider {
   private readonly mode: ReviewedNutritionCacheOptions['mode'];
   private readonly snapshots: ReadonlyMap<string, NutritionDataSnapshot>;
+  private readonly snapshotsByName: ReadonlyMap<string, NutritionDataSnapshot>;
 
   public constructor(options: ReviewedNutritionCacheOptions) {
     const snapshots: NutritionDataSnapshot[] = [];
@@ -39,6 +40,9 @@ export class ReviewedNutritionCache implements NutritionProvider {
     assertUniqueRecordIds(snapshots);
     this.mode = options.mode;
     this.snapshots = new Map(snapshots.map((snapshot) => [snapshot.id, snapshot]));
+    this.snapshotsByName = new Map(
+      snapshots.map((snapshot) => [normalizeFoodName(snapshot.canonicalNameZh), snapshot])
+    );
   }
 
   public getSnapshot(snapshotId: string): Promise<NutritionDataSnapshot> {
@@ -51,4 +55,20 @@ export class ReviewedNutritionCache implements NutritionProvider {
     }
     return Promise.resolve(structuredClone(snapshot));
   }
+
+  public resolveCanonicalName(name: string): Promise<FoodResolution | null> {
+    const snapshot = this.snapshotsByName.get(normalizeFoodName(name));
+    if (snapshot === undefined || (this.mode === 'production' && snapshot.qualityStatus !== 'reviewed')) {
+      return Promise.resolve(null);
+    }
+    return Promise.resolve({
+      foodId: snapshot.foodId,
+      canonicalNameZh: snapshot.canonicalNameZh,
+      nutritionSnapshotId: snapshot.id
+    });
+  }
+}
+
+function normalizeFoodName(value: string): string {
+  return value.trim().replaceAll(/\s+/g, '').toLocaleLowerCase('zh-CN');
 }

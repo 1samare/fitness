@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const traceableIdSchema = z.string().trim().min(1).max(256);
+export const traceableIdSchema = z.string().trim().min(1).max(256);
 const nonNegativeNutrientSchema = z.number().nonnegative();
 
 export const nutrientValuesSchema = z.object({
@@ -78,6 +78,53 @@ export const recipeTemplateVersionSchema = z.object({
     }
     foodIds.add(ingredient.foodId);
     snapshotIds.add(ingredient.nutritionSnapshotId);
+  });
+});
+
+const mealSlotSchema = z.enum(['breakfast', 'lunch', 'dinner', 'snack']);
+
+export const dailyMenuTemplateVersionSchema = z.object({
+  id: traceableIdSchema,
+  datasetVersion: traceableIdSchema,
+  sourceId: traceableIdSchema,
+  reviewedAt: z.iso.datetime(),
+  qualityStatus: z.enum(['reviewed', 'test_fixture']),
+  meals: z.array(z.object({
+    slot: mealSlotSchema,
+    recipeTemplateVersionId: traceableIdSchema
+  }).strict()).min(3).max(4)
+}).strict().superRefine((value, context) => {
+  const slots = new Set<string>();
+  value.meals.forEach((meal, index) => {
+    if (slots.has(meal.slot)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['meals', index, 'slot'],
+        message: 'daily menu meal slots must be unique'
+      });
+    }
+    slots.add(meal.slot);
+  });
+});
+
+export const dailyMenuCatalogVersionSchema = z.object({
+  id: traceableIdSchema,
+  datasetVersion: traceableIdSchema,
+  sourceId: traceableIdSchema,
+  reviewedAt: z.iso.datetime(),
+  qualityStatus: z.enum(['reviewed', 'test_fixture']),
+  dailyMenuTemplateVersionIds: z.array(traceableIdSchema).length(7)
+}).strict().superRefine((value, context) => {
+  const ids = new Set<string>();
+  value.dailyMenuTemplateVersionIds.forEach((id, index) => {
+    if (ids.has(id)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['dailyMenuTemplateVersionIds', index],
+        message: 'daily menu template version IDs must be unique'
+      });
+    }
+    ids.add(id);
   });
 });
 

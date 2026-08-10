@@ -56,6 +56,13 @@ export interface RecipeTemplateVersion {
 
 export interface NutritionProvider {
   getSnapshot(snapshotId: string): Promise<NutritionDataSnapshot>;
+  resolveCanonicalName(name: string): Promise<FoodResolution | null>;
+}
+
+export interface FoodResolution {
+  readonly foodId: string;
+  readonly canonicalNameZh: string;
+  readonly nutritionSnapshotId: string;
 }
 
 export interface RecipeTemplateProvider {

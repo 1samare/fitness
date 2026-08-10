@@ -80,4 +80,23 @@ describe('ReviewedNutritionCache', () => {
     expect(cache).not.toHaveProperty('url');
     expect(cache).not.toHaveProperty('apiKey');
   });
+
+  it('resolves only normalized exact canonical names', async () => {
+    const cache = new ReviewedNutritionCache({
+      mode: 'test',
+      snapshots: [{
+        ...fixtureSnapshot,
+        id: 'snapshot-fixture-rice-v1',
+        foodId: 'fixture-rice',
+        canonicalNameZh: '测试米饭',
+        sourceRecordId: 'fixture-rice-001',
+        allergens: []
+      }]
+    });
+    await expect(cache.resolveCanonicalName('  测试米饭  ')).resolves.toMatchObject({
+      foodId: 'fixture-rice',
+      nutritionSnapshotId: 'snapshot-fixture-rice-v1'
+    });
+    await expect(cache.resolveCanonicalName('测试米')).resolves.toBeNull();
+  });
 });

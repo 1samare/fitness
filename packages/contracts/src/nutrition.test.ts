@@ -1,18 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import * as contracts from './index';
-
-interface RuntimeSchema {
-  safeParse(input: unknown): { readonly success: boolean };
-}
-
-function schema(name: string): RuntimeSchema {
-  const candidate: unknown = Reflect.get(contracts, name);
-  expect(candidate, `${name} must be exported`).toBeDefined();
-  if (typeof candidate !== 'object' || candidate === null || !('safeParse' in candidate)) {
-    throw new Error(`${name} is unavailable`);
-  }
-  return candidate as RuntimeSchema;
-}
+import {
+  dailyMenuCatalogVersionSchema,
+  dailyMenuTemplateVersionSchema,
+  nutritionDataSnapshotSchema,
+  recipeTemplateVersionSchema
+} from './nutrition';
 
 const validSnapshot = {
   id: 'snapshot-fixture-tofu-v1',
@@ -56,12 +48,24 @@ const validTemplate = {
   }]
 };
 
+const validDailyMenuCatalog = {
+  id: 'daily-menu-catalog-fixture-week-v1',
+  datasetVersion: 'fixture-2026-08-10',
+  sourceId: 'FITNESS-TEST-FIXTURE-V2',
+  reviewedAt: '2026-08-10T00:00:00.000Z',
+  qualityStatus: 'test_fixture',
+  dailyMenuTemplateVersionIds: Array.from(
+    { length: 7 },
+    (_, index) => `daily-menu-version-fixture-day-${String(index + 1)}-v1`
+  )
+};
+
 const snapshotWithoutSourceRecord: Record<string, unknown> = { ...validSnapshot };
 delete snapshotWithoutSourceRecord.sourceRecordId;
 
 describe('nutrition runtime contracts', () => {
   it('accepts a complete traceable nutrition snapshot', () => {
-    expect(schema('nutritionDataSnapshotSchema').safeParse(validSnapshot).success).toBe(true);
+    expect(nutritionDataSnapshotSchema.safeParse(validSnapshot).success).toBe(true);
   });
 
   it.each([
@@ -74,24 +78,47 @@ describe('nutrition runtime contracts', () => {
     }],
     ['unknown property', { ...validSnapshot, supplierClaim: 'authoritative' }]
   ])('rejects %s', (_name, value) => {
-    expect(schema('nutritionDataSnapshotSchema').safeParse(value).success).toBe(false);
+    expect(nutritionDataSnapshotSchema.safeParse(value).success).toBe(false);
   });
 
   it('accepts a versioned recipe pinned to an exact snapshot', () => {
-    expect(schema('recipeTemplateVersionSchema').safeParse(validTemplate).success).toBe(true);
+    expect(recipeTemplateVersionSchema.safeParse(validTemplate).success).toBe(true);
   });
 
   it('rejects duplicate food identities and non-positive grams in a template', () => {
-    expect(schema('recipeTemplateVersionSchema').safeParse({
+    expect(recipeTemplateVersionSchema.safeParse({
       ...validTemplate,
       ingredients: [
         validTemplate.ingredients[0],
         { ...validTemplate.ingredients[0], nutritionSnapshotId: 'another-snapshot' }
       ]
     }).success).toBe(false);
-    expect(schema('recipeTemplateVersionSchema').safeParse({
+    expect(recipeTemplateVersionSchema.safeParse({
       ...validTemplate,
       ingredients: [{ ...validTemplate.ingredients[0], grams: 0 }]
     }).success).toBe(false);
+  });
+
+  it('validates a fixed daily-menu catalog and rejects extra fields', () => {
+    const catalog = dailyMenuCatalogVersionSchema.parse(validDailyMenuCatalog);
+    expect(catalog.dailyMenuTemplateVersionIds).toHaveLength(7);
+    expect(() => dailyMenuCatalogVersionSchema.parse({ ...catalog, userId: 'attacker' }))
+      .toThrow();
+  });
+
+  it('rejects duplicate meal slots in a daily menu', () => {
+    const menu = {
+      id: 'menu-fixture-duplicate-slots-v1',
+      datasetVersion: 'fixture-2026-08-10',
+      sourceId: 'FITNESS-TEST-FIXTURE-V2',
+      reviewedAt: '2026-08-10T00:00:00.000Z',
+      qualityStatus: 'test_fixture',
+      meals: [
+        { slot: 'breakfast', recipeTemplateVersionId: 'recipe-version-fixture-rice-v1' },
+        { slot: 'breakfast', recipeTemplateVersionId: 'recipe-version-fixture-oats-v1' },
+        { slot: 'dinner', recipeTemplateVersionId: 'recipe-version-fixture-fish-v1' }
+      ]
+    };
+    expect(dailyMenuTemplateVersionSchema.safeParse(menu).success).toBe(false);
   });
 });
