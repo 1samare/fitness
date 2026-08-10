@@ -107,6 +107,64 @@ function createHarness(options: {
   };
 }
 
+function createControlledRepository() {
+  const inner = new InMemoryPlanningRepository();
+  let shouldBlockNextRead = false;
+  let blockedReadObserved: Promise<void> = Promise.resolve();
+  let observeBlockedRead: (() => void) | undefined;
+  let releaseBlockedRead: (() => void) | undefined;
+  let blockedReadGate: Promise<void> = Promise.resolve();
+  let failBeforeNextTransaction = false;
+  let dropAfterNextCommit = false;
+  const repository: PlanningRepository = {
+    async read(userId) {
+      const state = await inner.read(userId);
+      if (!shouldBlockNextRead) return state;
+      shouldBlockNextRead = false;
+      observeBlockedRead?.();
+      await blockedReadGate;
+      return state;
+    },
+    async transact(userId, operation) {
+      if (failBeforeNextTransaction) {
+        failBeforeNextTransaction = false;
+        throw new Error('simulated retry record transaction failure');
+      }
+      const result = await inner.transact(userId, operation);
+      if (dropAfterNextCommit) {
+        dropAfterNextCommit = false;
+        throw new Error('simulated response loss');
+      }
+      return result;
+    }
+  };
+  return {
+    inner,
+    repository,
+    blockNextRead() {
+      shouldBlockNextRead = true;
+      blockedReadObserved = new Promise<void>((resolve) => {
+        observeBlockedRead = resolve;
+      });
+      blockedReadGate = new Promise<void>((resolve) => {
+        releaseBlockedRead = resolve;
+      });
+    },
+    waitForBlockedRead() {
+      return blockedReadObserved;
+    },
+    releaseBlockedRead() {
+      releaseBlockedRead?.();
+    },
+    failNextTransactionBeforeCommit() {
+      failBeforeNextTransaction = true;
+    },
+    dropNextTransactionResponseAfterCommit() {
+      dropAfterNextCommit = true;
+    }
+  };
+}
+
 async function prepareGeneratedPlan(
   harness: ReturnType<typeof createHarness>,
   sessions: readonly TrainingSessionPayload[] = []
@@ -824,6 +882,155 @@ describe('training-change recalculation lifecycle', () => {
       ...retryCommand,
       payload: { recalculationJobId: 'different-job-id' }
     })).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
+  });
+
+  test('atomically records a retry when a background consumer activates the result after retry first-read', async () => {
+    const control = createControlledRepository();
+    const baseProviders = fixtureProviders();
+    const harness = createHarness({
+      repository: control.repository,
+      providers: baseProviders
+    });
+    await prepareGeneratedPlan(harness);
+    harness.setProviders({
+      ...baseProviders,
+      menus: {
+        getActiveCatalog: () => Promise.reject(new Error('offline')),
+        getMenuByVersionId: (id) => baseProviders.menus.getMenuByVersionId(id)
+      }
+    });
+    const saved = await harness.service.saveTrainingPlan('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'training-save-background-activated',
+      payload: {
+        weekStartDate: WEEK_START,
+        businessTimezone: 'Asia/Shanghai',
+        sessions: [{
+          businessDate: '2026-08-20',
+          sessionCode: '02054',
+          durationMinutes: 60
+        }]
+      }
+    });
+    const failed = await control.inner.read('user-a');
+    const retryCommand = {
+      expectedVersion: failed.recalculationJobs.length,
+      idempotencyKey: 'retry-after-background-activated',
+      payload: { recalculationJobId: saved.recalculationJob.id }
+    } as const;
+    harness.setProviders(baseProviders);
+
+    control.blockNextRead();
+    const retry = harness.service.retryPendingRecalculation('user-a', retryCommand);
+    await control.waitForBlockedRead();
+    const background = await harness.service.processTrainingPlanChanged(
+      'user-a',
+      saved.recalculationJob.triggerEventId
+    );
+    const afterBackground = await control.inner.read('user-a');
+    expect(background.recalculationJob.status).toBe('completed');
+    expect(background.activatedMealPlan).not.toBeNull();
+
+    control.dropNextTransactionResponseAfterCommit();
+    control.releaseBlockedRead();
+    await expect(retry).rejects.toThrow('simulated response loss');
+    const committed = await control.inner.read('user-a');
+
+    expect(committed.idempotencyRecords.filter(
+      (record) => record.operation === 'retryPendingRecalculation'
+        && record.key === retryCommand.idempotencyKey
+    )).toHaveLength(1);
+    expect(committed.mealPlans).toEqual(afterBackground.mealPlans);
+    expect(committed.dailyNutritionTargets).toEqual(afterBackground.dailyNutritionTargets);
+    expect(committed.recalculationJobs).toEqual(afterBackground.recalculationJobs);
+    expect(committed.mealPlanDecisions).toEqual(afterBackground.mealPlanDecisions);
+
+    const replay = await harness.service.retryPendingRecalculation('user-a', retryCommand);
+    const afterReplay = await control.inner.read('user-a');
+    expect(replay.recalculationJob.id).toBe(saved.recalculationJob.id);
+    expect(replay.activatedMealPlan?.id).toBe(background.activatedMealPlan?.id);
+    expect(afterReplay.mealPlans).toEqual(committed.mealPlans);
+    expect(afterReplay.idempotencyRecords.filter(
+      (record) => record.operation === 'retryPendingRecalculation'
+    )).toHaveLength(1);
+    await expect(harness.service.retryPendingRecalculation('user-a', {
+      ...retryCommand,
+      payload: { recalculationJobId: 'different-job-id' }
+    })).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
+  });
+
+  test('does not claim retry success when recording a background pending candidate fails and permits retry', async () => {
+    const control = createControlledRepository();
+    const baseProviders = fixtureProviders();
+    const harness = createHarness({
+      repository: control.repository,
+      providers: baseProviders
+    });
+    await prepareGeneratedPlan(harness);
+    await harness.service.setMealPlanDayLock('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'lock-before-background-candidate',
+      payload: { businessDate: '2026-08-20', locked: true }
+    });
+    harness.setProviders({
+      ...baseProviders,
+      menus: {
+        getActiveCatalog: () => Promise.reject(new Error('offline')),
+        getMenuByVersionId: (id) => baseProviders.menus.getMenuByVersionId(id)
+      }
+    });
+    const saved = await harness.service.saveTrainingPlan('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'training-save-background-candidate',
+      payload: {
+        weekStartDate: WEEK_START,
+        businessTimezone: 'Asia/Shanghai',
+        sessions: [{
+          businessDate: '2026-08-20',
+          sessionCode: '02054',
+          durationMinutes: 60
+        }]
+      }
+    });
+    const failed = await control.inner.read('user-a');
+    const retryCommand = {
+      expectedVersion: failed.recalculationJobs.length,
+      idempotencyKey: 'retry-after-background-candidate',
+      payload: { recalculationJobId: saved.recalculationJob.id }
+    } as const;
+    harness.setProviders(baseProviders);
+
+    control.blockNextRead();
+    const retry = harness.service.retryPendingRecalculation('user-a', retryCommand);
+    await control.waitForBlockedRead();
+    const background = await harness.service.processTrainingPlanChanged(
+      'user-a',
+      saved.recalculationJob.triggerEventId
+    );
+    const afterBackground = await control.inner.read('user-a');
+    expect(background.recalculationJob.status).toBe('pending');
+    expect(background.candidateMealPlan?.readiness).toBe('pending_confirmation');
+
+    control.failNextTransactionBeforeCommit();
+    control.releaseBlockedRead();
+    await expect(retry).rejects.toThrow('simulated retry record transaction failure');
+    const afterFailure = await control.inner.read('user-a');
+
+    expect(afterFailure).toEqual(afterBackground);
+    expect(afterFailure.idempotencyRecords.some(
+      (record) => record.operation === 'retryPendingRecalculation'
+    )).toBe(false);
+
+    const retried = await harness.service.retryPendingRecalculation('user-a', retryCommand);
+    const afterRetry = await control.inner.read('user-a');
+    expect(retried.candidateMealPlan?.id).toBe(background.candidateMealPlan?.id);
+    expect(afterRetry.mealPlans).toEqual(afterBackground.mealPlans);
+    expect(afterRetry.dailyNutritionTargets).toEqual(afterBackground.dailyNutritionTargets);
+    expect(afterRetry.recalculationJobs).toEqual(afterBackground.recalculationJobs);
+    expect(afterRetry.mealPlanDecisions).toEqual(afterBackground.mealPlanDecisions);
+    expect(afterRetry.idempotencyRecords.filter(
+      (record) => record.operation === 'retryPendingRecalculation'
+    )).toHaveLength(1);
   });
 
   test('active inventory changing while provider records load returns version_conflict with no meal write', async () => {

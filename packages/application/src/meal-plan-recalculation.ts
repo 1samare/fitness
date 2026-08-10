@@ -359,6 +359,24 @@ export function createMealPlanRecalculationService(
     });
   }
 
+  async function commitExistingJobResult(
+    userId: string,
+    jobId: string,
+    retryCommit: RetryCommitContext
+  ): Promise<RecalculationResult> {
+    return repository.transact(userId, (state) => {
+      const job = findById(state.recalculationJobs, jobId);
+      if (
+        job === null
+        || (job.status !== 'completed' && job.candidateMealPlanVersionId === null)
+      ) {
+        throw new CandidateNotPendingError(jobId);
+      }
+      const nextState = withRetryIdempotencyRecord(state, job.id, retryCommit);
+      return { nextState, result: resultForJob(nextState, job) };
+    });
+  }
+
   async function processRecalculationJob(
     userId: string,
     jobId: string,
@@ -368,7 +386,9 @@ export function createMealPlanRecalculationService(
     const initialJob = findById(initialState.recalculationJobs, jobId);
     if (initialJob === null) throw new PlanningPrerequisiteError('daily_nutrition_targets');
     if (initialJob.status === 'completed' || initialJob.candidateMealPlanVersionId !== null) {
-      return resultForJob(initialState, initialJob);
+      return retryCommit === undefined
+        ? resultForJob(initialState, initialJob)
+        : commitExistingJobResult(userId, initialJob.id, retryCommit);
     }
     if (initialJob.affectedDates.length === 0 || initialState.activeMealPlanVersionId === null) {
       return completeEmptyJob(userId, initialJob.id, retryCommit);
@@ -1040,7 +1060,13 @@ export function createMealPlanRecalculationService(
         );
       }
       const job = findById(initialState.recalculationJobs, envelope.payload.recalculationJobId);
-      if (job === null || job.status !== 'failed_retryable' || job.candidateMealPlanVersionId !== null) {
+      const hasExistingResult = job !== null && (
+        job.status === 'completed' || job.candidateMealPlanVersionId !== null
+      );
+      const canStartRetry = job !== null
+        && job.status === 'failed_retryable'
+        && job.candidateMealPlanVersionId === null;
+      if (job === null || (!hasExistingResult && !canStartRetry)) {
         throw new CandidateNotPendingError(envelope.payload.recalculationJobId);
       }
       let processed: RecalculationResult;
