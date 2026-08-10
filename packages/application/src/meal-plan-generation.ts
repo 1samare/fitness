@@ -103,6 +103,38 @@ export interface ProviderSnapshot {
   readonly snapshots: readonly NutritionDataSnapshot[];
 }
 
+export function providerSnapshotToken(snapshot: ProviderSnapshot): string {
+  return JSON.stringify({
+    catalog: [
+      snapshot.catalog.id,
+      snapshot.catalog.datasetVersion,
+      snapshot.catalog.sourceId,
+      [...snapshot.catalog.dailyMenuTemplateVersionIds].sort()
+    ],
+    menus: [...snapshot.menus]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((menu) => [menu.id, menu.datasetVersion, menu.sourceId]),
+    recipes: [...snapshot.recipes]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((recipe) => [
+        recipe.id,
+        recipe.version,
+        recipe.datasetVersion,
+        recipe.sourceId
+      ]),
+    nutritionSnapshots: [...snapshot.snapshots]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((nutrition) => [
+        nutrition.id,
+        nutrition.snapshotVersion,
+        nutrition.datasetVersion,
+        nutrition.sourceId,
+        nutrition.sourceRecordId,
+        nutrition.provider
+      ])
+  });
+}
+
 function findById<T extends { readonly id: string }>(values: readonly T[], id: string | null): T | null {
   if (id === null) return null;
   return values.find((value) => value.id === id) ?? null;

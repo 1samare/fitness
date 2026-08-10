@@ -4,5 +4,6 @@ export * from './meal-plan-editing';
 export * from './meal-plan-generation';
 export * from './meal-plan-recalculation';
 export * from './preview-daily-energy';
+export * from './planning-errors';
 export * from './training-plan-change';
 export * from './versioned-planning';

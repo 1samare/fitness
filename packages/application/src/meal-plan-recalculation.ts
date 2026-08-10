@@ -20,6 +20,7 @@ import {
   ProviderUnavailableError,
   generationPrerequisites,
   loadProviderSnapshot,
+  providerSnapshotToken,
   type MealPlanGenerationServiceDependencies
 } from './meal-plan-generation';
 import { PastFactImmutableError, createMealPlanEditingService } from './meal-plan-editing';
@@ -90,6 +91,7 @@ interface RecalculationCompareToken {
   readonly inventoryVersionId: string;
   readonly activeMealPlanVersionId: string;
   readonly dailyNutritionTargetVersionIds: readonly string[];
+  readonly providerSnapshotToken: string;
 }
 
 interface RecalculationPrerequisites {
@@ -107,6 +109,11 @@ interface RecordedFact {
   readonly dailyEnergyTargets: readonly DailyEnergyTargetVersion[];
   readonly dailyNutritionTargets: readonly DailyNutritionTargetVersion[];
   readonly recalculationJob: RecalculationJob | null;
+}
+
+interface RetryCommitContext {
+  readonly idempotencyKey: string;
+  readonly requestFingerprint: string;
 }
 
 function findById<T extends { readonly id: string }>(
@@ -208,7 +215,8 @@ export function analyzeMealPlanRecalculation(input: {
 
 function prerequisitesForJob(
   state: PlanningAggregateState,
-  job: RecalculationJob
+  job: RecalculationJob,
+  activeProviderSnapshotToken: string
 ): RecalculationPrerequisites {
   const triggerPlanId = job.triggerType === 'training_plan_changed'
     ? state.outboxEvents.find((event) => event.eventId === job.triggerEventId)?.trainingPlanVersionId
@@ -232,7 +240,8 @@ function prerequisitesForJob(
       trainingPlanVersionId: prerequisites.trainingPlan.id,
       inventoryVersionId: prerequisites.inventory.id,
       activeMealPlanVersionId: previousMealPlan.id,
-      dailyNutritionTargetVersionIds: prerequisites.targets.map((target) => target.id)
+      dailyNutritionTargetVersionIds: prerequisites.targets.map((target) => target.id),
+      providerSnapshotToken: activeProviderSnapshotToken
     }
   };
 }
@@ -246,6 +255,7 @@ function compareTokensEqual(
     && left.trainingPlanVersionId === right.trainingPlanVersionId
     && left.inventoryVersionId === right.inventoryVersionId
     && left.activeMealPlanVersionId === right.activeMealPlanVersionId
+    && left.providerSnapshotToken === right.providerSnapshotToken
     && left.dailyNutritionTargetVersionIds.length === right.dailyNutritionTargetVersionIds.length
     && left.dailyNutritionTargetVersionIds.every(
       (id, index) => id === right.dailyNutritionTargetVersionIds[index]
@@ -271,6 +281,26 @@ function statusForResult(result: RecalculationResult): RecordedTrainingCompletio
   if (result.recalculationJob.status === 'failed_retryable') return 'failed_retryable';
   if (result.candidateMealPlan !== null) return 'pending_confirmation';
   return 'completed';
+}
+
+function withRetryIdempotencyRecord(
+  state: PlanningAggregateState,
+  jobId: string,
+  context: RetryCommitContext | undefined
+): PlanningAggregateState {
+  if (context === undefined) return state;
+  const existing = findRecord(state, 'retryPendingRecalculation', context.idempotencyKey);
+  if (existing !== undefined) {
+    assertReplay(existing, context.requestFingerprint, context.idempotencyKey);
+    return state;
+  }
+  const record: IdempotencyRecord = {
+    operation: 'retryPendingRecalculation',
+    key: context.idempotencyKey,
+    requestFingerprint: context.requestFingerprint,
+    resultVersionId: jobId
+  };
+  return { ...state, idempotencyRecords: [...state.idempotencyRecords, record] };
 }
 
 export function createMealPlanRecalculationService(
@@ -304,13 +334,15 @@ export function createMealPlanRecalculationService(
 
   async function completeEmptyJob(
     userId: string,
-    jobId: string
+    jobId: string,
+    retryCommit?: RetryCommitContext
   ): Promise<RecalculationResult> {
     return repository.transact(userId, (state) => {
       const job = findById(state.recalculationJobs, jobId);
       if (job === null) throw new PlanningPrerequisiteError('daily_nutrition_targets');
       if (job.status === 'completed') {
-        return { nextState: state, result: resultForJob(state, job) };
+        const replayState = withRetryIdempotencyRecord(state, job.id, retryCommit);
+        return { nextState: replayState, result: resultForJob(replayState, job) };
       }
       const completed: RecalculationJob = {
         ...job,
@@ -318,14 +350,19 @@ export function createMealPlanRecalculationService(
         completedAt: now(),
         failureCode: null
       };
-      const nextState = { ...state, recalculationJobs: replaceJob(state, completed) };
+      const nextState = withRetryIdempotencyRecord(
+        { ...state, recalculationJobs: replaceJob(state, completed) },
+        completed.id,
+        retryCommit
+      );
       return { nextState, result: resultForJob(nextState, completed) };
     });
   }
 
   async function processRecalculationJob(
     userId: string,
-    jobId: string
+    jobId: string,
+    retryCommit?: RetryCommitContext
   ): Promise<RecalculationResult> {
     const initialState = await repository.read(userId);
     const initialJob = findById(initialState.recalculationJobs, jobId);
@@ -334,14 +371,20 @@ export function createMealPlanRecalculationService(
       return resultForJob(initialState, initialJob);
     }
     if (initialJob.affectedDates.length === 0 || initialState.activeMealPlanVersionId === null) {
-      return completeEmptyJob(userId, initialJob.id);
+      return completeEmptyJob(userId, initialJob.id, retryCommit);
     }
 
-    const initial = prerequisitesForJob(initialState, initialJob);
     const providerSnapshot = await loadProviderSnapshot(dependencies.providers);
+    const initial = prerequisitesForJob(
+      initialState,
+      initialJob,
+      providerSnapshotToken(providerSnapshot)
+    );
     const targetsByDate = new Map(initial.targets.map((target) => [target.businessDate, target.id]));
     const analysis = analyzeMealPlanRecalculation({
-      previousDays: initial.previousMealPlan.days,
+      previousDays: initial.previousMealPlan.weekStartDate === initial.trainingPlan.payload.weekStartDate
+        ? initial.previousMealPlan.days
+        : [],
       affectedDates: initialJob.affectedDates,
       proposedTargetVersionIdsByDate: targetsByDate
     });
@@ -361,14 +404,20 @@ export function createMealPlanRecalculationService(
     if (generated.kind === 'infeasible') {
       throw new NutritionConstraintsInfeasibleError(generated.conflicts);
     }
+    const commitProviderSnapshot = await loadProviderSnapshot(dependencies.providers);
+    const commitProviderSnapshotToken = providerSnapshotToken(commitProviderSnapshot);
+    if (commitProviderSnapshotToken !== initial.compareToken.providerSnapshotToken) {
+      throw new VersionConflictError(initialState.mealPlans.length, initialState.mealPlans.length);
+    }
 
     return repository.transact(userId, (state) => {
       const job = findById(state.recalculationJobs, jobId);
       if (job === null) throw new PlanningPrerequisiteError('daily_nutrition_targets');
       if (job.status === 'completed' || job.candidateMealPlanVersionId !== null) {
-        return { nextState: state, result: resultForJob(state, job) };
+        const replayState = withRetryIdempotencyRecord(state, job.id, retryCommit);
+        return { nextState: replayState, result: resultForJob(replayState, job) };
       }
-      const current = prerequisitesForJob(state, job);
+      const current = prerequisitesForJob(state, job, commitProviderSnapshotToken);
       if (!compareTokensEqual(initial.compareToken, current.compareToken)) {
         throw new VersionConflictError(state.mealPlans.length, state.mealPlans.length);
       }
@@ -406,7 +455,7 @@ export function createMealPlanRecalculationService(
         activatedMealPlanVersionId: pendingConfirmation ? null : mealPlan.id,
         failureCode: null
       };
-      const nextState: PlanningAggregateState = {
+      const nextState = withRetryIdempotencyRecord({
         ...state,
         mealPlans: [...state.mealPlans, mealPlan],
         mealPlanTargetDiffs: [...state.mealPlanTargetDiffs, ...diffs],
@@ -414,7 +463,7 @@ export function createMealPlanRecalculationService(
         activeMealPlanVersionId: pendingConfirmation
           ? state.activeMealPlanVersionId
           : mealPlan.id
-      };
+      }, completedJob.id, retryCommit);
       return { nextState, result: resultForJob(nextState, completedJob) };
     });
   }
@@ -835,7 +884,6 @@ export function createMealPlanRecalculationService(
         });
       }
 
-      const initial = prerequisitesForJob(initialState, job);
       let providerSnapshot: Awaited<ReturnType<typeof loadProviderSnapshot>>;
       try {
         providerSnapshot = await loadProviderSnapshot(dependencies.providers);
@@ -845,6 +893,11 @@ export function createMealPlanRecalculationService(
         }
         throw error;
       }
+      const initial = prerequisitesForJob(
+        initialState,
+        job,
+        providerSnapshotToken(providerSnapshot)
+      );
       const affected = new Set(job.affectedDates);
       const generated = generateWeeklyMealPlan({
         weekStartDate: initial.trainingPlan.payload.weekStartDate,
@@ -863,6 +916,20 @@ export function createMealPlanRecalculationService(
         await markJobRetryable(userId, job.id, 'nutrition_constraints_infeasible');
         throw new NutritionConstraintsInfeasibleError(generated.conflicts);
       }
+      let commitProviderSnapshotToken: string;
+      try {
+        commitProviderSnapshotToken = providerSnapshotToken(
+          await loadProviderSnapshot(dependencies.providers)
+        );
+      } catch (error: unknown) {
+        if (error instanceof ProviderUnavailableError) {
+          await markJobRetryable(userId, job.id, 'provider_unavailable');
+        }
+        throw error;
+      }
+      if (commitProviderSnapshotToken !== initial.compareToken.providerSnapshotToken) {
+        throw new VersionConflictError(initialState.mealPlans.length, initialState.mealPlans.length);
+      }
       try {
         return await repository.transact(userId, (state) => {
           if (state.mealPlanDecisions.length !== envelope.expectedVersion) {
@@ -880,7 +947,7 @@ export function createMealPlanRecalculationService(
             || currentCandidate.readiness !== 'pending_confirmation'
             || state.activeMealPlanVersionId !== previous.id
           ) throw new CandidateNotPendingError(candidate.id);
-          const current = prerequisitesForJob(state, currentJob);
+          const current = prerequisitesForJob(state, currentJob, commitProviderSnapshotToken);
           if (!compareTokensEqual(initial.compareToken, current.compareToken)) {
             throw new VersionConflictError(state.mealPlans.length, state.mealPlans.length);
           }
@@ -978,7 +1045,10 @@ export function createMealPlanRecalculationService(
       }
       let processed: RecalculationResult;
       try {
-        processed = await processRecalculationJob(userId, job.id);
+        processed = await processRecalculationJob(userId, job.id, {
+          idempotencyKey: envelope.idempotencyKey,
+          requestFingerprint: expectedFingerprint
+        });
       } catch (error: unknown) {
         if (error instanceof ProviderUnavailableError) {
           await markJobRetryable(userId, job.id, 'provider_unavailable');
@@ -987,30 +1057,6 @@ export function createMealPlanRecalculationService(
         }
         throw error;
       }
-      await repository.transact(userId, (state) => {
-        const concurrentReplay = findRecord(
-          state,
-          'retryPendingRecalculation',
-          envelope.idempotencyKey
-        );
-        if (concurrentReplay !== undefined) {
-          assertReplay(concurrentReplay, expectedFingerprint, envelope.idempotencyKey);
-          return { nextState: state, result: undefined };
-        }
-        const record: IdempotencyRecord = {
-          operation: 'retryPendingRecalculation',
-          key: envelope.idempotencyKey,
-          requestFingerprint: expectedFingerprint,
-          resultVersionId: job.id
-        };
-        return {
-          nextState: {
-            ...state,
-            idempotencyRecords: [...state.idempotencyRecords, record]
-          },
-          result: undefined
-        };
-      });
       return processed;
     }
   };

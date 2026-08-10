@@ -20,6 +20,7 @@ import type {
 import { businessDateAt } from './business-time';
 import { requestFingerprint } from './idempotency-fingerprint';
 import { previewDailyEnergy } from './preview-daily-energy';
+import { PastFactImmutableError } from './planning-errors';
 import { affectedTrainingDates } from './training-plan-change';
 
 export interface PlanningRepository {
@@ -338,6 +339,11 @@ function appendTrainingPlan(
   const isSameWeek = previous?.payload.weekStartDate === payload.weekStartDate;
   const previousSessions = isSameWeek ? previous.payload.sessions : [];
   const changedDates = affectedTrainingDates(previousSessions, payload.sessions, weekDates);
+  const completedDates = new Set(
+    state.trainingCompletionEvents.map((completion) => completion.businessDate)
+  );
+  const immutableFactDate = changedDates.find((date) => completedDates.has(date));
+  if (immutableFactDate !== undefined) throw new PastFactImmutableError(immutableFactDate);
   assertChangedDatesEligible(changedDates, eligibleDates, goal);
   const affectedDates = isSameWeek
     ? affectedTrainingDates(previousSessions, payload.sessions, eligibleDates)

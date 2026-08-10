@@ -42,6 +42,8 @@ import {
   type MealPlanGenerationServiceDependencies,
   type MealPlanningProviders
 } from './meal-plan-generation';
+import { PastFactImmutableError } from './planning-errors';
+export { PastFactImmutableError } from './planning-errors';
 import {
   IdempotencyKeyReuseError,
   PlanningPrerequisiteError,
@@ -63,15 +65,6 @@ export interface SelectableRecipeOption {
 }
 
 export type MealPlanEditingServiceDependencies = MealPlanGenerationServiceDependencies;
-
-export class PastFactImmutableError extends Error {
-  public readonly code = 'past_fact_immutable' as const;
-
-  public constructor(public readonly businessDate: string) {
-    super(`Meal plan facts on or before the current business date are immutable: ${businessDate}`);
-    this.name = 'PastFactImmutableError';
-  }
-}
 
 export class RecipeNotSelectableError extends Error {
   public readonly code = 'recipe_not_selectable' as const;

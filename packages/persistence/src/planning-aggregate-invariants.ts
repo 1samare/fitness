@@ -378,6 +378,9 @@ function changedTargetDates(
   plan: MealPlanVersion,
   previousPlan: MealPlanVersion
 ): Set<string> {
+  if (plan.weekStartDate !== previousPlan.weekStartDate) {
+    return new Set(plan.days.map((day) => day.businessDate));
+  }
   const previousDays = new Map(
     previousPlan.days.map((day) => [day.businessDate, day])
   );
