@@ -280,6 +280,38 @@ async function createCandidateJobState(changedTargetCount = 1) {
   return validState;
 }
 
+async function createCandidateJobStateWithUnprotectedSecondDayChange() {
+  const state = await createCandidateJobState(2);
+  const previous = state.mealPlans[0];
+  const candidate = state.mealPlans[1];
+  const secondDay = previous?.days[1];
+  if (
+    previous === undefined
+    || candidate === undefined
+    || secondDay === undefined
+  ) {
+    throw new Error('Expected second meal plan day fixture');
+  }
+  const validState: PlanningAggregateState = {
+    ...state,
+    mealPlans: [previous, candidate].map((plan) => ({
+      ...plan,
+      days: plan.days.map((day) => (
+        day.businessDate === secondDay.businessDate
+          ? { ...day, locked: false }
+          : day
+      ))
+    })),
+    mealPlanTargetDiffs: state.mealPlanTargetDiffs.filter(
+      (diff) => diff.businessDate !== secondDay.businessDate
+    )
+  };
+  expect(() => {
+    assertPlanningAggregateInvariants(validState, 'user-a');
+  }).not.toThrow();
+  return validState;
+}
+
 async function createCompletedCandidateJobState(
   decision: 'keep_existing' | 'overwrite_locked'
 ) {
@@ -597,14 +629,27 @@ describe('planning aggregate invariants', () => {
     }
   );
 
-  test('rejects an extra diff for a protected day whose target did not change', async () => {
-    const state = await createCandidateJobState();
+  test('rejects an extra diff for an unprotected changed day', async () => {
+    const state = await createCandidateJobStateWithUnprotectedSecondDayChange();
     const previous = state.mealPlans[0];
     const candidate = state.mealPlans[1];
     const secondPreviousDay = previous?.days[1];
-    if (previous === undefined || candidate === undefined || secondPreviousDay === undefined) {
+    const secondCandidateDay = candidate?.days[1];
+    if (
+      previous === undefined
+      || candidate === undefined
+      || secondPreviousDay === undefined
+      || secondCandidateDay === undefined
+    ) {
       throw new Error('Expected extra diff fixture');
     }
+    expect(secondPreviousDay.locked || secondPreviousDay.manuallyModified).toBe(false);
+    expect(secondCandidateDay.dailyNutritionTargetVersionId).not.toBe(
+      secondPreviousDay.dailyNutritionTargetVersionId
+    );
+    expect(state.dailyNutritionTargets.some(
+      (target) => target.id === secondCandidateDay.dailyNutritionTargetVersionId
+    )).toBe(true);
     expectCorrupt({
       ...state,
       mealPlanTargetDiffs: [
@@ -615,7 +660,7 @@ describe('planning aggregate invariants', () => {
           candidateMealPlanVersionId: candidate.id,
           businessDate: secondPreviousDay.businessDate,
           previousNutritionTargetVersionId: secondPreviousDay.dailyNutritionTargetVersionId,
-          proposedNutritionTargetVersionId: secondPreviousDay.dailyNutritionTargetVersionId,
+          proposedNutritionTargetVersionId: secondCandidateDay.dailyNutritionTargetVersionId,
           reason: 'locked_or_manually_modified'
         }
       ]
