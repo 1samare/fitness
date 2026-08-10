@@ -46,6 +46,35 @@ class FakeDatabase implements CloudBaseDatabase, CloudBaseTransaction {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function replaceStoredFingerprint(
+  database: FakeDatabase,
+  documentKey: string,
+  requestFingerprint: string
+): void {
+  const document = database.documents.get(documentKey);
+  if (!isRecord(document) || !isRecord(document.state)) {
+    throw new Error('Expected a stored planning document');
+  }
+  const records = document.state.idempotencyRecords;
+  if (!Array.isArray(records) || records.length !== 1 || !isRecord(records[0])) {
+    throw new Error('Expected one stored idempotency record');
+  }
+  database.documents.set(documentKey, {
+    ...document,
+    state: {
+      ...document.state,
+      idempotencyRecords: [{
+        ...records[0],
+        requestFingerprint
+      }]
+    }
+  });
+}
+
 describe('CloudBasePlanningRepository', () => {
   test('initializes missing state without the Node 17 structuredClone global', async () => {
     vi.stubGlobal('structuredClone', undefined);
@@ -109,6 +138,45 @@ describe('CloudBasePlanningRepository', () => {
     await expect(repository.read('wx-openid-a')).rejects.toBeInstanceOf(
       CorruptPlanningStateError
     );
+  });
+
+  test.each([
+    '{"weightKg":70}',
+    `v1:sha256:${'a'.repeat(64)}`,
+    `v2:sha256:${'A'.repeat(64)}`,
+    `v2:sha256:${'a'.repeat(63)}`
+  ])('fails closed for a malformed stored idempotency fingerprint: %s', async (fingerprint) => {
+    const database = new FakeDatabase();
+    const repository = new CloudBasePlanningRepository(database);
+    const service = createVersionedPlanningService({
+      repository,
+      now: () => '2026-08-03T08:00:00.000Z',
+      nextId: (prefix) => `${prefix}-1`
+    });
+    const userId = 'wx-openid-a';
+    await service.saveBodyProfile(userId, {
+      expectedVersion: 0,
+      idempotencyKey: 'profile-create-001',
+      payload: {
+        ageYears: 30,
+        sexCode: 0,
+        heightCm: 175,
+        weightKg: 70,
+        healthScopeConfirmed: true,
+        nonTrainingActivity: 'light',
+        allergens: [],
+        avoidFoods: [],
+        dietPreferences: [],
+        businessTimezone: 'Asia/Shanghai'
+      }
+    });
+    replaceStoredFingerprint(
+      database,
+      `planning_user_states/${repository.documentIdForUser(userId)}`,
+      fingerprint
+    );
+
+    await expect(repository.read(userId)).rejects.toBeInstanceOf(CorruptPlanningStateError);
   });
 
   test('fails closed when a stored version belongs to another user', async () => {

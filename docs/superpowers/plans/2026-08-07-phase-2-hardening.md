@@ -885,7 +885,7 @@ Run the documented CloudBase CLI deployment against `.build/cloudfunctions/plann
 
 Apply `cloudbase/database.rules.json` and `cloudbase/function.rules.json` through the authenticated CloudBase console. Capture rule publication timestamps in the local acceptance record; do not store account names, OpenID, tokens, cookies, or screenshots containing personal data in Git.
 
-- [ ] **Step 6: Complete account A cloud acceptance**
+- [x] **Step 6: Complete account A cloud acceptance**
 
 In the developer/preview build, use account A to:
 
@@ -898,15 +898,40 @@ In the developer/preview build, use account A to:
 
 Record only anonymous labels (`user-A`) and version/event IDs that contain no OpenID.
 
-- [ ] **Step 7: Complete account B isolation when the second微信 is added**
+Account A acceptance completed on 2026-08-10 against the replaced Node.js 20
+function. Privacy-preserving client and console checks confirmed authenticated
+read, exact idempotent replay, changed-payload key rejection, stale-version
+rejection, all five target references, one-date recalculation for a cancelled
+future session, and the matching pending outbox event. No personal value or
+identifier is stored in Git.
+
+- [x] **Step 7: Complete account B isolation when the second微信 is added**
 
 Add the second微信 as an experience member, open the same build, and confirm its current context is empty before it writes. Then create its own setup and confirm account A still sees only A's versions. Record pass/fail with anonymous labels.
 
 If account B is not yet available, leave this checkbox open and state that code, deployment, and single-account acceptance are complete but full Phase 2 cloud acceptance is not.
 
-- [ ] **Step 8: Final completion audit**
+Account B isolation completed on 2026-08-10. An anonymous pre-write count showed
+only account A's aggregate. After account B's first setup, sanitized console
+checks showed two distinct owners with no mixed records: account A remained at
+profile/goal/plan counts `1/1/2` and account B started at `1/1/1`. Account A's
+authenticated post-write read still returned its own `1/1/2` chain and seven
+current targets; a client-selected `userId` was rejected.
+
+- [x] **Step 8: Final completion audit**
 
 Map every approved spec section to authoritative evidence: tests for behavior, Git SHAs for submitted code, CLI output for deployment, console evidence for rules, and two-device behavior for isolation. Only when every item—including Step 7—has evidence may the active goal be marked complete.
+
+Final audit completed on 2026-08-10. All implementation task checkboxes are
+backed by the focused tests and remote commits listed in this plan; the complete
+gate passes 24 test files / 135 tests plus lint, typecheck, build, deploy-package
+dry-run, and a sequential API smoke test. Developer Tools reports the deployed
+function Active on `Nodejs20.19` with timeout 5. The published database/function
+rules, account-A behavior, exact outbox change set, and two-owner isolation were
+verified in the authorized development environment. Final review additionally
+hardened stored idempotency fingerprints to the required versioned SHA-256
+format and added fail-closed regression coverage. Local AppID/environment
+configuration remains unstaged and excluded from Git.
 
 After all evidence exists, check off the remaining Task 9 steps, stage only this plan, commit, and push:
 

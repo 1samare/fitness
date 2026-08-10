@@ -257,29 +257,31 @@ const storedTrainingPlanChangedEventSchema = z.object({
   status: z.literal('pending')
 }).strict();
 
+const requestFingerprintSchema = z.string().regex(/^v2:sha256:[0-9a-f]{64}$/);
+
 const idempotencyRecordSchema = z.discriminatedUnion('operation', [
   z.object({
     operation: z.literal('saveBodyProfile'),
     key: z.string().min(1),
-    requestFingerprint: z.string().min(1),
+    requestFingerprint: requestFingerprintSchema,
     resultVersionId: z.string().min(1)
   }).strict(),
   z.object({
     operation: z.literal('saveGoal'),
     key: z.string().min(1),
-    requestFingerprint: z.string().min(1),
+    requestFingerprint: requestFingerprintSchema,
     resultVersionId: z.string().min(1)
   }).strict(),
   z.object({
     operation: z.literal('saveTrainingPlan'),
     key: z.string().min(1),
-    requestFingerprint: z.string().min(1),
+    requestFingerprint: requestFingerprintSchema,
     resultVersionId: z.string().min(1)
   }).strict(),
   z.object({
     operation: z.literal('completePlanningSetup'),
     key: z.string().min(1),
-    requestFingerprint: z.string().min(1),
+    requestFingerprint: requestFingerprintSchema,
     resultVersionIds: z.object({
       bodyProfileVersionId: z.string().min(1),
       goalVersionId: z.string().min(1),
