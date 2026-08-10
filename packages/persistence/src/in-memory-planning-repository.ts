@@ -7,11 +7,19 @@ const emptyState: PlanningAggregateState = {
   trainingPlans: [],
   dailyEnergyTargets: [],
   dailyNutritionTargets: [],
+  inventories: [],
+  mealPlans: [],
+  mealPlanTargetDiffs: [],
+  mealPlanDecisions: [],
+  trainingCompletionEvents: [],
+  recalculationJobs: [],
   outboxEvents: [],
   idempotencyRecords: [],
   activeBodyProfileVersionId: null,
   activeGoalVersionId: null,
-  activeTrainingPlanVersionId: null
+  activeTrainingPlanVersionId: null,
+  activeInventoryVersionId: null,
+  activeMealPlanVersionId: null
 };
 
 function copyState(state: PlanningAggregateState): PlanningAggregateState {

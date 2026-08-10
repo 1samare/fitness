@@ -5,6 +5,14 @@ import type {
   SexCode
 } from './daily-energy';
 import type { NutritionTargetResult } from './nutrition-target';
+import type {
+  InventoryVersion,
+  MealPlanDecision,
+  MealPlanTargetDiff,
+  MealPlanVersion,
+  RecalculationJob,
+  TrainingCompletionEvent
+} from './meal-planning';
 
 export interface BodyProfilePayload {
   readonly ageYears: number;
@@ -91,10 +99,17 @@ export interface LatestPlanningVersions {
   readonly bodyProfile: number;
   readonly goal: number;
   readonly trainingPlan: number;
+  readonly inventory: number;
+  readonly mealPlan: number;
+  readonly mealPlanDecision: number;
+  readonly trainingCompletion: number;
 }
 
 export interface CompletePlanningSetupCommand {
-  readonly expectedVersions: LatestPlanningVersions;
+  readonly expectedVersions: Pick<
+    LatestPlanningVersions,
+    'bodyProfile' | 'goal' | 'trainingPlan'
+  >;
   readonly idempotencyKey: string;
   readonly bodyProfile: BodyProfilePayload;
   readonly goal: GoalPayload;
@@ -118,27 +133,33 @@ export type PlanningWriteOperation =
   | 'saveBodyProfile'
   | 'saveGoal'
   | 'saveTrainingPlan'
-  | 'completePlanningSetup';
+  | 'completePlanningSetup'
+  | 'saveInventory'
+  | 'generateWeeklyMealPlan'
+  | 'setMealPlanDayLock'
+  | 'updateMealPlanDay'
+  | 'recordTrainingCompletion'
+  | 'decideMealPlanCandidate'
+  | 'retryPendingRecalculation';
+
+type SingleResultIdempotencyRecord<TOperation extends PlanningWriteOperation> = {
+  readonly operation: TOperation;
+  readonly key: string;
+  readonly requestFingerprint: string;
+  readonly resultVersionId: string;
+};
 
 export type IdempotencyRecord =
-  | {
-      readonly operation: 'saveBodyProfile';
-      readonly key: string;
-      readonly requestFingerprint: string;
-      readonly resultVersionId: string;
-    }
-  | {
-      readonly operation: 'saveGoal';
-      readonly key: string;
-      readonly requestFingerprint: string;
-      readonly resultVersionId: string;
-    }
-  | {
-      readonly operation: 'saveTrainingPlan';
-      readonly key: string;
-      readonly requestFingerprint: string;
-      readonly resultVersionId: string;
-    }
+  | SingleResultIdempotencyRecord<'saveBodyProfile'>
+  | SingleResultIdempotencyRecord<'saveGoal'>
+  | SingleResultIdempotencyRecord<'saveTrainingPlan'>
+  | SingleResultIdempotencyRecord<'saveInventory'>
+  | SingleResultIdempotencyRecord<'generateWeeklyMealPlan'>
+  | SingleResultIdempotencyRecord<'setMealPlanDayLock'>
+  | SingleResultIdempotencyRecord<'updateMealPlanDay'>
+  | SingleResultIdempotencyRecord<'recordTrainingCompletion'>
+  | SingleResultIdempotencyRecord<'decideMealPlanCandidate'>
+  | SingleResultIdempotencyRecord<'retryPendingRecalculation'>
   | {
       readonly operation: 'completePlanningSetup';
       readonly key: string;
@@ -158,11 +179,19 @@ export interface PlanningAggregateState {
   readonly trainingPlans: readonly TrainingPlanVersion[];
   readonly dailyEnergyTargets: readonly DailyEnergyTargetVersion[];
   readonly dailyNutritionTargets: readonly DailyNutritionTargetVersion[];
+  readonly inventories: readonly InventoryVersion[];
+  readonly mealPlans: readonly MealPlanVersion[];
+  readonly mealPlanTargetDiffs: readonly MealPlanTargetDiff[];
+  readonly mealPlanDecisions: readonly MealPlanDecision[];
+  readonly trainingCompletionEvents: readonly TrainingCompletionEvent[];
+  readonly recalculationJobs: readonly RecalculationJob[];
   readonly outboxEvents: readonly TrainingPlanChangedEvent[];
   readonly idempotencyRecords: readonly IdempotencyRecord[];
   readonly activeBodyProfileVersionId: string | null;
   readonly activeGoalVersionId: string | null;
   readonly activeTrainingPlanVersionId: string | null;
+  readonly activeInventoryVersionId: string | null;
+  readonly activeMealPlanVersionId: string | null;
 }
 
 export interface CurrentPlanningContext {

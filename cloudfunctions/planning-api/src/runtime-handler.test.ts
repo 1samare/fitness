@@ -129,7 +129,11 @@ describe('runtime planning handler', () => {
       expect(current.data.latestVersions).toEqual({
         bodyProfile: 1,
         goal: 1,
-        trainingPlan: 1
+        trainingPlan: 1,
+        inventory: 0,
+        mealPlan: 0,
+        mealPlanDecision: 0,
+        trainingCompletion: 0
       });
       expect(current.data.dailyEnergyTargets).toHaveLength(7);
     }

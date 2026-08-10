@@ -205,7 +205,15 @@ describe('versioned planning service', () => {
       trainingPlan: null,
       dailyEnergyTargets: [],
       dailyNutritionTargets: [],
-      latestVersions: { bodyProfile: 0, goal: 0, trainingPlan: 0 }
+      latestVersions: {
+        bodyProfile: 0,
+        goal: 0,
+        trainingPlan: 0,
+        inventory: 0,
+        mealPlan: 0,
+        mealPlanDecision: 0,
+        trainingCompletion: 0
+      }
     });
   });
 
@@ -328,11 +336,19 @@ describe('versioned planning service', () => {
       trainingPlans: [],
       dailyEnergyTargets: [],
       dailyNutritionTargets: [],
+      inventories: [],
+      mealPlans: [],
+      mealPlanTargetDiffs: [],
+      mealPlanDecisions: [],
+      trainingCompletionEvents: [],
+      recalculationJobs: [],
       outboxEvents: [],
       idempotencyRecords: [],
       activeBodyProfileVersionId: null,
       activeGoalVersionId: null,
-      activeTrainingPlanVersionId: null
+      activeTrainingPlanVersionId: null,
+      activeInventoryVersionId: null,
+      activeMealPlanVersionId: null
     });
   });
 
@@ -370,7 +386,15 @@ describe('versioned planning service', () => {
       trainingPlan: null,
       dailyEnergyTargets: [],
       dailyNutritionTargets: [],
-      latestVersions: { bodyProfile: 2, goal: 1, trainingPlan: 1 }
+      latestVersions: {
+        bodyProfile: 2,
+        goal: 1,
+        trainingPlan: 1,
+        inventory: 0,
+        mealPlan: 0,
+        mealPlanDecision: 0,
+        trainingCompletion: 0
+      }
     });
   });
 
@@ -394,7 +418,15 @@ describe('versioned planning service', () => {
       trainingPlan: null,
       dailyEnergyTargets: [],
       dailyNutritionTargets: [],
-      latestVersions: { bodyProfile: 1, goal: 2, trainingPlan: 1 }
+      latestVersions: {
+        bodyProfile: 1,
+        goal: 2,
+        trainingPlan: 1,
+        inventory: 0,
+        mealPlan: 0,
+        mealPlanDecision: 0,
+        trainingCompletion: 0
+      }
     });
   });
 

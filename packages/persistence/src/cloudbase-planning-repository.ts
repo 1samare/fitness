@@ -18,11 +18,19 @@ function createEmptyState(): PlanningAggregateState {
     trainingPlans: [],
     dailyEnergyTargets: [],
     dailyNutritionTargets: [],
+    inventories: [],
+    mealPlans: [],
+    mealPlanTargetDiffs: [],
+    mealPlanDecisions: [],
+    trainingCompletionEvents: [],
+    recalculationJobs: [],
     outboxEvents: [],
     idempotencyRecords: [],
     activeBodyProfileVersionId: null,
     activeGoalVersionId: null,
-    activeTrainingPlanVersionId: null
+    activeTrainingPlanVersionId: null,
+    activeInventoryVersionId: null,
+    activeMealPlanVersionId: null
   };
 }
 
@@ -46,9 +54,20 @@ export interface CloudBaseDatabase extends CloudBaseTransaction {
 }
 
 interface StoredPlanningDocument {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly state: PlanningAggregateState;
 }
+
+const phase4Empty = {
+  inventories: [],
+  mealPlans: [],
+  mealPlanTargetDiffs: [],
+  mealPlanDecisions: [],
+  trainingCompletionEvents: [],
+  recalculationJobs: [],
+  activeInventoryVersionId: null,
+  activeMealPlanVersionId: null
+} as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -57,14 +76,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function decodeDocument(value: unknown, userId: string): PlanningAggregateState {
   if (
     !isRecord(value)
-    || (value.schemaVersion !== 2 && value.schemaVersion !== 3)
+    || (value.schemaVersion !== 2 && value.schemaVersion !== 3 && value.schemaVersion !== 4)
     || !isRecord(value.state)
   ) {
     throw new CorruptPlanningStateError();
   }
   const candidateState = value.schemaVersion === 2
-    ? { ...value.state, dailyNutritionTargets: [] }
-    : value.state;
+    ? { ...value.state, dailyNutritionTargets: [], ...phase4Empty }
+    : value.schemaVersion === 3
+      ? { ...value.state, ...phase4Empty }
+      : value.state;
   const parsed = planningAggregateStateSchema.safeParse(candidateState);
   if (!parsed.success) throw new CorruptPlanningStateError();
   assertPlanningAggregateInvariants(parsed.data, userId);
@@ -78,7 +99,7 @@ function encodeDocument(
   const parsed = planningAggregateStateSchema.safeParse(state);
   if (!parsed.success) throw new CorruptPlanningStateError();
   assertPlanningAggregateInvariants(parsed.data, userId);
-  return { schemaVersion: 3, state: parsed.data };
+  return { schemaVersion: 4, state: parsed.data };
 }
 
 export class CloudBasePlanningRepository implements PlanningRepository {

@@ -81,6 +81,16 @@ describe('CloudBasePlanningRepository', () => {
     try {
       const repository = new CloudBasePlanningRepository(new FakeDatabase());
 
+      await expect(repository.read('wx-openid-a')).resolves.toMatchObject({
+        inventories: [],
+        mealPlans: [],
+        mealPlanTargetDiffs: [],
+        mealPlanDecisions: [],
+        trainingCompletionEvents: [],
+        recalculationJobs: [],
+        activeInventoryVersionId: null,
+        activeMealPlanVersionId: null
+      });
       await expect(repository.transact('wx-openid-a', (state) => ({
         nextState: state,
         result: 'initialized'
@@ -122,7 +132,7 @@ describe('CloudBasePlanningRepository', () => {
     expect(database.documents).toHaveLength(1);
     expect(database.requestedKeys.join('|')).not.toContain('wx-openid-sensitive');
     expect([...database.documents.values()][0]).toEqual(expect.objectContaining({
-      schemaVersion: 3
+      schemaVersion: 4
     }));
   });
 
@@ -146,17 +156,61 @@ describe('CloudBasePlanningRepository', () => {
     });
 
     await expect(repository.read('wx-openid-a')).resolves.toMatchObject({
-      dailyNutritionTargets: []
+      dailyNutritionTargets: [],
+      inventories: [],
+      mealPlans: [],
+      mealPlanTargetDiffs: [],
+      mealPlanDecisions: [],
+      trainingCompletionEvents: [],
+      recalculationJobs: [],
+      activeInventoryVersionId: null,
+      activeMealPlanVersionId: null
     });
     expect(database.documents.get(documentKey)).not.toHaveProperty(
       'state.dailyNutritionTargets'
     );
     await repository.transact('wx-openid-a', (state) => ({ nextState: state, result: undefined }));
     const migrated = database.documents.get(documentKey);
-    expect(isRecord(migrated) ? migrated.schemaVersion : undefined).toBe(3);
+    expect(isRecord(migrated) ? migrated.schemaVersion : undefined).toBe(4);
     expect(isRecord(migrated) && isRecord(migrated.state)
       ? migrated.state.dailyNutritionTargets
       : undefined).toEqual([]);
+  });
+
+  test('migrates schema v3 to empty phase-4 state without mutating the stored input', async () => {
+    const database = new FakeDatabase();
+    const repository = new CloudBasePlanningRepository(database);
+    const documentKey = `planning_user_states/${repository.documentIdForUser('wx-openid-a')}`;
+    const stored = {
+      schemaVersion: 3,
+      state: {
+        bodyProfiles: [],
+        goals: [],
+        trainingPlans: [],
+        dailyEnergyTargets: [],
+        dailyNutritionTargets: [],
+        outboxEvents: [],
+        idempotencyRecords: [],
+        activeBodyProfileVersionId: null,
+        activeGoalVersionId: null,
+        activeTrainingPlanVersionId: null
+      }
+    };
+    const before = structuredClone(stored);
+    database.documents.set(documentKey, stored);
+
+    await expect(repository.read('wx-openid-a')).resolves.toMatchObject({
+      inventories: [],
+      mealPlans: [],
+      mealPlanTargetDiffs: [],
+      mealPlanDecisions: [],
+      trainingCompletionEvents: [],
+      recalculationJobs: [],
+      activeInventoryVersionId: null,
+      activeMealPlanVersionId: null
+    });
+    expect(stored).toEqual(before);
+    expect(database.documents.get(documentKey)).toEqual(before);
   });
 
   test('fails closed instead of replacing a corrupt stored state', async () => {
@@ -249,19 +303,22 @@ describe('CloudBasePlanningRepository', () => {
     );
   });
 
-  test('rejects schema version 1 without attempting an implicit migration', async () => {
+  test.each([1, 5])(
+    'rejects schema version %s without attempting an implicit migration',
+    async (schemaVersion) => {
     const database = new FakeDatabase();
     const repository = new CloudBasePlanningRepository(database);
     const documentId = repository.documentIdForUser('wx-openid-a');
     database.documents.set(`planning_user_states/${documentId}`, {
-      schemaVersion: 1,
+      schemaVersion,
       state: {}
     });
 
     await expect(repository.read('wx-openid-a')).rejects.toBeInstanceOf(
       CorruptPlanningStateError
     );
-  });
+    }
+  );
 
   test('validates semantic invariants before writing the next state', async () => {
     const database = new FakeDatabase();

@@ -172,7 +172,11 @@ describe('handlePlanningApi', () => {
       expect(current.data.latestVersions).toEqual({
         bodyProfile: 1,
         goal: 1,
-        trainingPlan: 1
+        trainingPlan: 1,
+        inventory: 0,
+        mealPlan: 0,
+        mealPlanDecision: 0,
+        trainingCompletion: 0
       });
       expect(current.data.dailyNutritionTargets).toHaveLength(7);
     }
@@ -274,7 +278,15 @@ describe('handlePlanningApi', () => {
         trainingPlan: null,
         dailyEnergyTargets: [],
         dailyNutritionTargets: [],
-        latestVersions: { bodyProfile: 0, goal: 0, trainingPlan: 0 }
+        latestVersions: {
+          bodyProfile: 0,
+          goal: 0,
+          trainingPlan: 0,
+          inventory: 0,
+          mealPlan: 0,
+          mealPlanDecision: 0,
+          trainingCompletion: 0
+        }
       }
     });
   });

@@ -760,7 +760,11 @@ export function createVersionedPlanningService(
         latestVersions: {
           bodyProfile: state.bodyProfiles.length,
           goal: state.goals.length,
-          trainingPlan: state.trainingPlans.length
+          trainingPlan: state.trainingPlans.length,
+          inventory: state.inventories.length,
+          mealPlan: state.mealPlans.length,
+          mealPlanDecision: state.mealPlanDecisions.length,
+          trainingCompletion: state.trainingCompletionEvents.length
         }
       };
     }

@@ -1,5 +1,8 @@
+import { addBusinessDays } from '@fitness/contracts';
 import type {
   IdempotencyRecord,
+  InventoryVersion,
+  MealPlanVersion,
   PlanningAggregateState,
   TrainingPlanChangedEvent
 } from '@fitness/domain';
@@ -22,26 +25,70 @@ function assertUnique(values: readonly string[]): void {
 }
 
 function assertContiguous(versions: readonly number[]): void {
-  const ordered = [...versions].sort((left, right) => left - right);
-  if (ordered.some((version, index) => version !== index + 1)) corrupt();
+  const seen = new Set<number>();
+  let maximum = 0;
+  for (const version of versions) {
+    if (!Number.isInteger(version) || version < 1 || seen.has(version)) corrupt();
+    seen.add(version);
+    maximum = Math.max(maximum, version);
+  }
+  if (maximum !== versions.length) corrupt();
 }
 
-function assertSortedUniqueDates(event: TrainingPlanChangedEvent): void {
-  assertUnique(event.affectedDates);
-  const ordered = [...event.affectedDates].sort();
-  if (event.affectedDates.some((date, index) => date !== ordered[index])) corrupt();
+function assertContiguousByBusinessDate(
+  values: readonly { readonly businessDate: string; readonly version: number }[]
+): void {
+  const versionsByDate = new Map<string, number[]>();
+  for (const value of values) {
+    const versions = versionsByDate.get(value.businessDate) ?? [];
+    versions.push(value.version);
+    versionsByDate.set(value.businessDate, versions);
+  }
+  for (const versions of versionsByDate.values()) assertContiguous(versions);
+}
+
+function assertSortedUniqueDates(dates: readonly string[]): void {
+  for (let index = 1; index < dates.length; index += 1) {
+    const previous = dates[index - 1];
+    const current = dates[index];
+    if (previous === undefined || current === undefined || current <= previous) corrupt();
+  }
+}
+
+function assertEventDates(event: TrainingPlanChangedEvent): void {
+  assertSortedUniqueDates(event.affectedDates);
+}
+
+interface EntityIds {
+  readonly bodyProfiles: ReadonlySet<string>;
+  readonly goals: ReadonlySet<string>;
+  readonly trainingPlans: ReadonlySet<string>;
+  readonly dailyTargets: ReadonlySet<string>;
+  readonly inventories: ReadonlySet<string>;
+  readonly mealPlans: ReadonlySet<string>;
+  readonly mealPlanDecisions: ReadonlySet<string>;
+  readonly trainingCompletions: ReadonlySet<string>;
+  readonly recalculationJobs: ReadonlySet<string>;
+  readonly events: ReadonlySet<string>;
+}
+
+interface IdempotencyReferences {
+  readonly goals: ReadonlyMap<string, PlanningAggregateState['goals'][number]>;
+  readonly trainingPlans: ReadonlyMap<
+    string,
+    PlanningAggregateState['trainingPlans'][number]
+  >;
+  readonly dailyTargets: ReadonlyMap<
+    string,
+    PlanningAggregateState['dailyEnergyTargets'][number]
+  >;
+  readonly events: ReadonlyMap<string, TrainingPlanChangedEvent>;
 }
 
 function assertIdempotencyResult(
   record: IdempotencyRecord,
-  state: PlanningAggregateState,
-  entityIds: {
-    readonly bodyProfiles: ReadonlySet<string>;
-    readonly goals: ReadonlySet<string>;
-    readonly trainingPlans: ReadonlySet<string>;
-    readonly dailyTargets: ReadonlySet<string>;
-    readonly events: ReadonlySet<string>;
-  }
+  entityIds: EntityIds,
+  references: IdempotencyReferences
 ): void {
   if (record.operation === 'saveBodyProfile') {
     if (!entityIds.bodyProfiles.has(record.resultVersionId)) corrupt();
@@ -53,6 +100,30 @@ function assertIdempotencyResult(
   }
   if (record.operation === 'saveTrainingPlan') {
     if (!entityIds.trainingPlans.has(record.resultVersionId)) corrupt();
+    return;
+  }
+  if (record.operation === 'saveInventory') {
+    if (!entityIds.inventories.has(record.resultVersionId)) corrupt();
+    return;
+  }
+  if (
+    record.operation === 'generateWeeklyMealPlan'
+    || record.operation === 'setMealPlanDayLock'
+    || record.operation === 'updateMealPlanDay'
+  ) {
+    if (!entityIds.mealPlans.has(record.resultVersionId)) corrupt();
+    return;
+  }
+  if (record.operation === 'recordTrainingCompletion') {
+    if (!entityIds.trainingCompletions.has(record.resultVersionId)) corrupt();
+    return;
+  }
+  if (record.operation === 'decideMealPlanCandidate') {
+    if (!entityIds.mealPlanDecisions.has(record.resultVersionId)) corrupt();
+    return;
+  }
+  if (record.operation === 'retryPendingRecalculation') {
+    if (!entityIds.recalculationJobs.has(record.resultVersionId)) corrupt();
     return;
   }
 
@@ -67,14 +138,9 @@ function assertIdempotencyResult(
   ) {
     corrupt();
   }
-  const goal = state.goals.find((candidate) => candidate.id === result.goalVersionId);
-  const plan = state.trainingPlans.find(
-    (candidate) => candidate.id === result.trainingPlanVersionId
-  );
-  const event = state.outboxEvents.find((candidate) => candidate.eventId === result.eventId);
-  const targets = state.dailyEnergyTargets.filter((candidate) => (
-    result.dailyEnergyTargetVersionIds.includes(candidate.id)
-  ));
+  const goal = references.goals.get(result.goalVersionId);
+  const plan = references.trainingPlans.get(result.trainingPlanVersionId);
+  const event = references.events.get(result.eventId);
   if (
     goal?.bodyProfileVersionId !== result.bodyProfileVersionId
     || plan?.bodyProfileVersionId !== result.bodyProfileVersionId
@@ -82,13 +148,119 @@ function assertIdempotencyResult(
     || event?.trainingPlanVersionId !== result.trainingPlanVersionId
     || event.bodyProfileVersionId !== result.bodyProfileVersionId
     || event.goalVersionId !== result.goalVersionId
-    || targets.some((target) => (
-      target.bodyProfileVersionId !== result.bodyProfileVersionId
-      || target.goalVersionId !== result.goalVersionId
-      || target.trainingPlanVersionId !== result.trainingPlanVersionId
-    ))
   ) {
     corrupt();
+  }
+  for (const targetId of result.dailyEnergyTargetVersionIds) {
+    const target = references.dailyTargets.get(targetId);
+    if (
+      target === undefined
+      || target.bodyProfileVersionId !== result.bodyProfileVersionId
+      || target.goalVersionId !== result.goalVersionId
+      || target.trainingPlanVersionId !== result.trainingPlanVersionId
+    ) {
+      corrupt();
+    }
+  }
+}
+
+function inventoryItemsByFood(inventory: InventoryVersion): Map<string, InventoryVersion['items'][number]> {
+  const byFood = new Map<string, InventoryVersion['items'][number]>();
+  const snapshotIds = new Set<string>();
+  for (const item of inventory.items) {
+    if (
+      byFood.has(item.foodId)
+      || snapshotIds.has(item.nutritionSnapshotId)
+      || !Number.isFinite(item.availableGrams)
+      || item.availableGrams <= 0
+    ) {
+      corrupt();
+    }
+    byFood.set(item.foodId, item);
+    snapshotIds.add(item.nutritionSnapshotId);
+  }
+  return byFood;
+}
+
+function assertMealPlan(
+  plan: MealPlanVersion,
+  references: {
+    readonly bodyProfiles: ReadonlyMap<string, PlanningAggregateState['bodyProfiles'][number]>;
+    readonly goals: ReadonlyMap<string, PlanningAggregateState['goals'][number]>;
+    readonly trainingPlans: ReadonlyMap<string, PlanningAggregateState['trainingPlans'][number]>;
+    readonly nutritionTargets: ReadonlyMap<
+      string,
+      PlanningAggregateState['dailyNutritionTargets'][number]
+    >;
+    readonly inventories: ReadonlyMap<string, InventoryVersion>;
+    readonly mealPlans: ReadonlyMap<string, MealPlanVersion>;
+    readonly inventoryItems: ReadonlyMap<string, ReadonlyMap<string, InventoryVersion['items'][number]>>;
+  }
+): void {
+  const profile = references.bodyProfiles.get(plan.bodyProfileVersionId);
+  const goal = references.goals.get(plan.goalVersionId);
+  const trainingPlan = references.trainingPlans.get(plan.trainingPlanVersionId);
+  const inventory = references.inventories.get(plan.inventoryVersionId);
+  const inventoryItems = references.inventoryItems.get(plan.inventoryVersionId);
+  if (
+    profile === undefined
+    || goal === undefined
+    || trainingPlan === undefined
+    || inventory === undefined
+    || inventoryItems === undefined
+    || goal.bodyProfileVersionId !== profile.id
+    || trainingPlan.bodyProfileVersionId !== profile.id
+    || trainingPlan.goalVersionId !== goal.id
+    || trainingPlan.payload.weekStartDate !== plan.weekStartDate
+    || plan.days.length !== 7
+  ) {
+    corrupt();
+  }
+  if (plan.version === 1) {
+    if (plan.supersedesVersionId !== null) corrupt();
+  } else {
+    const superseded = plan.supersedesVersionId === null
+      ? undefined
+      : references.mealPlans.get(plan.supersedesVersionId);
+    if (superseded === undefined || superseded.version >= plan.version) corrupt();
+  }
+
+  const usageByFood = new Map<string, number>();
+  for (let index = 0; index < plan.days.length; index += 1) {
+    const day = plan.days[index];
+    if (day === undefined || day.businessDate !== addBusinessDays(plan.weekStartDate, index)) {
+      corrupt();
+    }
+    const target = references.nutritionTargets.get(day.dailyNutritionTargetVersionId);
+    if (
+      target === undefined
+      || target.businessDate !== day.businessDate
+      || target.bodyProfileVersionId !== plan.bodyProfileVersionId
+      || target.goalVersionId !== plan.goalVersionId
+      || target.trainingPlanVersionId !== plan.trainingPlanVersionId
+    ) {
+      corrupt();
+    }
+    assertUnique(day.meals.map((meal) => meal.slot));
+    assertUnique(day.ingredientAmounts.map((amount) => amount.foodId));
+    assertUnique(day.nutritionSourceSnapshotIds);
+    const expectedSnapshotIds = new Set<string>();
+    for (const amount of day.ingredientAmounts) {
+      const item = inventoryItems.get(amount.foodId);
+      if (item === undefined || !Number.isFinite(amount.grams) || amount.grams <= 0) corrupt();
+      expectedSnapshotIds.add(item.nutritionSnapshotId);
+      usageByFood.set(amount.foodId, (usageByFood.get(amount.foodId) ?? 0) + amount.grams);
+    }
+    if (
+      expectedSnapshotIds.size !== day.nutritionSourceSnapshotIds.length
+      || day.nutritionSourceSnapshotIds.some((id) => !expectedSnapshotIds.has(id))
+    ) {
+      corrupt();
+    }
+  }
+  for (const [foodId, usedGrams] of usageByFood) {
+    const item = inventoryItems.get(foodId);
+    if (item === undefined || usedGrams > item.availableGrams) corrupt();
   }
 }
 
@@ -102,48 +274,60 @@ export function assertPlanningAggregateInvariants(
     ...state.trainingPlans,
     ...state.dailyEnergyTargets,
     ...state.dailyNutritionTargets,
+    ...state.inventories,
+    ...state.mealPlans,
+    ...state.mealPlanTargetDiffs,
+    ...state.mealPlanDecisions,
+    ...state.trainingCompletionEvents,
+    ...state.recalculationJobs,
     ...state.outboxEvents
   ];
   if (ownedRecords.some((record) => record.userId !== userId)) corrupt();
 
-  const versionIds = [
+  const entityIds = [
     ...state.bodyProfiles.map((value) => value.id),
     ...state.goals.map((value) => value.id),
     ...state.trainingPlans.map((value) => value.id),
     ...state.dailyEnergyTargets.map((value) => value.id),
-    ...state.dailyNutritionTargets.map((value) => value.id)
+    ...state.dailyNutritionTargets.map((value) => value.id),
+    ...state.inventories.map((value) => value.id),
+    ...state.mealPlans.map((value) => value.id),
+    ...state.mealPlanTargetDiffs.map((value) => value.id),
+    ...state.mealPlanDecisions.map((value) => value.id),
+    ...state.trainingCompletionEvents.map((value) => value.id),
+    ...state.recalculationJobs.map((value) => value.id),
+    ...state.outboxEvents.map((event) => event.eventId)
   ];
-  assertUnique(versionIds);
-  assertUnique(state.outboxEvents.map((event) => event.eventId));
+  assertUnique(entityIds);
   assertUnique(state.idempotencyRecords.map((record) => `${record.operation}\u0000${record.key}`));
 
   assertContiguous(state.bodyProfiles.map((value) => value.version));
   assertContiguous(state.goals.map((value) => value.version));
   assertContiguous(state.trainingPlans.map((value) => value.version));
-  const targetDates = new Set(state.dailyEnergyTargets.map((target) => target.businessDate));
-  for (const businessDate of targetDates) {
-    assertContiguous(
-      state.dailyEnergyTargets
-        .filter((target) => target.businessDate === businessDate)
-        .map((target) => target.version)
-    );
-  }
-  const nutritionTargetDates = new Set(
-    state.dailyNutritionTargets.map((target) => target.businessDate)
-  );
-  for (const businessDate of nutritionTargetDates) {
-    assertContiguous(
-      state.dailyNutritionTargets
-        .filter((target) => target.businessDate === businessDate)
-        .map((target) => target.version)
-    );
-  }
+  assertContiguous(state.inventories.map((value) => value.version));
+  assertContiguous(state.mealPlans.map((value) => value.version));
+  assertContiguous(state.mealPlanDecisions.map((value) => value.version));
+  assertContiguous(state.trainingCompletionEvents.map((value) => value.version));
+  assertContiguousByBusinessDate(state.dailyEnergyTargets);
+  assertContiguousByBusinessDate(state.dailyNutritionTargets);
 
   const bodyProfiles = new Map(state.bodyProfiles.map((value) => [value.id, value]));
   const goals = new Map(state.goals.map((value) => [value.id, value]));
   const trainingPlans = new Map(state.trainingPlans.map((value) => [value.id, value]));
   const dailyTargets = new Map(state.dailyEnergyTargets.map((value) => [value.id, value]));
+  const nutritionTargets = new Map(
+    state.dailyNutritionTargets.map((value) => [value.id, value])
+  );
+  const inventories = new Map(state.inventories.map((value) => [value.id, value]));
+  const mealPlans = new Map(state.mealPlans.map((value) => [value.id, value]));
   const events = new Map(state.outboxEvents.map((value) => [value.eventId, value]));
+  const completions = new Map(
+    state.trainingCompletionEvents.map((value) => [value.id, value])
+  );
+  const inventoryItems = new Map<string, ReadonlyMap<string, InventoryVersion['items'][number]>>();
+  for (const inventory of state.inventories) {
+    inventoryItems.set(inventory.id, inventoryItemsByFood(inventory));
+  }
 
   for (const goal of state.goals) {
     if (!bodyProfiles.has(goal.bodyProfileVersionId)) corrupt();
@@ -193,6 +377,17 @@ export function assertPlanningAggregateInvariants(
       corrupt();
     }
   }
+  for (const plan of state.mealPlans) {
+    assertMealPlan(plan, {
+      bodyProfiles,
+      goals,
+      trainingPlans,
+      nutritionTargets,
+      inventories,
+      mealPlans,
+      inventoryItems
+    });
+  }
 
   const activeProfile = state.activeBodyProfileVersionId === null
     ? undefined
@@ -220,9 +415,24 @@ export function assertPlanningAggregateInvariants(
   ) {
     corrupt();
   }
+  if (
+    state.activeInventoryVersionId !== null
+    && !inventories.has(state.activeInventoryVersionId)
+  ) {
+    corrupt();
+  }
+  const activeMealPlan = state.activeMealPlanVersionId === null
+    ? undefined
+    : mealPlans.get(state.activeMealPlanVersionId);
+  if (
+    state.activeMealPlanVersionId !== null
+    && (activeMealPlan === undefined || activeMealPlan.readiness !== 'complete')
+  ) {
+    corrupt();
+  }
 
   for (const event of state.outboxEvents) {
-    assertSortedUniqueDates(event);
+    assertEventDates(event);
     const plan = trainingPlans.get(event.trainingPlanVersionId);
     const goal = goals.get(event.goalVersionId);
     if (
@@ -241,14 +451,145 @@ export function assertPlanningAggregateInvariants(
     }
   }
 
-  const entityIds = {
+  for (const completion of state.trainingCompletionEvents) {
+    const plan = trainingPlans.get(completion.trainingPlanVersionId);
+    if (
+      plan === undefined
+      || !plan.payload.sessions.some((session) => session.businessDate === completion.businessDate)
+    ) {
+      corrupt();
+    }
+  }
+
+  const diffDatesByCandidate = new Map<string, Set<string>>();
+  for (const diff of state.mealPlanTargetDiffs) {
+    const candidate = mealPlans.get(diff.candidateMealPlanVersionId);
+    const previousPlan = candidate?.supersedesVersionId === null
+      || candidate?.supersedesVersionId === undefined
+      ? undefined
+      : mealPlans.get(candidate.supersedesVersionId);
+    const candidateDay = candidate?.days.find((day) => day.businessDate === diff.businessDate);
+    const previousDay = previousPlan?.days.find((day) => day.businessDate === diff.businessDate);
+    if (
+      candidate === undefined
+      || candidate.readiness !== 'pending_confirmation'
+      || previousPlan === undefined
+      || candidateDay === undefined
+      || previousDay === undefined
+      || !nutritionTargets.has(diff.previousNutritionTargetVersionId)
+      || !nutritionTargets.has(diff.proposedNutritionTargetVersionId)
+      || previousDay.dailyNutritionTargetVersionId !== diff.previousNutritionTargetVersionId
+      || candidateDay.dailyNutritionTargetVersionId !== diff.proposedNutritionTargetVersionId
+      || (!candidateDay.locked && !candidateDay.manuallyModified)
+    ) {
+      corrupt();
+    }
+    const dates = diffDatesByCandidate.get(candidate.id) ?? new Set<string>();
+    if (dates.has(diff.businessDate)) corrupt();
+    dates.add(diff.businessDate);
+    diffDatesByCandidate.set(candidate.id, dates);
+  }
+  for (const plan of state.mealPlans) {
+    if (plan.readiness === 'pending_confirmation' && !diffDatesByCandidate.has(plan.id)) corrupt();
+  }
+
+  const decidedCandidates = new Set<string>();
+  for (const decision of state.mealPlanDecisions) {
+    const candidate = mealPlans.get(decision.candidateMealPlanVersionId);
+    const previous = mealPlans.get(decision.previousActiveMealPlanVersionId);
+    const activated = decision.activatedMealPlanVersionId === null
+      ? undefined
+      : mealPlans.get(decision.activatedMealPlanVersionId);
+    if (
+      candidate === undefined
+      || candidate.readiness !== 'pending_confirmation'
+      || previous === undefined
+      || previous.readiness !== 'complete'
+      || candidate.supersedesVersionId !== previous.id
+      || decidedCandidates.has(candidate.id)
+      || (decision.decision === 'keep_existing' && decision.activatedMealPlanVersionId !== null)
+      || (
+        decision.decision === 'overwrite_locked'
+        && (activated === undefined || activated.readiness !== 'complete')
+      )
+    ) {
+      corrupt();
+    }
+    decidedCandidates.add(candidate.id);
+  }
+
+  const triggerEventIds = new Set<string>();
+  for (const job of state.recalculationJobs) {
+    assertSortedUniqueDates(job.affectedDates);
+    if (triggerEventIds.has(job.triggerEventId)) corrupt();
+    triggerEventIds.add(job.triggerEventId);
+    const trigger = job.triggerType === 'training_plan_changed'
+      ? events.get(job.triggerEventId)
+      : completions.get(job.triggerEventId);
+    const candidate = job.candidateMealPlanVersionId === null
+      ? undefined
+      : mealPlans.get(job.candidateMealPlanVersionId);
+    const activated = job.activatedMealPlanVersionId === null
+      ? undefined
+      : mealPlans.get(job.activatedMealPlanVersionId);
+    if (
+      trigger === undefined
+      || (candidate !== undefined && candidate.readiness !== 'pending_confirmation')
+      || (job.candidateMealPlanVersionId !== null && candidate === undefined)
+      || (activated !== undefined && activated.readiness !== 'complete')
+      || (job.activatedMealPlanVersionId !== null && activated === undefined)
+    ) {
+      corrupt();
+    }
+    if (job.triggerType === 'training_plan_changed') {
+      const event = events.get(job.triggerEventId);
+      if (
+        event === undefined
+        || event.affectedDates.length !== job.affectedDates.length
+        || event.affectedDates.some((date, index) => date !== job.affectedDates[index])
+      ) {
+        corrupt();
+      }
+    } else {
+      const completion = completions.get(job.triggerEventId);
+      if (
+        completion === undefined
+        || job.affectedDates.length !== 1
+        || job.affectedDates[0] !== completion.businessDate
+      ) {
+        corrupt();
+      }
+    }
+    if (
+      (job.status === 'pending'
+        && (job.completedAt !== null || job.failureCode !== null || job.activatedMealPlanVersionId !== null))
+      || (job.status === 'failed_retryable'
+        && (job.completedAt !== null || job.failureCode === null || job.activatedMealPlanVersionId !== null))
+      || (job.status === 'completed'
+        && (job.completedAt === null || job.failureCode !== null))
+    ) {
+      corrupt();
+    }
+  }
+
+  const idSets: EntityIds = {
     bodyProfiles: new Set(bodyProfiles.keys()),
     goals: new Set(goals.keys()),
     trainingPlans: new Set(trainingPlans.keys()),
     dailyTargets: new Set(dailyTargets.keys()),
+    inventories: new Set(inventories.keys()),
+    mealPlans: new Set(mealPlans.keys()),
+    mealPlanDecisions: new Set(state.mealPlanDecisions.map((value) => value.id)),
+    trainingCompletions: new Set(completions.keys()),
+    recalculationJobs: new Set(state.recalculationJobs.map((value) => value.id)),
     events: new Set(events.keys())
   };
   for (const record of state.idempotencyRecords) {
-    assertIdempotencyResult(record, state, entityIds);
+    assertIdempotencyResult(record, idSets, {
+      goals,
+      trainingPlans,
+      dailyTargets,
+      events
+    });
   }
 }

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { businessDateSchema } from './business-date';
-import { nutritionTargetResultSchema } from './nutrition';
+import { nutrientValuesSchema, nutritionTargetResultSchema } from './nutrition';
 
 const policyMetadataSchema = z.object({
   policyVersion: z.literal('calculation-policy-v2'),
@@ -83,10 +83,17 @@ export const planningSetupPayloadSchema = z.object({
   trainingPlan: trainingPlanPayloadSchema
 }).strict();
 
-const latestPlanningVersionsSchema = z.object({
+const setupPlanningVersionsSchema = z.object({
   bodyProfile: z.number().int().nonnegative(),
   goal: z.number().int().nonnegative(),
   trainingPlan: z.number().int().nonnegative()
+}).strict();
+
+const latestPlanningVersionsSchema = setupPlanningVersionsSchema.extend({
+  inventory: z.number().int().nonnegative(),
+  mealPlan: z.number().int().nonnegative(),
+  mealPlanDecision: z.number().int().nonnegative(),
+  trainingCompletion: z.number().int().nonnegative()
 }).strict();
 
 export const planningApiRequestSchema = z.discriminatedUnion('action', [
@@ -110,7 +117,7 @@ export const planningApiRequestSchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('completePlanningSetup'),
     payload: planningSetupPayloadSchema.extend({
-      expectedVersions: latestPlanningVersionsSchema,
+      expectedVersions: setupPlanningVersionsSchema,
       idempotencyKey: idempotencyKeySchema
     }).strict()
   }).strict(),
@@ -278,7 +285,111 @@ const storedTrainingPlanChangedEventSchema = z.object({
   status: z.literal('pending')
 }).strict();
 
+const storedInventoryVersionSchema = versionMetadataSchema.extend({
+  kind: z.literal('inventory_version'),
+  userId: z.string().min(1),
+  items: z.array(z.object({
+    foodId: z.string().min(1),
+    nutritionSnapshotId: z.string().min(1),
+    availableGrams: z.number().positive()
+  }).strict())
+}).strict();
+
+const mealAssignmentSchema = z.object({
+  slot: z.enum(['breakfast', 'lunch', 'dinner', 'snack']),
+  recipeTemplateVersionId: z.string().min(1),
+  servingMultiplier: z.number().min(0.5).max(1.5)
+}).strict();
+
+const mealPlanDaySchema = z.object({
+  businessDate: businessDateSchema,
+  dailyNutritionTargetVersionId: z.string().min(1),
+  dailyMenuTemplateVersionId: z.string().min(1),
+  locked: z.boolean(),
+  manuallyModified: z.boolean(),
+  meals: z.array(mealAssignmentSchema).min(1).max(4),
+  ingredientAmounts: z.array(z.object({
+    foodId: z.string().min(1),
+    grams: z.number().positive()
+  }).strict()).min(1),
+  nutritionTotals: nutrientValuesSchema,
+  nutritionSourceSnapshotIds: z.array(z.string().min(1)).min(1)
+}).strict();
+
+const storedMealPlanVersionSchema = versionMetadataSchema.extend({
+  kind: z.literal('meal_plan_version'),
+  userId: z.string().min(1),
+  weekStartDate: businessDateSchema,
+  bodyProfileVersionId: z.string().min(1),
+  goalVersionId: z.string().min(1),
+  trainingPlanVersionId: z.string().min(1),
+  inventoryVersionId: z.string().min(1),
+  catalogVersionId: z.string().min(1),
+  generationPolicyVersion: z.literal('weekly-meal-generation-v1'),
+  supersedesVersionId: z.string().min(1).nullable(),
+  readiness: z.enum(['complete', 'pending_confirmation']),
+  days: z.array(mealPlanDaySchema).length(7)
+}).strict();
+
+const storedMealPlanTargetDiffSchema = z.object({
+  id: z.string().min(1),
+  userId: z.string().min(1),
+  candidateMealPlanVersionId: z.string().min(1),
+  businessDate: businessDateSchema,
+  previousNutritionTargetVersionId: z.string().min(1),
+  proposedNutritionTargetVersionId: z.string().min(1),
+  reason: z.literal('locked_or_manually_modified')
+}).strict();
+
+const storedMealPlanDecisionSchema = versionMetadataSchema.extend({
+  kind: z.literal('meal_plan_decision'),
+  userId: z.string().min(1),
+  candidateMealPlanVersionId: z.string().min(1),
+  previousActiveMealPlanVersionId: z.string().min(1),
+  decision: z.enum(['keep_existing', 'overwrite_locked']),
+  decidedAt: z.iso.datetime(),
+  activatedMealPlanVersionId: z.string().min(1).nullable()
+}).omit({ createdAt: true }).strict();
+
+const storedTrainingCompletionEventSchema = versionMetadataSchema.extend({
+  kind: z.literal('training_completion_event'),
+  userId: z.string().min(1),
+  trainingPlanVersionId: z.string().min(1),
+  businessDate: businessDateSchema,
+  completedDurationMinutes: z.number().int().min(0).max(300),
+  occurredAt: z.iso.datetime()
+}).omit({ createdAt: true }).strict();
+
+const storedRecalculationJobSchema = z.object({
+  kind: z.literal('recalculation_job'),
+  id: z.string().min(1),
+  userId: z.string().min(1),
+  triggerEventId: z.string().min(1),
+  triggerType: z.enum(['training_plan_changed', 'training_completion']),
+  affectedDates: z.array(businessDateSchema).max(7),
+  status: z.enum(['pending', 'completed', 'failed_retryable']),
+  createdAt: z.iso.datetime(),
+  completedAt: z.iso.datetime().nullable(),
+  candidateMealPlanVersionId: z.string().min(1).nullable(),
+  activatedMealPlanVersionId: z.string().min(1).nullable(),
+  failureCode: z.enum([
+    'provider_unavailable',
+    'nutrition_constraints_infeasible'
+  ]).nullable()
+}).strict();
+
 const requestFingerprintSchema = z.string().regex(/^v2:sha256:[0-9a-f]{64}$/);
+
+function singleResultIdempotencyRecordSchema<TOperation extends string>(
+  operation: TOperation
+) {
+  return z.object({
+    operation: z.literal(operation),
+    key: z.string().min(1),
+    requestFingerprint: requestFingerprintSchema,
+    resultVersionId: z.string().min(1)
+  }).strict();
+}
 
 const idempotencyRecordSchema = z.discriminatedUnion('operation', [
   z.object({
@@ -310,7 +421,14 @@ const idempotencyRecordSchema = z.discriminatedUnion('operation', [
       dailyEnergyTargetVersionIds: z.array(z.string().min(1)).max(7),
       eventId: z.string().min(1)
     }).strict()
-  }).strict()
+  }).strict(),
+  singleResultIdempotencyRecordSchema('saveInventory'),
+  singleResultIdempotencyRecordSchema('generateWeeklyMealPlan'),
+  singleResultIdempotencyRecordSchema('setMealPlanDayLock'),
+  singleResultIdempotencyRecordSchema('updateMealPlanDay'),
+  singleResultIdempotencyRecordSchema('recordTrainingCompletion'),
+  singleResultIdempotencyRecordSchema('decideMealPlanCandidate'),
+  singleResultIdempotencyRecordSchema('retryPendingRecalculation')
 ]);
 
 export const planningAggregateStateSchema = z.object({
@@ -319,11 +437,19 @@ export const planningAggregateStateSchema = z.object({
   trainingPlans: z.array(storedTrainingPlanVersionSchema),
   dailyEnergyTargets: z.array(storedDailyEnergyTargetVersionSchema),
   dailyNutritionTargets: z.array(storedDailyNutritionTargetVersionSchema),
+  inventories: z.array(storedInventoryVersionSchema),
+  mealPlans: z.array(storedMealPlanVersionSchema),
+  mealPlanTargetDiffs: z.array(storedMealPlanTargetDiffSchema),
+  mealPlanDecisions: z.array(storedMealPlanDecisionSchema),
+  trainingCompletionEvents: z.array(storedTrainingCompletionEventSchema),
+  recalculationJobs: z.array(storedRecalculationJobSchema),
   outboxEvents: z.array(storedTrainingPlanChangedEventSchema),
   idempotencyRecords: z.array(idempotencyRecordSchema),
   activeBodyProfileVersionId: z.string().min(1).nullable(),
   activeGoalVersionId: z.string().min(1).nullable(),
-  activeTrainingPlanVersionId: z.string().min(1).nullable()
+  activeTrainingPlanVersionId: z.string().min(1).nullable(),
+  activeInventoryVersionId: z.string().min(1).nullable(),
+  activeMealPlanVersionId: z.string().min(1).nullable()
 }).strict();
 
 const successfulDataSchema = z.discriminatedUnion('kind', [
