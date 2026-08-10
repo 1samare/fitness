@@ -100,6 +100,17 @@ const weeklyMealGenerationPayloadSchema = z.object({
   weekStartDate: businessDateSchema
 }).strict();
 
+const mealPlanDayLockPayloadSchema = z.object({
+  businessDate: businessDateSchema,
+  locked: z.boolean()
+}).strict();
+
+const mealPlanDayUpdatePayloadSchema = z.object({
+  businessDate: businessDateSchema,
+  slot: z.enum(['breakfast', 'lunch', 'dinner', 'snack']),
+  recipeTemplateVersionId: z.string().min(1).max(200)
+}).strict();
+
 const latestPlanningVersionsSchema = setupPlanningVersionsSchema.extend({
   inventory: z.number().int().nonnegative(),
   mealPlan: z.number().int().nonnegative(),
@@ -143,6 +154,14 @@ export const planningApiRequestSchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('generateWeeklyMealPlan'),
     payload: writeEnvelopeSchema(weeklyMealGenerationPayloadSchema)
+  }).strict(),
+  z.object({
+    action: z.literal('setMealPlanDayLock'),
+    payload: writeEnvelopeSchema(mealPlanDayLockPayloadSchema)
+  }).strict(),
+  z.object({
+    action: z.literal('updateMealPlanDay'),
+    payload: writeEnvelopeSchema(mealPlanDayUpdatePayloadSchema)
   }).strict(),
   z.object({ action: z.literal('getCurrentContext') }).strict()
 ]);
@@ -379,6 +398,16 @@ const weeklyMealPlanGeneratedSchema = z.object({
   version: mealPlanVersionSchema
 }).strict();
 
+const mealPlanUpdatedSchema = z.object({
+  kind: z.literal('meal_plan_updated'),
+  version: mealPlanVersionSchema
+}).strict();
+
+const selectableRecipeOptionSchema = z.object({
+  recipeTemplateVersionId: z.string().min(1),
+  dishNameZh: z.string().trim().min(1).max(200)
+}).strict();
+
 const currentContextSchema = z.object({
   kind: z.literal('current_context'),
   bodyProfile: bodyProfileVersionSchema.nullable(),
@@ -391,6 +420,7 @@ const currentContextSchema = z.object({
   mealPlanStale: z.boolean(),
   pendingMealPlanCandidate: mealPlanVersionSchema.nullable(),
   pendingMealPlanTargetDiffs: z.array(mealPlanTargetDiffSchema),
+  selectableRecipes: z.array(selectableRecipeOptionSchema),
   latestVersions: latestPlanningVersionsSchema
 }).strict();
 
@@ -516,6 +546,7 @@ const successfulDataSchema = z.discriminatedUnion('kind', [
   foodNameResolvedSchema,
   inventorySavedSchema,
   weeklyMealPlanGeneratedSchema,
+  mealPlanUpdatedSchema,
   currentContextSchema
 ]);
 
@@ -532,8 +563,10 @@ const apiErrorSchema = z.object({
     'invalid_training_plan',
     'invalid_calendar_date',
     'past_training_change_forbidden',
+    'past_fact_immutable',
     'training_date_outside_goal_period',
     'provider_unavailable',
+    'recipe_not_selectable',
     'nutrition_constraints_infeasible',
     'internal_error'
   ]),

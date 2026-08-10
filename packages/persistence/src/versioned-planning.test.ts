@@ -5,6 +5,7 @@ import {
   PastTrainingChangeError,
   PlanningPrerequisiteError,
   VersionConflictError,
+  createMealPlanEditingService,
   createMealPlanGenerationService,
   createVersionedPlanningService
 } from '@fitness/application';
@@ -85,6 +86,108 @@ function planningSetup(
 }
 
 describe('versioned planning service', () => {
+  test('persists a lock successor atomically without changing the prior meal plan', async () => {
+    const repository = new InMemoryPlanningRepository();
+    let nextId = 0;
+    const unavailable = () => Promise.reject(new Error('not needed for lock test'));
+    const service = createMealPlanEditingService({
+      repository,
+      now: () => '2026-08-03T08:00:00.000Z',
+      nextId: (prefix) => `${prefix}-${String(++nextId)}`,
+      providers: {
+        nutrition: { getSnapshot: unavailable, resolveCanonicalName: unavailable },
+        recipes: { getByVersionId: unavailable },
+        menus: { getActiveCatalog: unavailable, getMenuByVersionId: unavailable },
+        allowTestFixtures: false
+      }
+    });
+    const setup = await service.completePlanningSetup('user-a', planningSetup());
+    await repository.transact('user-a', (state) => {
+      const inventory = {
+        kind: 'inventory_version' as const,
+        id: 'inventory-lock-test-1',
+        userId: 'user-a',
+        version: 1,
+        createdAt: '2026-08-03T08:00:00.000Z',
+        items: [{
+          foodId: 'food-lock-test',
+          nutritionSnapshotId: 'snapshot-lock-test-v1',
+          availableGrams: 1_000
+        }]
+      };
+      const targetByDate = new Map(
+        setup.dailyNutritionTargets.map((target) => [target.businessDate, target])
+      );
+      const mealPlan = {
+        kind: 'meal_plan_version' as const,
+        id: 'meal-plan-lock-test-1',
+        userId: 'user-a',
+        version: 1,
+        createdAt: '2026-08-03T08:00:00.000Z',
+        weekStartDate: '2026-08-10',
+        bodyProfileVersionId: setup.bodyProfile.id,
+        goalVersionId: setup.goal.id,
+        trainingPlanVersionId: setup.trainingPlan.id,
+        inventoryVersionId: inventory.id,
+        catalogVersionId: 'catalog-lock-test-v1',
+        generationPolicyVersion: 'weekly-meal-generation-v1' as const,
+        supersedesVersionId: null,
+        readiness: 'complete' as const,
+        days: Array.from({ length: 7 }, (_, index) => {
+          const businessDate = `2026-08-${String(10 + index).padStart(2, '0')}`;
+          const target = targetByDate.get(businessDate);
+          if (target === undefined) throw new Error('Expected target for lock test');
+          return {
+            businessDate,
+            dailyNutritionTargetVersionId: target.id,
+            dailyMenuTemplateVersionId: 'daily-menu-lock-test-v1',
+            locked: false,
+            manuallyModified: false,
+            meals: [{
+              slot: 'breakfast' as const,
+              recipeTemplateVersionId: 'recipe-lock-test-v1',
+              servingMultiplier: 1
+            }],
+            ingredientAmounts: [{ foodId: 'food-lock-test', grams: 100 }],
+            nutritionTotals: {
+              energyKcal: 100,
+              proteinG: 10,
+              fatG: 5,
+              carbohydrateG: 12,
+              fiberG: 3,
+              saturatedFatG: 1,
+              addedSugarG: 0
+            },
+            nutritionSourceSnapshotIds: ['snapshot-lock-test-v1']
+          };
+        })
+      };
+      return {
+        nextState: {
+          ...state,
+          inventories: [inventory],
+          mealPlans: [mealPlan],
+          activeInventoryVersionId: inventory.id,
+          activeMealPlanVersionId: mealPlan.id
+        },
+        result: undefined
+      };
+    });
+    const before = await repository.read('user-a');
+
+    const locked = await service.setMealPlanDayLock('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'meal-lock-persistence-001',
+      payload: { businessDate: '2026-08-11', locked: true }
+    });
+    const after = await repository.read('user-a');
+
+    expect(after.mealPlans[0]).toEqual(before.mealPlans[0]);
+    expect(after.mealPlans).toHaveLength(2);
+    expect(after.activeMealPlanVersionId).toBe(locked.id);
+    expect(locked.days.find((day) => day.businessDate === '2026-08-11')?.locked).toBe(true);
+  });
+
   test('keeps immutable profile versions and replays the same idempotent write', async () => {
     const { repository, service } = createHarness();
 
@@ -237,6 +340,7 @@ describe('versioned planning service', () => {
       mealPlanStale: false,
       pendingMealPlanCandidate: null,
       pendingMealPlanTargetDiffs: [],
+      selectableRecipes: [],
       latestVersions: {
         bodyProfile: 0,
         goal: 0,
@@ -423,6 +527,7 @@ describe('versioned planning service', () => {
       mealPlanStale: false,
       pendingMealPlanCandidate: null,
       pendingMealPlanTargetDiffs: [],
+      selectableRecipes: [],
       latestVersions: {
         bodyProfile: 2,
         goal: 1,
@@ -460,6 +565,7 @@ describe('versioned planning service', () => {
       mealPlanStale: false,
       pendingMealPlanCandidate: null,
       pendingMealPlanTargetDiffs: [],
+      selectableRecipes: [],
       latestVersions: {
         bodyProfile: 1,
         goal: 2,

@@ -3,14 +3,17 @@ import {
   IdempotencyKeyReuseError,
   InvalidGoalError,
   InvalidTrainingPlanError,
+  PastFactImmutableError,
   PastTrainingChangeError,
   PlanningPrerequisiteError,
   ProviderUnavailableError,
   NutritionConstraintsInfeasibleError,
+  RecipeNotSelectableError,
   TrainingDateOutsideGoalPeriodError,
   UnknownTrainingSessionError,
   VersionConflictError,
   type createMealPlanGenerationService,
+  type createMealPlanEditingService,
   createVersionedPlanningService,
   previewDailyEnergy
 } from '@fitness/application';
@@ -43,6 +46,8 @@ const knownActions = new Set([
   'resolveFoodName',
   'saveInventory',
   'generateWeeklyMealPlan',
+  'setMealPlanDayLock',
+  'updateMealPlanDay',
   'getCurrentContext'
 ]);
 
@@ -54,6 +59,8 @@ const authenticatedActions = new Set([
   'resolveFoodName',
   'saveInventory',
   'generateWeeklyMealPlan',
+  'setMealPlanDayLock',
+  'updateMealPlanDay',
   'getCurrentContext'
 ]);
 
@@ -66,7 +73,8 @@ const planningService = createVersionedPlanningService({
 
 export type VersionedPlanningService =
   | ReturnType<typeof createVersionedPlanningService>
-  | ReturnType<typeof createMealPlanGenerationService>;
+  | ReturnType<typeof createMealPlanGenerationService>
+  | ReturnType<typeof createMealPlanEditingService>;
 
 export interface TrustedRequestContext {
   readonly userId: string;
@@ -212,6 +220,7 @@ function currentContextResponse(context: CurrentPlanningContext) {
       ? null
       : publicMealPlan(context.pendingMealPlanCandidate),
     pendingMealPlanTargetDiffs: context.pendingMealPlanTargetDiffs.map(publicMealPlanTargetDiff),
+    selectableRecipes: context.selectableRecipes.map((recipe) => ({ ...recipe })),
     latestVersions: context.latestVersions
   };
 }
@@ -290,6 +299,26 @@ async function executeAuthenticatedAction(
     return {
       success: true,
       data: { kind: 'weekly_meal_plan_generated', version: publicMealPlan(version) }
+    };
+  }
+  if (request.action === 'setMealPlanDayLock') {
+    if (!('setMealPlanDayLock' in service)) {
+      throw new ProviderUnavailableError('meal_catalog_unavailable');
+    }
+    const version = await service.setMealPlanDayLock(context.userId, request.payload);
+    return {
+      success: true,
+      data: { kind: 'meal_plan_updated', version: publicMealPlan(version) }
+    };
+  }
+  if (request.action === 'updateMealPlanDay') {
+    if (!('updateMealPlanDay' in service)) {
+      throw new ProviderUnavailableError('meal_catalog_unavailable');
+    }
+    const version = await service.updateMealPlanDay(context.userId, request.payload);
+    return {
+      success: true,
+      data: { kind: 'meal_plan_updated', version: publicMealPlan(version) }
     };
   }
   const current = await service.getCurrentContext(context.userId);
@@ -373,6 +402,9 @@ async function handlePlanningApiResult(
     if (error instanceof PastTrainingChangeError) {
       return errorResponse(error.code, '过去日期的训练记录不可修改。');
     }
+    if (error instanceof PastFactImmutableError) {
+      return errorResponse(error.code, '今天及过去日期的餐单事实不可修改。');
+    }
     if (error instanceof TrainingDateOutsideGoalPeriodError) {
       return errorResponse(error.code, '训练日期必须位于当前目标周期内。');
     }
@@ -381,6 +413,9 @@ async function handlePlanningApiResult(
     }
     if (error instanceof ProviderUnavailableError) {
       return errorResponse(error.code, '营养数据暂时不可用。');
+    }
+    if (error instanceof RecipeNotSelectableError) {
+      return errorResponse(error.code, '请选择当前上下文提供的备选菜品。');
     }
     if (error instanceof NutritionConstraintsInfeasibleError) {
       return errorResponse(error.code, '当前食材与营养目标无法生成可行的一周餐单。');

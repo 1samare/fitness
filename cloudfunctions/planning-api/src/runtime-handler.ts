@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import * as cloud from 'wx-server-sdk';
 import {
-  createMealPlanGenerationService,
+  createMealPlanEditingService,
   type MealPlanningProviders
 } from '@fitness/application';
 import type { PlanningApiResponse } from '@fitness/contracts';
@@ -123,7 +123,7 @@ export function createRuntimePlanningHandler(options: RuntimePlanningHandlerOpti
   const repository = options.runtimeMode === 'cloud'
     ? new CloudBasePlanningRepository(options.database)
     : new InMemoryPlanningRepository();
-  const service = createMealPlanGenerationService({
+  const service = createMealPlanEditingService({
     repository,
     providers: createRuntimeMealPlanningProviders(options.runtimeMode),
     now: options.now ?? (() => new Date().toISOString()),

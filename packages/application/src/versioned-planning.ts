@@ -799,6 +799,7 @@ export function createVersionedPlanningService(
           : state.mealPlanTargetDiffs.filter((diff) => (
               diff.candidateMealPlanVersionId === pendingMealPlanCandidate.id
             )),
+        selectableRecipes: [],
         latestVersions: {
           bodyProfile: state.bodyProfiles.length,
           goal: state.goals.length,

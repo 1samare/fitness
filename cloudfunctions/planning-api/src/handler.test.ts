@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  createMealPlanGenerationService,
+  createMealPlanEditingService,
   createVersionedPlanningService
 } from '@fitness/application';
 import {
@@ -82,7 +82,7 @@ function createHarness() {
 
 function createMealHarness() {
   let sequence = 0;
-  return createPlanningApiHandler(createMealPlanGenerationService({
+  return createPlanningApiHandler(createMealPlanEditingService({
     repository: new InMemoryPlanningRepository(),
     now: () => '2026-08-10T00:00:00.000Z',
     nextId: (prefix) => `${prefix}-${String(++sequence)}`,
@@ -103,6 +103,52 @@ function createMealHarness() {
       allowTestFixtures: true
     }
   }));
+}
+
+async function prepareApiMealPlan(handler: ReturnType<typeof createMealHarness>) {
+  await handler({
+    ...completeSetup,
+    payload: {
+      ...completeSetup.payload,
+      bodyProfile: {
+        ...completeSetup.payload.bodyProfile,
+        weightKg: 60,
+        allergens: [],
+        avoidFoods: []
+      },
+      goal: {
+        ...completeSetup.payload.goal,
+        goal: 'fat_loss',
+        effectiveDate: '2026-08-10'
+      },
+      trainingPlan: {
+        weekStartDate: '2026-08-17',
+        businessTimezone: 'Asia/Shanghai',
+        sessions: []
+      }
+    }
+  }, { userId: 'trusted-user-a' });
+  await handler({
+    action: 'saveInventory',
+    payload: {
+      expectedVersion: 0,
+      idempotencyKey: 'inventory-api-edit-001',
+      payload: {
+        items: TEST_NUTRITION_SNAPSHOTS.map((snapshot) => ({
+          name: snapshot.canonicalNameZh,
+          availableGrams: 50_000
+        }))
+      }
+    }
+  }, { userId: 'trusted-user-a' });
+  await handler({
+    action: 'generateWeeklyMealPlan',
+    payload: {
+      expectedVersion: 0,
+      idempotencyKey: 'meal-api-edit-generate-001',
+      payload: { weekStartDate: '2026-08-17' }
+    }
+  }, { userId: 'trusted-user-a' });
 }
 
 describe('handlePlanningApi', () => {
@@ -335,6 +381,7 @@ describe('handlePlanningApi', () => {
         mealPlanStale: false,
         pendingMealPlanCandidate: null,
         pendingMealPlanTargetDiffs: [],
+        selectableRecipes: [],
         latestVersions: {
           bodyProfile: 0,
           goal: 0,
@@ -463,6 +510,104 @@ describe('handlePlanningApi', () => {
       error: {
         code: 'nutrition_constraints_infeasible',
         message: '当前食材与营养目标无法生成可行的一周餐单。'
+      }
+    });
+  });
+
+  it('locks and edits only with trusted identity and returns public selectable recipes', async () => {
+    const handler = createMealHarness();
+    await prepareApiMealPlan(handler);
+
+    const context = await handler(
+      { action: 'getCurrentContext' },
+      { userId: 'trusted-user-a' }
+    );
+    expect(context.success).toBe(true);
+    if (!context.success || context.data.kind !== 'current_context') {
+      throw new Error('Expected current context');
+    }
+    expect(context.data.selectableRecipes).toContainEqual({
+      recipeTemplateVersionId: 'recipe-version-fixture-day-2-dinner-v1',
+      dishNameZh: '测试第2日dinner'
+    });
+
+    const locked = await handler({
+      action: 'setMealPlanDayLock',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'meal-api-lock-001',
+        payload: { businessDate: '2026-08-18', locked: true }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(locked).toMatchObject({
+      success: true,
+      data: {
+        kind: 'meal_plan_updated',
+        version: { version: 2 }
+      }
+    });
+
+    const edited = await handler({
+      action: 'updateMealPlanDay',
+      payload: {
+        expectedVersion: 2,
+        idempotencyKey: 'meal-api-edit-001',
+        payload: {
+          businessDate: '2026-08-19',
+          slot: 'dinner',
+          recipeTemplateVersionId: 'recipe-version-fixture-day-2-dinner-v1'
+        }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(edited).toMatchObject({
+      success: true,
+      data: { kind: 'meal_plan_updated', version: { version: 3 } }
+    });
+    if (!edited.success || edited.data.kind !== 'meal_plan_updated') {
+      throw new Error('Expected updated meal plan');
+    }
+    expect(edited.data.version.days.find((day) => (
+      day.businessDate === '2026-08-19'
+    ))).toMatchObject({ locked: true, manuallyModified: true });
+    expect(JSON.stringify({ context, locked, edited })).not.toContain('userId');
+    expect(JSON.stringify({ context, locked, edited })).not.toContain('trusted-user-a');
+  });
+
+  it('maps past meal facts and unlisted recipes to stable public errors', async () => {
+    const handler = createMealHarness();
+    await prepareApiMealPlan(handler);
+
+    await expect(handler({
+      action: 'setMealPlanDayLock',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'meal-api-past-001',
+        payload: { businessDate: '2026-08-10', locked: true }
+      }
+    }, { userId: 'trusted-user-a' })).resolves.toEqual({
+      success: false,
+      error: {
+        code: 'past_fact_immutable',
+        message: '今天及过去日期的餐单事实不可修改。'
+      }
+    });
+
+    await expect(handler({
+      action: 'updateMealPlanDay',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'meal-api-unlisted-001',
+        payload: {
+          businessDate: '2026-08-19',
+          slot: 'dinner',
+          recipeTemplateVersionId: 'client-invented-recipe'
+        }
+      }
+    }, { userId: 'trusted-user-a' })).resolves.toEqual({
+      success: false,
+      error: {
+        code: 'recipe_not_selectable',
+        message: '请选择当前上下文提供的备选菜品。'
       }
     });
   });

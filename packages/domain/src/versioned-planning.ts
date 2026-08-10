@@ -205,6 +205,10 @@ export interface CurrentPlanningContext {
   readonly mealPlanStale: boolean;
   readonly pendingMealPlanCandidate: MealPlanVersion | null;
   readonly pendingMealPlanTargetDiffs: readonly MealPlanTargetDiff[];
+  readonly selectableRecipes: readonly {
+    readonly recipeTemplateVersionId: string;
+    readonly dishNameZh: string;
+  }[];
   readonly latestVersions: LatestPlanningVersions;
 }
 

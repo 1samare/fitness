@@ -226,6 +226,57 @@ describe('planning API contracts', () => {
     })).toThrow();
   });
 
+  it('accepts only strict server-selected meal lock and edit commands', () => {
+    const lock = {
+      action: 'setMealPlanDayLock',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'meal-lock-001',
+        payload: { businessDate: '2026-08-19', locked: true }
+      }
+    } as const;
+    const edit = {
+      action: 'updateMealPlanDay',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'meal-edit-001',
+        payload: {
+          businessDate: '2026-08-19',
+          slot: 'dinner',
+          recipeTemplateVersionId: 'recipe-version-reviewed-v1'
+        }
+      }
+    } as const;
+
+    expect(planningApiRequestSchema.parse(lock)).toEqual(lock);
+    expect(planningApiRequestSchema.parse(edit)).toEqual(edit);
+    expect(() => planningApiRequestSchema.parse({
+      ...lock,
+      payload: { ...lock.payload, userId: 'attacker' }
+    })).toThrow();
+    expect(() => planningApiRequestSchema.parse({
+      ...edit,
+      payload: {
+        ...edit.payload,
+        payload: { ...edit.payload.payload, userId: 'attacker' }
+      }
+    })).toThrow();
+    expect(() => planningApiRequestSchema.parse({
+      ...edit,
+      payload: {
+        ...edit.payload,
+        payload: { ...edit.payload.payload, slot: 'late_night' }
+      }
+    })).toThrow();
+    expect(() => planningApiRequestSchema.parse({
+      ...edit,
+      payload: {
+        ...edit.payload,
+        payload: { ...edit.payload.payload, nutritionTotals: { energyKcal: 1 } }
+      }
+    })).toThrow();
+  });
+
   it('parses public inventory responses and rejects stored user identity', () => {
     const response = {
       success: true,
