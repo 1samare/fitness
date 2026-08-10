@@ -1,4 +1,4 @@
-import { addBusinessDays } from '@fitness/contracts';
+import { addBusinessDays, planningAggregateStateSchema } from '@fitness/contracts';
 import type {
   IdempotencyRecord,
   InventoryVersion,
@@ -264,6 +264,46 @@ function assertMealPlan(
   }
 }
 
+function isDirectMealPlanSuccessor(
+  successor: MealPlanVersion,
+  predecessor: MealPlanVersion
+): boolean {
+  return successor.supersedesVersionId === predecessor.id
+    && successor.weekStartDate === predecessor.weekStartDate
+    && successor.bodyProfileVersionId === predecessor.bodyProfileVersionId
+    && successor.goalVersionId === predecessor.goalVersionId
+    && successor.trainingPlanVersionId === predecessor.trainingPlanVersionId
+    && successor.days.length === predecessor.days.length
+    && successor.days.every((day, index) => {
+      const predecessorDay = predecessor.days[index];
+      return predecessorDay !== undefined
+        && day.businessDate === predecessorDay.businessDate
+        && day.dailyNutritionTargetVersionId
+          === predecessorDay.dailyNutritionTargetVersionId;
+    });
+}
+
+function changedTargetDates(
+  plan: MealPlanVersion,
+  previousPlan: MealPlanVersion
+): Set<string> {
+  const previousDays = new Map(
+    previousPlan.days.map((day) => [day.businessDate, day])
+  );
+  const changedDates = new Set<string>();
+  for (const day of plan.days) {
+    const previousDay = previousDays.get(day.businessDate);
+    if (previousDay === undefined) corrupt();
+    if (
+      previousDay.dailyNutritionTargetVersionId
+      !== day.dailyNutritionTargetVersionId
+    ) {
+      changedDates.add(day.businessDate);
+    }
+  }
+  return changedDates;
+}
+
 export function assertPlanningAggregateInvariants(
   state: PlanningAggregateState,
   userId: string
@@ -461,26 +501,67 @@ export function assertPlanningAggregateInvariants(
     }
   }
 
+  const expectedDiffsByCandidate = new Map<
+    string,
+    Map<
+      string,
+      {
+        readonly previousNutritionTargetVersionId: string;
+        readonly proposedNutritionTargetVersionId: string;
+      }
+    >
+  >();
+  for (const candidate of state.mealPlans) {
+    if (candidate.readiness !== 'pending_confirmation') continue;
+    const previousPlan = candidate.supersedesVersionId === null
+      ? undefined
+      : mealPlans.get(candidate.supersedesVersionId);
+    if (previousPlan === undefined) corrupt();
+    const previousDays = new Map(
+      previousPlan.days.map((day) => [day.businessDate, day])
+    );
+    const expectedDiffs = new Map<
+      string,
+      {
+        readonly previousNutritionTargetVersionId: string;
+        readonly proposedNutritionTargetVersionId: string;
+      }
+    >();
+    for (const candidateDay of candidate.days) {
+      const previousDay = previousDays.get(candidateDay.businessDate);
+      if (previousDay === undefined) corrupt();
+      if (
+        (candidateDay.locked || candidateDay.manuallyModified)
+        && previousDay.dailyNutritionTargetVersionId
+          !== candidateDay.dailyNutritionTargetVersionId
+      ) {
+        expectedDiffs.set(candidateDay.businessDate, {
+          previousNutritionTargetVersionId: previousDay.dailyNutritionTargetVersionId,
+          proposedNutritionTargetVersionId: candidateDay.dailyNutritionTargetVersionId
+        });
+      }
+    }
+    if (expectedDiffs.size === 0) corrupt();
+    expectedDiffsByCandidate.set(candidate.id, expectedDiffs);
+  }
+
   const diffDatesByCandidate = new Map<string, Set<string>>();
   for (const diff of state.mealPlanTargetDiffs) {
     const candidate = mealPlans.get(diff.candidateMealPlanVersionId);
-    const previousPlan = candidate?.supersedesVersionId === null
-      || candidate?.supersedesVersionId === undefined
+    const expected = candidate === undefined
       ? undefined
-      : mealPlans.get(candidate.supersedesVersionId);
-    const candidateDay = candidate?.days.find((day) => day.businessDate === diff.businessDate);
-    const previousDay = previousPlan?.days.find((day) => day.businessDate === diff.businessDate);
+      : expectedDiffsByCandidate.get(candidate.id)?.get(diff.businessDate);
     if (
       candidate === undefined
       || candidate.readiness !== 'pending_confirmation'
-      || previousPlan === undefined
-      || candidateDay === undefined
-      || previousDay === undefined
+      || expected === undefined
+      || diff.previousNutritionTargetVersionId === diff.proposedNutritionTargetVersionId
       || !nutritionTargets.has(diff.previousNutritionTargetVersionId)
       || !nutritionTargets.has(diff.proposedNutritionTargetVersionId)
-      || previousDay.dailyNutritionTargetVersionId !== diff.previousNutritionTargetVersionId
-      || candidateDay.dailyNutritionTargetVersionId !== diff.proposedNutritionTargetVersionId
-      || (!candidateDay.locked && !candidateDay.manuallyModified)
+      || expected.previousNutritionTargetVersionId
+        !== diff.previousNutritionTargetVersionId
+      || expected.proposedNutritionTargetVersionId
+        !== diff.proposedNutritionTargetVersionId
     ) {
       corrupt();
     }
@@ -489,8 +570,15 @@ export function assertPlanningAggregateInvariants(
     dates.add(diff.businessDate);
     diffDatesByCandidate.set(candidate.id, dates);
   }
-  for (const plan of state.mealPlans) {
-    if (plan.readiness === 'pending_confirmation' && !diffDatesByCandidate.has(plan.id)) corrupt();
+  for (const [candidateId, expectedDiffs] of expectedDiffsByCandidate) {
+    const actualDates = diffDatesByCandidate.get(candidateId);
+    if (
+      actualDates === undefined
+      || actualDates.size !== expectedDiffs.size
+      || [...expectedDiffs.keys()].some((date) => !actualDates.has(date))
+    ) {
+      corrupt();
+    }
   }
 
   const decidedCandidates = new Set<string>();
@@ -510,7 +598,11 @@ export function assertPlanningAggregateInvariants(
       || (decision.decision === 'keep_existing' && decision.activatedMealPlanVersionId !== null)
       || (
         decision.decision === 'overwrite_locked'
-        && (activated === undefined || activated.readiness !== 'complete')
+        && (
+          activated === undefined
+          || activated.readiness !== 'complete'
+          || !isDirectMealPlanSuccessor(activated, candidate)
+        )
       )
     ) {
       corrupt();
@@ -541,6 +633,36 @@ export function assertPlanningAggregateInvariants(
     ) {
       corrupt();
     }
+    const triggerTrainingPlanVersionId = job.triggerType === 'training_plan_changed'
+      ? events.get(job.triggerEventId)?.trainingPlanVersionId
+      : completions.get(job.triggerEventId)?.trainingPlanVersionId;
+    const triggerTrainingPlan = triggerTrainingPlanVersionId === undefined
+      ? undefined
+      : trainingPlans.get(triggerTrainingPlanVersionId);
+    if (
+      triggerTrainingPlan === undefined
+      || (
+        candidate !== undefined
+        && (
+          candidate.trainingPlanVersionId !== triggerTrainingPlan.id
+          || candidate.weekStartDate !== triggerTrainingPlan.payload.weekStartDate
+        )
+      )
+      || (
+        activated !== undefined
+        && (
+          activated.trainingPlanVersionId !== triggerTrainingPlan.id
+          || activated.weekStartDate !== triggerTrainingPlan.payload.weekStartDate
+        )
+      )
+      || (
+        candidate !== undefined
+        && activated !== undefined
+        && !isDirectMealPlanSuccessor(activated, candidate)
+      )
+    ) {
+      corrupt();
+    }
     if (job.triggerType === 'training_plan_changed') {
       const event = events.get(job.triggerEventId);
       if (
@@ -558,6 +680,36 @@ export function assertPlanningAggregateInvariants(
         || job.affectedDates[0] !== completion.businessDate
       ) {
         corrupt();
+      }
+    }
+    const resultPlan = candidate ?? activated;
+    if (resultPlan !== undefined) {
+      const previousPlan = resultPlan.supersedesVersionId === null
+        ? undefined
+        : mealPlans.get(resultPlan.supersedesVersionId);
+      if (previousPlan === undefined) corrupt();
+      const changedDates = changedTargetDates(resultPlan, previousPlan);
+      if (
+        changedDates.size !== job.affectedDates.length
+        || job.affectedDates.some((date) => !changedDates.has(date))
+      ) {
+        corrupt();
+      }
+      const resultDays = new Map(
+        resultPlan.days.map((day) => [day.businessDate, day])
+      );
+      for (const affectedDate of job.affectedDates) {
+        const resultDay = resultDays.get(affectedDate);
+        const target = resultDay === undefined
+          ? undefined
+          : nutritionTargets.get(resultDay.dailyNutritionTargetVersionId);
+        if (
+          target === undefined
+          || target.businessDate !== affectedDate
+          || target.trainingPlanVersionId !== triggerTrainingPlan.id
+        ) {
+          corrupt();
+        }
       }
     }
     if (
@@ -592,4 +744,14 @@ export function assertPlanningAggregateInvariants(
       events
     });
   }
+}
+
+export function parseAndAssertPlanningState(
+  state: unknown,
+  userId: string
+): PlanningAggregateState {
+  const parsed = planningAggregateStateSchema.safeParse(state);
+  if (!parsed.success) throw new CorruptPlanningStateError();
+  assertPlanningAggregateInvariants(parsed.data, userId);
+  return parsed.data;
 }

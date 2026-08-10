@@ -140,22 +140,62 @@ async function createValidMealState(includeProfileV2 = false) {
   };
 }
 
-async function createPendingCandidateState() {
+async function createPendingCandidateState(changedTargetCount = 1) {
   const state = await createValidMealState();
   const activePlan = state.mealPlans[0];
   const firstDay = activePlan?.days[0];
-  if (activePlan === undefined || firstDay === undefined) {
+  if (
+    activePlan === undefined
+    || firstDay === undefined
+    || changedTargetCount < 1
+    || changedTargetCount > 7
+  ) {
     throw new Error('Expected active meal plan fixture');
   }
+  const nextEnergyTargets: PlanningAggregateState['dailyEnergyTargets'][number][] = [];
+  const nextNutritionTargets: PlanningAggregateState['dailyNutritionTargets'][number][] = [];
+  for (const day of activePlan.days.slice(0, changedTargetCount)) {
+    const energyTarget = state.dailyEnergyTargets.find(
+      (target) => target.businessDate === day.businessDate
+    );
+    const nutritionTarget = state.dailyNutritionTargets.find(
+      (target) => target.id === day.dailyNutritionTargetVersionId
+    );
+    if (energyTarget === undefined || nutritionTarget === undefined) {
+      throw new Error('Expected candidate target source fixture');
+    }
+    const nextEnergyTarget = {
+      ...energyTarget,
+      id: `daily-energy-target-next-${day.businessDate}`,
+      version: energyTarget.version + 1
+    };
+    nextEnergyTargets.push(nextEnergyTarget);
+    nextNutritionTargets.push({
+      ...nutritionTarget,
+      id: `daily-nutrition-target-next-${day.businessDate}`,
+      version: nutritionTarget.version + 1,
+      dailyEnergyTargetVersionId: nextEnergyTarget.id
+    });
+  }
+  const nextTargetsByDate = new Map(
+    nextNutritionTargets.map((target) => [target.businessDate, target])
+  );
   const candidate = {
     ...activePlan,
     id: 'meal-plan-2',
     version: 2,
     supersedesVersionId: activePlan.id,
     readiness: 'pending_confirmation' as const,
-    days: activePlan.days.map((day, index) => (
-      index === 0 ? { ...day, locked: true } : day
-    ))
+    days: activePlan.days.map((day) => {
+      const nextTarget = nextTargetsByDate.get(day.businessDate);
+      return nextTarget === undefined
+        ? day
+        : {
+            ...day,
+            dailyNutritionTargetVersionId: nextTarget.id,
+            locked: true
+          };
+    })
   };
   const diff = {
     id: 'meal-diff-1',
@@ -169,8 +209,39 @@ async function createPendingCandidateState() {
   };
   return {
     ...state,
+    dailyEnergyTargets: [...state.dailyEnergyTargets, ...nextEnergyTargets],
+    dailyNutritionTargets: [...state.dailyNutritionTargets, ...nextNutritionTargets],
     mealPlans: [activePlan, candidate],
     mealPlanTargetDiffs: [diff]
+  };
+}
+
+async function createCandidateJobState() {
+  const state = await createPendingCandidateState();
+  const event = state.outboxEvents[0];
+  const diff = state.mealPlanTargetDiffs[0];
+  const candidate = state.mealPlans[1];
+  if (event === undefined || diff === undefined || candidate === undefined) {
+    throw new Error('Expected candidate job fixture');
+  }
+  const linkedEvent = { ...event, affectedDates: [diff.businessDate] };
+  return {
+    ...state,
+    outboxEvents: [linkedEvent],
+    recalculationJobs: [{
+      kind: 'recalculation_job' as const,
+      id: 'recalculation-job-candidate',
+      userId: 'user-a',
+      triggerEventId: linkedEvent.eventId,
+      triggerType: 'training_plan_changed' as const,
+      affectedDates: linkedEvent.affectedDates,
+      status: 'pending' as const,
+      createdAt: '2026-08-10T01:00:00.000Z',
+      completedAt: null,
+      candidateMealPlanVersionId: candidate.id,
+      activatedMealPlanVersionId: null,
+      failureCode: null
+    }]
   };
 }
 
@@ -417,6 +488,74 @@ describe('planning aggregate invariants', () => {
     });
   });
 
+  test('rejects a pending candidate missing one changed protected-day diff', async () => {
+    const state = await createPendingCandidateState(2);
+    expectCorrupt(state);
+  });
+
+  test('rejects an extra diff for a protected day whose target did not change', async () => {
+    const state = await createPendingCandidateState();
+    const previous = state.mealPlans[0];
+    const candidate = state.mealPlans[1];
+    const secondPreviousDay = previous?.days[1];
+    if (previous === undefined || candidate === undefined || secondPreviousDay === undefined) {
+      throw new Error('Expected extra diff fixture');
+    }
+    const candidateDays = candidate.days.map((day) => (
+      day.businessDate === secondPreviousDay.businessDate ? { ...day, locked: true } : day
+    ));
+    expectCorrupt({
+      ...state,
+      mealPlans: [previous, { ...candidate, days: candidateDays }],
+      mealPlanTargetDiffs: [
+        ...state.mealPlanTargetDiffs,
+        {
+          id: 'meal-diff-extra',
+          userId: 'user-a',
+          candidateMealPlanVersionId: candidate.id,
+          businessDate: secondPreviousDay.businessDate,
+          previousNutritionTargetVersionId: secondPreviousDay.dailyNutritionTargetVersionId,
+          proposedNutritionTargetVersionId: secondPreviousDay.dailyNutritionTargetVersionId,
+          reason: 'locked_or_manually_modified'
+        }
+      ]
+    });
+  });
+
+  test('rejects a pending diff whose previous and proposed target IDs are equal', async () => {
+    const state = await createPendingCandidateState();
+    const previous = state.mealPlans[0];
+    const candidate = state.mealPlans[1];
+    const diff = state.mealPlanTargetDiffs[0];
+    const previousDay = previous?.days[0];
+    if (
+      previous === undefined
+      || candidate === undefined
+      || diff === undefined
+      || previousDay === undefined
+    ) {
+      throw new Error('Expected same-target diff fixture');
+    }
+    expectCorrupt({
+      ...state,
+      mealPlans: [
+        previous,
+        {
+          ...candidate,
+          days: candidate.days.map((day, index) => (
+            index === 0
+              ? { ...day, dailyNutritionTargetVersionId: previousDay.dailyNutritionTargetVersionId }
+              : day
+          ))
+        }
+      ],
+      mealPlanTargetDiffs: [{
+        ...diff,
+        proposedNutritionTargetVersionId: diff.previousNutritionTargetVersionId
+      }]
+    });
+  });
+
   test('rejects decisions that reference a complete plan instead of a pending candidate', async () => {
     const state = await createValidMealState();
     const activePlan = state.mealPlans[0];
@@ -436,6 +575,80 @@ describe('planning aggregate invariants', () => {
       }]
     });
   });
+
+  test('accepts overwrite_locked only with a complete successor of the pending candidate', async () => {
+    const state = await createPendingCandidateState();
+    const previous = state.mealPlans[0];
+    const candidate = state.mealPlans[1];
+    if (previous === undefined || candidate === undefined) {
+      throw new Error('Expected overwrite decision fixture');
+    }
+    const activated = {
+      ...candidate,
+      id: 'meal-plan-3',
+      version: 3,
+      supersedesVersionId: candidate.id,
+      readiness: 'complete' as const
+    };
+    expect(() => {
+      assertPlanningAggregateInvariants({
+        ...state,
+        mealPlans: [...state.mealPlans, activated],
+        mealPlanDecisions: [{
+          kind: 'meal_plan_decision',
+          id: 'meal-decision-1',
+          userId: 'user-a',
+          version: 1,
+          candidateMealPlanVersionId: candidate.id,
+          previousActiveMealPlanVersionId: previous.id,
+          decision: 'overwrite_locked',
+          decidedAt: '2026-08-10T01:00:00.000Z',
+          activatedMealPlanVersionId: activated.id
+        }]
+      }, 'user-a');
+    }).not.toThrow();
+  });
+
+  test.each(['candidate', 'previous', 'unrelated_complete'] as const)(
+    'rejects overwrite_locked activation of the %s plan',
+    async (activatedPlanKind) => {
+      const state = await createPendingCandidateState();
+      const previous = state.mealPlans[0];
+      const candidate = state.mealPlans[1];
+      if (previous === undefined || candidate === undefined) {
+        throw new Error('Expected invalid overwrite fixture');
+      }
+      const unrelated = {
+        ...candidate,
+        id: 'meal-plan-3',
+        version: 3,
+        supersedesVersionId: previous.id,
+        readiness: 'complete' as const
+      };
+      const activatedMealPlanVersionId = activatedPlanKind === 'candidate'
+        ? candidate.id
+        : activatedPlanKind === 'previous'
+          ? previous.id
+          : unrelated.id;
+      expectCorrupt({
+        ...state,
+        mealPlans: activatedPlanKind === 'unrelated_complete'
+          ? [...state.mealPlans, unrelated]
+          : state.mealPlans,
+        mealPlanDecisions: [{
+          kind: 'meal_plan_decision',
+          id: 'meal-decision-1',
+          userId: 'user-a',
+          version: 1,
+          candidateMealPlanVersionId: candidate.id,
+          previousActiveMealPlanVersionId: previous.id,
+          decision: 'overwrite_locked',
+          decidedAt: '2026-08-10T01:00:00.000Z',
+          activatedMealPlanVersionId
+        }]
+      });
+    }
+  );
 
   test('rejects duplicate recalculation jobs for the same trigger event', async () => {
     const state = await createValidMealState();
@@ -461,6 +674,107 @@ describe('planning aggregate invariants', () => {
         firstJob,
         { ...firstJob, id: 'recalculation-job-2' }
       ]
+    });
+  });
+
+  test('accepts a candidate job bound to its trigger plan and changed target dates', async () => {
+    const state = await createCandidateJobState();
+    expect(() => {
+      assertPlanningAggregateInvariants(state, 'user-a');
+    }).not.toThrow();
+  });
+
+  test('accepts an activated job result only as the complete candidate successor', async () => {
+    const state = await createCandidateJobState();
+    const candidate = state.mealPlans[1];
+    const job = state.recalculationJobs[0];
+    if (candidate === undefined || job === undefined) {
+      throw new Error('Expected activated job fixture');
+    }
+    const activated = {
+      ...candidate,
+      id: 'meal-plan-3',
+      version: 3,
+      supersedesVersionId: candidate.id,
+      readiness: 'complete' as const
+    };
+    expect(() => {
+      assertPlanningAggregateInvariants({
+        ...state,
+        mealPlans: [...state.mealPlans, activated],
+        recalculationJobs: [{
+          ...job,
+          status: 'completed',
+          completedAt: '2026-08-10T02:00:00.000Z',
+          activatedMealPlanVersionId: activated.id
+        }]
+      }, 'user-a');
+    }).not.toThrow();
+  });
+
+  test('rejects a candidate job whose trigger belongs to another training plan chain', async () => {
+    const state = await createCandidateJobState();
+    const event = state.outboxEvents[0];
+    const originalTrainingPlan = state.trainingPlans[0];
+    if (event === undefined || originalTrainingPlan === undefined) {
+      throw new Error('Expected cross-plan job fixture');
+    }
+    const otherTrainingPlan = {
+      ...originalTrainingPlan,
+      id: 'training-plan-other',
+      version: 2
+    };
+    expectCorrupt({
+      ...state,
+      trainingPlans: [...state.trainingPlans, otherTrainingPlan],
+      outboxEvents: [{
+        ...event,
+        previousTrainingPlanVersionId: originalTrainingPlan.id,
+        trainingPlanVersionId: otherTrainingPlan.id
+      }],
+      idempotencyRecords: []
+    });
+  });
+
+  test('rejects an unrelated complete plan as a candidate job activation result', async () => {
+    const state = await createCandidateJobState();
+    const previous = state.mealPlans[0];
+    const candidate = state.mealPlans[1];
+    const job = state.recalculationJobs[0];
+    if (previous === undefined || candidate === undefined || job === undefined) {
+      throw new Error('Expected unrelated job result fixture');
+    }
+    const unrelated = {
+      ...candidate,
+      id: 'meal-plan-3',
+      version: 3,
+      supersedesVersionId: previous.id,
+      readiness: 'complete' as const
+    };
+    expectCorrupt({
+      ...state,
+      mealPlans: [...state.mealPlans, unrelated],
+      recalculationJobs: [{
+        ...job,
+        status: 'completed',
+        completedAt: '2026-08-10T02:00:00.000Z',
+        activatedMealPlanVersionId: unrelated.id
+      }]
+    });
+  });
+
+  test('rejects job affected dates that do not match the result target changes', async () => {
+    const state = await createCandidateJobState();
+    const event = state.outboxEvents[0];
+    const job = state.recalculationJobs[0];
+    const unrelatedDay = state.mealPlans[0]?.days[1];
+    if (event === undefined || job === undefined || unrelatedDay === undefined) {
+      throw new Error('Expected affected-date job fixture');
+    }
+    expectCorrupt({
+      ...state,
+      outboxEvents: [{ ...event, affectedDates: [unrelatedDay.businessDate] }],
+      recalculationJobs: [{ ...job, affectedDates: [unrelatedDay.businessDate] }]
     });
   });
 

@@ -1,10 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { PlanningRepository } from '@fitness/application';
-import { planningAggregateStateSchema } from '@fitness/contracts';
 import type { PlanningAggregateState } from '@fitness/domain';
 import {
   CorruptPlanningStateError,
-  assertPlanningAggregateInvariants
+  parseAndAssertPlanningState
 } from './planning-aggregate-invariants';
 
 export { CorruptPlanningStateError } from './planning-aggregate-invariants';
@@ -86,20 +85,14 @@ function decodeDocument(value: unknown, userId: string): PlanningAggregateState 
     : value.schemaVersion === 3
       ? { ...value.state, ...phase4Empty }
       : value.state;
-  const parsed = planningAggregateStateSchema.safeParse(candidateState);
-  if (!parsed.success) throw new CorruptPlanningStateError();
-  assertPlanningAggregateInvariants(parsed.data, userId);
-  return parsed.data;
+  return parseAndAssertPlanningState(candidateState, userId);
 }
 
 function encodeDocument(
   state: PlanningAggregateState,
   userId: string
 ): StoredPlanningDocument {
-  const parsed = planningAggregateStateSchema.safeParse(state);
-  if (!parsed.success) throw new CorruptPlanningStateError();
-  assertPlanningAggregateInvariants(parsed.data, userId);
-  return { schemaVersion: 4, state: parsed.data };
+  return { schemaVersion: 4, state: parseAndAssertPlanningState(state, userId) };
 }
 
 export class CloudBasePlanningRepository implements PlanningRepository {

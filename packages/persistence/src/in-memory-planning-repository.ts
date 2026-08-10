@@ -1,5 +1,6 @@
 import type { PlanningRepository } from '@fitness/application';
 import type { PlanningAggregateState } from '@fitness/domain';
+import { parseAndAssertPlanningState } from './planning-aggregate-invariants';
 
 const emptyState: PlanningAggregateState = {
   bodyProfiles: [],
@@ -51,7 +52,8 @@ export class InMemoryPlanningRepository implements PlanningRepository {
     try {
       const current = copyState(this.states.get(userId) ?? emptyState);
       const { nextState, result } = operation(current);
-      this.states.set(userId, copyState(nextState));
+      const validated = parseAndAssertPlanningState(nextState, userId);
+      this.states.set(userId, copyState(validated));
       return result;
     } finally {
       release?.();

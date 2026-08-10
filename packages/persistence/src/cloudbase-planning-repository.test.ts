@@ -1,5 +1,9 @@
 import { describe, expect, test, vi } from 'vitest';
-import { createVersionedPlanningService } from '@fitness/application';
+import {
+  createVersionedPlanningService,
+  type PlanningRepository
+} from '@fitness/application';
+import type { PlanningAggregateState } from '@fitness/domain';
 import {
   CloudBasePlanningRepository,
   CorruptPlanningStateError,
@@ -7,6 +11,7 @@ import {
   type CloudBaseDocumentReference,
   type CloudBaseTransaction
 } from './cloudbase-planning-repository';
+import { InMemoryPlanningRepository } from './in-memory-planning-repository';
 
 class FakeDocumentReference implements CloudBaseDocumentReference {
   public constructor(
@@ -75,7 +80,234 @@ function replaceStoredFingerprint(
   });
 }
 
+async function createPhase4State(repository: PlanningRepository): Promise<PlanningAggregateState> {
+  let sequence = 0;
+  const service = createVersionedPlanningService({
+    repository,
+    now: () => '2026-08-07T00:00:00.000Z',
+    nextId: (prefix) => `${prefix}-${String(++sequence)}`
+  });
+  await service.completePlanningSetup('user-a', {
+    expectedVersions: { bodyProfile: 0, goal: 0, trainingPlan: 0 },
+    idempotencyKey: 'phase4-repository-state-001',
+    bodyProfile: {
+      ageYears: 30,
+      sexCode: 0,
+      heightCm: 175,
+      weightKg: 70,
+      healthScopeConfirmed: true,
+      nonTrainingActivity: 'light',
+      allergens: [],
+      avoidFoods: [],
+      dietPreferences: [],
+      businessTimezone: 'Asia/Shanghai'
+    },
+    goal: {
+      goal: 'maintain',
+      effectiveDate: '2026-08-07',
+      targetDate: '2026-10-30'
+    },
+    trainingPlan: {
+      weekStartDate: '2026-08-10',
+      businessTimezone: 'Asia/Shanghai',
+      sessions: [{
+        businessDate: '2026-08-11',
+        sessionCode: '02054',
+        durationMinutes: 60
+      }]
+    }
+  });
+  const state = await repository.read('user-a');
+  const profile = state.bodyProfiles[0];
+  const goal = state.goals[0];
+  const trainingPlan = state.trainingPlans[0];
+  const firstEnergyTarget = state.dailyEnergyTargets.find(
+    (target) => target.businessDate === '2026-08-10'
+  );
+  const firstNutritionTarget = state.dailyNutritionTargets.find(
+    (target) => target.businessDate === '2026-08-10'
+  );
+  if (
+    profile === undefined
+    || goal === undefined
+    || trainingPlan === undefined
+    || firstEnergyTarget === undefined
+    || firstNutritionTarget === undefined
+    || state.dailyNutritionTargets.length !== 7
+  ) {
+    throw new Error('Expected complete phase-4 repository fixture');
+  }
+  const nextEnergyTarget = {
+    ...firstEnergyTarget,
+    id: 'daily-energy-target-next',
+    version: 2
+  };
+  const nextNutritionTarget = {
+    ...firstNutritionTarget,
+    id: 'daily-nutrition-target-next',
+    version: 2,
+    dailyEnergyTargetVersionId: nextEnergyTarget.id
+  };
+  const inventory = {
+    kind: 'inventory_version' as const,
+    id: 'inventory-1',
+    userId: 'user-a',
+    version: 1,
+    createdAt: '2026-08-10T00:00:00.000Z',
+    items: [{
+      foodId: 'fixture-food',
+      nutritionSnapshotId: 'snapshot-fixture-food-v1',
+      availableGrams: 10_000
+    }]
+  };
+  const targets = [...state.dailyNutritionTargets].sort((left, right) => (
+    left.businessDate.localeCompare(right.businessDate)
+  ));
+  const completePlan = {
+    kind: 'meal_plan_version' as const,
+    id: 'meal-plan-1',
+    userId: 'user-a',
+    version: 1,
+    createdAt: '2026-08-10T00:00:00.000Z',
+    weekStartDate: trainingPlan.payload.weekStartDate,
+    bodyProfileVersionId: profile.id,
+    goalVersionId: goal.id,
+    trainingPlanVersionId: trainingPlan.id,
+    inventoryVersionId: inventory.id,
+    catalogVersionId: 'catalog-fixture-v1',
+    generationPolicyVersion: 'weekly-meal-generation-v1' as const,
+    supersedesVersionId: null,
+    readiness: 'complete' as const,
+    days: targets.map((target) => ({
+      businessDate: target.businessDate,
+      dailyNutritionTargetVersionId: target.id,
+      dailyMenuTemplateVersionId: `menu-${target.businessDate}`,
+      locked: false,
+      manuallyModified: false,
+      meals: [{
+        slot: 'breakfast' as const,
+        recipeTemplateVersionId: 'recipe-fixture-v1',
+        servingMultiplier: 1
+      }],
+      ingredientAmounts: [{ foodId: 'fixture-food', grams: 100 }],
+      nutritionTotals: {
+        energyKcal: 100,
+        proteinG: 10,
+        fatG: 5,
+        carbohydrateG: 12,
+        fiberG: 3,
+        saturatedFatG: 1,
+        addedSugarG: 0
+      },
+      nutritionSourceSnapshotIds: ['snapshot-fixture-food-v1']
+    }))
+  };
+  const candidatePlan = {
+    ...completePlan,
+    id: 'meal-plan-2',
+    version: 2,
+    supersedesVersionId: completePlan.id,
+    readiness: 'pending_confirmation' as const,
+    days: completePlan.days.map((day) => (
+      day.businessDate === nextNutritionTarget.businessDate
+        ? {
+            ...day,
+            dailyNutritionTargetVersionId: nextNutritionTarget.id,
+            locked: true
+          }
+        : day
+    ))
+  };
+  const diff = {
+    id: 'meal-diff-1',
+    userId: 'user-a',
+    candidateMealPlanVersionId: candidatePlan.id,
+    businessDate: nextNutritionTarget.businessDate,
+    previousNutritionTargetVersionId: firstNutritionTarget.id,
+    proposedNutritionTargetVersionId: nextNutritionTarget.id,
+    reason: 'locked_or_manually_modified' as const
+  };
+  const nextState: PlanningAggregateState = {
+    ...state,
+    dailyEnergyTargets: [...state.dailyEnergyTargets, nextEnergyTarget],
+    dailyNutritionTargets: [...state.dailyNutritionTargets, nextNutritionTarget],
+    inventories: [inventory],
+    mealPlans: [completePlan, candidatePlan],
+    mealPlanTargetDiffs: [diff],
+    activeInventoryVersionId: inventory.id,
+    activeMealPlanVersionId: completePlan.id
+  };
+  await repository.transact('user-a', () => ({ nextState, result: undefined }));
+  return repository.read('user-a');
+}
+
+function corruptPhase4State(
+  state: PlanningAggregateState,
+  corruption: 'cross_user' | 'dangling' | 'duplicate_trigger' | 'pending_active'
+): PlanningAggregateState {
+  if (corruption === 'cross_user') {
+    return {
+      ...state,
+      inventories: state.inventories.map((inventory) => ({
+        ...inventory,
+        userId: 'user-b'
+      }))
+    };
+  }
+  if (corruption === 'dangling') {
+    return { ...state, activeInventoryVersionId: 'missing-inventory' };
+  }
+  if (corruption === 'pending_active') {
+    const candidate = state.mealPlans.find((plan) => plan.readiness === 'pending_confirmation');
+    if (candidate === undefined) throw new Error('Expected pending candidate');
+    return { ...state, activeMealPlanVersionId: candidate.id };
+  }
+  const event = state.outboxEvents[0];
+  if (event === undefined) throw new Error('Expected trigger event');
+  const job = {
+    kind: 'recalculation_job' as const,
+    id: 'recalculation-job-1',
+    userId: 'user-a',
+    triggerEventId: event.eventId,
+    triggerType: 'training_plan_changed' as const,
+    affectedDates: event.affectedDates,
+    status: 'pending' as const,
+    createdAt: '2026-08-10T01:00:00.000Z',
+    completedAt: null,
+    candidateMealPlanVersionId: null,
+    activatedMealPlanVersionId: null,
+    failureCode: null
+  };
+  return {
+    ...state,
+    recalculationJobs: [job, { ...job, id: 'recalculation-job-2' }]
+  };
+}
+
 describe('CloudBasePlanningRepository', () => {
+  test.each([
+    'cross_user',
+    'dangling',
+    'duplicate_trigger',
+    'pending_active'
+  ] as const)(
+    'rejects %s corruption consistently in memory and CloudBase',
+    async (corruption) => {
+      const repositories: readonly PlanningRepository[] = [
+        new InMemoryPlanningRepository(),
+        new CloudBasePlanningRepository(new FakeDatabase())
+      ];
+      for (const repository of repositories) {
+        const state = await createPhase4State(repository);
+        await expect(repository.transact('user-a', () => ({
+          nextState: corruptPhase4State(state, corruption),
+          result: undefined
+        }))).rejects.toBeInstanceOf(CorruptPlanningStateError);
+        await expect(repository.read('user-a')).resolves.toEqual(state);
+      }
+    }
+  );
+
   test('initializes missing state without the Node 17 structuredClone global', async () => {
     vi.stubGlobal('structuredClone', undefined);
     try {
