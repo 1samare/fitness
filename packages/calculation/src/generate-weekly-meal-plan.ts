@@ -473,15 +473,66 @@ function weeklyDiversitySatisfied(days: readonly MealPlanDay[]): boolean {
   ))).size >= FOOD_DIVERSITY_POLICY_V1.minimumDistinctFoodsPerWeek;
 }
 
+function mealTemplateMatchesDay(
+  menu: DailyMenuTemplateVersion,
+  day: MealPlanDay
+): boolean {
+  if (menu.meals.length !== day.meals.length) return false;
+  const recipeIdBySlot = new Map(menu.meals.map((meal) => [
+    meal.slot,
+    meal.recipeTemplateVersionId
+  ]));
+  return day.meals.every((meal) => (
+    recipeIdBySlot.get(meal.slot) === meal.recipeTemplateVersionId
+  ));
+}
+
+function persistedDerivationsMatch(input: {
+  readonly day: MealPlanDay;
+  readonly ingredientAmounts: MealPlanDay['ingredientAmounts'];
+  readonly nutritionTotals: NutrientValues;
+  readonly nutritionSourceSnapshotIds: readonly string[];
+}): boolean {
+  const persistedIngredients = input.day.ingredientAmounts;
+  if (persistedIngredients.length !== input.ingredientAmounts.length) return false;
+  for (let index = 0; index < persistedIngredients.length; index += 1) {
+    const persisted = persistedIngredients[index];
+    const rebuilt = input.ingredientAmounts[index];
+    if (
+      persisted === undefined
+      || rebuilt === undefined
+      || persisted.foodId !== rebuilt.foodId
+      || persisted.grams !== rebuilt.grams
+    ) return false;
+  }
+
+  const persistedSourceIds = input.day.nutritionSourceSnapshotIds;
+  if (persistedSourceIds.length !== input.nutritionSourceSnapshotIds.length) return false;
+  for (let index = 0; index < persistedSourceIds.length; index += 1) {
+    if (persistedSourceIds[index] !== input.nutritionSourceSnapshotIds[index]) return false;
+  }
+
+  const persistedTotals = input.day.nutritionTotals;
+  const rebuiltTotals = input.nutritionTotals;
+  return persistedTotals.energyKcal === rebuiltTotals.energyKcal
+    && persistedTotals.proteinG === rebuiltTotals.proteinG
+    && persistedTotals.fatG === rebuiltTotals.fatG
+    && persistedTotals.carbohydrateG === rebuiltTotals.carbohydrateG
+    && persistedTotals.fiberG === rebuiltTotals.fiberG
+    && persistedTotals.saturatedFatG === rebuiltTotals.saturatedFatG
+    && persistedTotals.addedSugarG === rebuiltTotals.addedSugarG;
+}
+
 function validateFixedDay(input: {
   readonly day: MealPlanDay;
   readonly catalog: DailyMenuCatalogVersion;
   readonly menusById: ReadonlyMap<string, DailyMenuTemplateVersion>;
   readonly recipesById: ReadonlyMap<string, RecipeTemplateVersion>;
-  readonly snapshotsById: ReadonlyMap<string, NutritionDataSnapshot>;
+  readonly snapshots: readonly NutritionDataSnapshot[];
+  readonly inventory: readonly InventoryVersion['items'][number][];
   readonly inventoryByFoodId: ReadonlyMap<string, InventoryVersion['items'][number]>;
-  readonly declaredAllergens: ReadonlySet<string>;
-  readonly avoidFoodIds: ReadonlySet<string>;
+  readonly allergens: readonly string[];
+  readonly avoidFoodIds: readonly string[];
   readonly allowTestFixtures: boolean;
 }): readonly WeeklyMealConflict[] {
   const conflicts: WeeklyMealConflict[] = [];
@@ -498,71 +549,101 @@ function validateFixedDay(input: {
     || menu === undefined
     || !qualityAllowed(menu, input.allowTestFixtures)
     || !hasRequiredUniqueMealSlots(menu.meals)
-  ) sourceConflict();
-  if (!hasRequiredUniqueMealSlots(input.day.meals)) sourceConflict();
+  ) {
+    sourceConflict();
+    return conflicts;
+  }
+  if (!hasRequiredUniqueMealSlots(input.day.meals)) {
+    sourceConflict();
+    return conflicts;
+  }
+  if (!input.day.manuallyModified && !mealTemplateMatchesDay(menu, input.day)) {
+    sourceConflict();
+    return conflicts;
+  }
 
+  const rebuiltIngredients: {
+    foodId: string;
+    nutritionSnapshotId: string;
+    grams: number;
+  }[] = [];
   for (const meal of input.day.meals) {
     const recipe = input.recipesById.get(meal.recipeTemplateVersionId);
-    if (recipe === undefined || !qualityAllowed(recipe, input.allowTestFixtures)) sourceConflict();
+    if (
+      recipe === undefined
+      || !qualityAllowed(recipe, input.allowTestFixtures)
+      || !WEEKLY_MEAL_SERVING_MULTIPLIERS.includes(meal.servingMultiplier)
+    ) {
+      sourceConflict();
+      return conflicts;
+    }
+    for (const ingredient of recipe.ingredients) {
+      const actualGrams = roundHalfUp(ingredient.grams * meal.servingMultiplier, 1);
+      if (actualGrams < 0.1) {
+        conflicts.push({
+          businessDate: input.day.businessDate,
+          code: 'food_diversity_insufficient',
+          foodId: ingredient.foodId
+        });
+      }
+      const inventoryItem = input.inventoryByFoodId.get(ingredient.foodId);
+      if (
+        inventoryItem !== undefined
+        && inventoryItem.nutritionSnapshotId !== ingredient.nutritionSnapshotId
+      ) sourceConflict(ingredient.foodId);
+      rebuiltIngredients.push({
+        foodId: ingredient.foodId,
+        nutritionSnapshotId: ingredient.nutritionSnapshotId,
+        grams: actualGrams
+      });
+    }
+  }
+  if (conflicts.length > 0) return conflicts;
+
+  const evaluation = evaluateRecipeCandidate({
+    template: {
+      id: `fixed-${input.day.businessDate}-${input.day.dailyMenuTemplateVersionId}`,
+      templateId: input.day.dailyMenuTemplateVersionId,
+      version: 1,
+      dishNameZh: input.day.dailyMenuTemplateVersionId,
+      sourceId: menu.sourceId,
+      datasetVersion: menu.datasetVersion,
+      reviewedAt: menu.reviewedAt,
+      qualityStatus: menu.qualityStatus,
+      ingredients: rebuiltIngredients
+    },
+    snapshots: input.snapshots,
+    inventory: input.inventory,
+    allergens: input.allergens,
+    avoidFoodIds: input.avoidFoodIds,
+    minimumDistinctFoodGroups: 0,
+    allowTestFixtures: input.allowTestFixtures
+  });
+  if (evaluation.kind === 'infeasible') {
+    return evaluation.conflicts.map((conflict) => (
+      mapRecipeConflict(input.day.businessDate, conflict)
+    ));
   }
 
-  const usedSnapshotIds = new Set<string>();
-  for (const ingredient of input.day.ingredientAmounts) {
-    if (ingredient.grams < 0.1) {
-      conflicts.push({
-        businessDate: input.day.businessDate,
-        code: 'food_diversity_insufficient',
-        foodId: ingredient.foodId
-      });
-      continue;
-    }
-    if (input.avoidFoodIds.has(ingredient.foodId)) {
-      conflicts.push({
-        businessDate: input.day.businessDate,
-        code: 'avoided_food',
-        foodId: ingredient.foodId
-      });
-    }
-    const inventoryItem = input.inventoryByFoodId.get(ingredient.foodId);
-    if (inventoryItem === undefined) {
-      conflicts.push({
-        businessDate: input.day.businessDate,
-        code: 'inventory_insufficient',
-        foodId: ingredient.foodId,
-        requiredGrams: ingredient.grams,
-        availableGrams: 0
-      });
-    }
-    const pinnedSnapshotId = inventoryItem?.nutritionSnapshotId
-      ?? input.day.nutritionSourceSnapshotIds.find((snapshotId) => (
-        input.snapshotsById.get(snapshotId)?.foodId === ingredient.foodId
-      ));
-    const snapshot = pinnedSnapshotId === undefined
-      ? undefined
-      : input.snapshotsById.get(pinnedSnapshotId);
-    if (
-      snapshot === undefined
-      || snapshot.foodId !== ingredient.foodId
-      || !input.day.nutritionSourceSnapshotIds.includes(snapshot.id)
-      || !qualityAllowed(snapshot, input.allowTestFixtures)
-    ) {
-      sourceConflict(ingredient.foodId);
-      continue;
-    }
-    usedSnapshotIds.add(snapshot.id);
-    if (snapshot.allergens.some((allergen) => (
-      input.declaredAllergens.has(canonicalizeAllergenTerm(allergen))
-    ))) {
-      conflicts.push({
-        businessDate: input.day.businessDate,
-        code: 'allergen_detected',
-        foodId: ingredient.foodId
-      });
-    }
+  const ingredientAmountsByFood = new Map<string, number>();
+  for (const ingredient of rebuiltIngredients) {
+    ingredientAmountsByFood.set(
+      ingredient.foodId,
+      roundHalfUp(
+        (ingredientAmountsByFood.get(ingredient.foodId) ?? 0) + ingredient.grams,
+        1
+      )
+    );
   }
-  if (input.day.nutritionSourceSnapshotIds.some((snapshotId) => (
-    !usedSnapshotIds.has(snapshotId)
-  ))) sourceConflict();
+  const ingredientAmounts = [...ingredientAmountsByFood]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([foodId, grams]) => ({ foodId, grams }));
+  if (!persistedDerivationsMatch({
+    day: input.day,
+    ingredientAmounts,
+    nutritionTotals: evaluation.totals,
+    nutritionSourceSnapshotIds: [...evaluation.sourceSnapshotIds].sort()
+  })) sourceConflict();
   return conflicts;
 }
 
@@ -610,8 +691,6 @@ export function generateWeeklyMealPlan(
   const menusById = new Map(input.menus.map((menu) => [menu.id, menu]));
   const recipesById = new Map(input.recipes.map((recipe) => [recipe.id, recipe]));
   const snapshotsById = new Map(input.snapshots.map((snapshot) => [snapshot.id, snapshot]));
-  const declaredAllergens = new Set(input.allergens.map(canonicalizeAllergenTerm));
-  const avoidFoodIds = new Set(input.avoidFoodIds);
   if (!qualityAllowed(input.catalog, input.allowTestFixtures)) {
     return infeasible([{
       businessDate: expectedDates[0] ?? input.weekStartDate,
@@ -632,10 +711,11 @@ export function generateWeeklyMealPlan(
       catalog: input.catalog,
       menusById,
       recipesById,
-      snapshotsById,
+      snapshots: input.snapshots,
+      inventory: input.inventory,
       inventoryByFoodId,
-      declaredAllergens,
-      avoidFoodIds,
+      allergens: input.allergens,
+      avoidFoodIds: input.avoidFoodIds,
       allowTestFixtures: input.allowTestFixtures
     });
     if (fixedDayConflicts.length > 0) return infeasible(fixedDayConflicts);

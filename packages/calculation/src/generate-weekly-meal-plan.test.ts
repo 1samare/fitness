@@ -1029,6 +1029,107 @@ describe('generateWeeklyMealPlan', () => {
     })), '2026-08-17', 'source_chain_incomplete');
   });
 
+  it('rebuilds fixed-day recipes and rejects an omitted allergen ingredient', () => {
+    const fixture = singleMenuFixture(BALANCED_TOTALS, {
+      id: 'menu-fixed-omitted-allergen',
+      foodCount: 26,
+      allergens: ['大豆']
+    });
+    const initial = expectGenerated(generateWeeklyMealPlan(generatorInput(fixture)));
+    const omittedFoodId = 'menu-fixed-omitted-allergen-00';
+    const omittedSnapshotId = `snapshot-${omittedFoodId}-v1`;
+    const fixedDays = initial.days.map((day) => ({
+      ...day,
+      ingredientAmounts: day.ingredientAmounts.filter(({ foodId }) => (
+        foodId !== omittedFoodId
+      )),
+      nutritionSourceSnapshotIds: day.nutritionSourceSnapshotIds.filter((snapshotId) => (
+        snapshotId !== omittedSnapshotId
+      ))
+    }));
+
+    expectConflict(generateWeeklyMealPlan(generatorInput(fixture, {
+      allergens: ['大豆'],
+      fixedDays
+    })), '2026-08-17', 'allergen_detected');
+  });
+
+  it('rejects fixed-day meals from menu B when the day declares menu A', () => {
+    const foods = foodsWithTotals('fixed-menu-source', 25, BALANCED_TOTALS);
+    const fixture = buildFixture([
+      { id: 'menu-fixed-a', foods },
+      { id: 'menu-fixed-b', foods }
+    ]);
+    const initial = expectGenerated(generateWeeklyMealPlan(generatorInput(fixture)));
+    const menuB = fixture.menus.find(({ id }) => id === 'menu-fixed-b');
+    if (menuB === undefined) throw new Error('expected menu B fixture');
+    const recipeBySlot = new Map(menuB.meals.map((meal) => [meal.slot, meal.recipeTemplateVersionId]));
+    const fixedDays = initial.days.map((day) => ({
+      ...day,
+      meals: day.meals.map((meal) => ({
+        ...meal,
+        recipeTemplateVersionId: recipeBySlot.get(meal.slot) ?? meal.recipeTemplateVersionId
+      }))
+    }));
+
+    expectConflict(generateWeeklyMealPlan(generatorInput(fixture, { fixedDays })),
+      '2026-08-17', 'source_chain_incomplete');
+  });
+
+  it('rejects a fixed day whose persisted snapshot differs from its recipe snapshot', () => {
+    const fixture = singleMenuFixture();
+    const initial = expectGenerated(generateWeeklyMealPlan(generatorInput(fixture)));
+    const originalSnapshot = fixture.snapshots[0];
+    if (originalSnapshot === undefined) throw new Error('expected original snapshot fixture');
+    const alternateSnapshot = {
+      ...originalSnapshot,
+      id: 'snapshot-menu-only-00-alternate-v2',
+      snapshotVersion: 2
+    };
+    const inventory = inventoryFor(fixture.snapshots).map((item) => (
+      item.foodId === originalSnapshot.foodId
+        ? { ...item, nutritionSnapshotId: alternateSnapshot.id }
+        : item
+    ));
+    const fixedDays = initial.days.map((day) => ({
+      ...day,
+      nutritionSourceSnapshotIds: day.nutritionSourceSnapshotIds.map((snapshotId) => (
+        snapshotId === originalSnapshot.id ? alternateSnapshot.id : snapshotId
+      ))
+    }));
+
+    expectConflict(generateWeeklyMealPlan(generatorInput(fixture, {
+      snapshots: [alternateSnapshot, ...fixture.snapshots],
+      inventory,
+      fixedDays
+    })), '2026-08-17', 'source_chain_incomplete');
+  });
+
+  it('rejects a fixed day whose persisted nutrition total was altered', () => {
+    const fixture = singleMenuFixture();
+    const initial = expectGenerated(generateWeeklyMealPlan(generatorInput(fixture)));
+    const fixedDays = initial.days.map((day) => ({
+      ...day,
+      nutritionTotals: {
+        ...day.nutritionTotals,
+        energyKcal: day.nutritionTotals.energyKcal + 0.1
+      }
+    }));
+
+    expectConflict(generateWeeklyMealPlan(generatorInput(fixture, { fixedDays })),
+      '2026-08-17', 'source_chain_incomplete');
+  });
+
+  it('reuses a valid fixed-day object by reference after rebuilding it', () => {
+    const fixture = singleMenuFixture();
+    const initial = expectGenerated(generateWeeklyMealPlan(generatorInput(fixture)));
+    const reused = expectGenerated(generateWeeklyMealPlan(generatorInput(fixture, {
+      fixedDays: initial.days
+    })));
+
+    expect(reused.days[0]).toBe(initial.days[0]);
+  });
+
   it('rejects duplicate fixed dates instead of silently collapsing them', () => {
     const fixture = singleMenuFixture();
     const initial = expectGenerated(generateWeeklyMealPlan(generatorInput(fixture)));
