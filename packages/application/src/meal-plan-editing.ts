@@ -393,6 +393,26 @@ function wholeWeekInventoryConflict(input: {
   return null;
 }
 
+function wholeWeekDiversityConflict(input: {
+  readonly plan: MealPlanVersion;
+  readonly replacementDay: MealPlanDay;
+}): WeeklyMealConflict | null {
+  const foodIds = new Set(input.plan.days.flatMap((day) => {
+    const effectiveDay = day.businessDate === input.replacementDay.businessDate
+      ? input.replacementDay
+      : day;
+    return effectiveDay.ingredientAmounts
+      .filter((amount) => amount.grams > 0)
+      .map((amount) => amount.foodId);
+  }));
+  return foodIds.size < FOOD_DIVERSITY_POLICY_V1.minimumDistinctFoodsPerWeek
+    ? {
+        businessDate: input.replacementDay.businessDate,
+        code: 'food_diversity_insufficient'
+      }
+    : null;
+}
+
 export function selectManualMealReplacement(
   input: ManualMealReplacementInput
 ): MealPlanDay | WeeklyMealInfeasibleResult {
@@ -543,6 +563,14 @@ export function selectManualMealReplacement(
       nutritionTotals: evaluation.totals,
       nutritionSourceSnapshotIds: [...evaluation.sourceSnapshotIds].sort()
     };
+    const diversityConflict = wholeWeekDiversityConflict({
+      plan: input.currentPlan,
+      replacementDay: day
+    });
+    if (diversityConflict !== null) {
+      rejected.push(diversityConflict);
+      continue;
+    }
     const inventoryConflict = wholeWeekInventoryConflict({
       plan: input.currentPlan,
       replacementDay: day,

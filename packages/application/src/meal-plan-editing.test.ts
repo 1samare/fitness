@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import {
+  type WeeklyMealInfeasibleResult
+} from '@fitness/calculation';
+import {
   TEST_DAILY_MENU_CATALOG,
   TEST_DAILY_MENU_TEMPLATES,
   TEST_NUTRITION_SNAPSHOTS,
@@ -132,8 +135,7 @@ async function prepareGeneratedPlan(
   });
 }
 
-async function selectorInput() {
-  const harness = createHarness();
+async function selectorInput(harness = createHarness()) {
   const currentPlan = await prepareGeneratedPlan(harness);
   const state = await harness.repository.read('user-a');
   const inventory = state.inventories[0];
@@ -159,6 +161,100 @@ async function selectorInput() {
     avoidFoodIds: [] as readonly string[],
     allowTestFixtures: true
   };
+}
+
+const CORE_FOOD_GROUPS = [
+  'grains_tubers',
+  'vegetables',
+  'fruit',
+  'animal_protein',
+  'soy_nuts',
+  'dairy'
+] as const;
+
+function positiveWeeklyFoodIds(plan: MealPlanVersion): Set<string> {
+  return new Set(plan.days.flatMap((day) => day.ingredientAmounts
+    .filter((amount) => amount.grams > 0)
+    .map((amount) => amount.foodId)));
+}
+
+function minimumWeeklyDiversityPlan(input: Awaited<ReturnType<typeof selectorInput>>, selected: Exclude<
+  ReturnType<typeof selectManualMealReplacement>,
+  WeeklyMealInfeasibleResult
+>): MealPlanVersion {
+  const currentDay = input.currentPlan.days.find((day) => day.businessDate === EDIT_DATE);
+  if (currentDay === undefined) throw new Error('Expected current edit day');
+  const selectedFoodIds = new Set(selected.ingredientAmounts.map((amount) => amount.foodId));
+  const lostFoodId = currentDay.ingredientAmounts
+    .map((amount) => amount.foodId)
+    .sort()
+    .find((foodId) => !selectedFoodIds.has(foodId));
+  if (lostFoodId === undefined) throw new Error('Expected one replaced food');
+
+  const snapshotsByFoodId = new Map(input.snapshots.map((snapshot) => [snapshot.foodId, snapshot]));
+  const commonFoodIds = new Set([
+    ...currentDay.ingredientAmounts
+      .map((amount) => amount.foodId)
+      .filter((foodId) => foodId !== lostFoodId),
+    ...selectedFoodIds
+  ]);
+  for (const snapshot of [...input.snapshots].sort((left, right) => (
+    left.foodId.localeCompare(right.foodId)
+  ))) {
+    if (snapshot.foodId !== lostFoodId && commonFoodIds.size < 24) {
+      commonFoodIds.add(snapshot.foodId);
+    }
+  }
+  if (commonFoodIds.size !== 24) throw new Error('Expected exactly 24 common foods');
+
+  const commonFoods = [...commonFoodIds].sort();
+  const foodsByCoreGroup = new Map(CORE_FOOD_GROUPS.map((group) => [
+    group,
+    commonFoods.filter((foodId) => snapshotsByFoodId.get(foodId)?.foodGroupId === group)
+  ]));
+  const uncovered = new Set(commonFoods);
+  const days = input.currentPlan.days.map((day, dayIndex) => {
+    if (day.businessDate === EDIT_DATE) return day;
+    const dailyFoodIds = new Set<string>();
+    for (const group of CORE_FOOD_GROUPS) {
+      const foods = foodsByCoreGroup.get(group) ?? [];
+      const foodId = foods[dayIndex % foods.length];
+      if (foodId === undefined) throw new Error(`Expected food for core group ${group}`);
+      dailyFoodIds.add(foodId);
+      uncovered.delete(foodId);
+    }
+    for (const foodId of [...uncovered, ...commonFoods]) {
+      if (dailyFoodIds.size >= 12) break;
+      dailyFoodIds.add(foodId);
+      uncovered.delete(foodId);
+    }
+    if (dailyFoodIds.size !== 12 || day.ingredientAmounts.length !== 12) {
+      throw new Error('Expected twelve positive foods per fixture day');
+    }
+    const foodIds = [...dailyFoodIds].sort();
+    return {
+      ...day,
+      ingredientAmounts: day.ingredientAmounts.map((amount, index) => ({
+        foodId: foodIds[index] ?? '',
+        grams: amount.grams
+      })),
+      nutritionSourceSnapshotIds: foodIds.map((foodId) => {
+        const snapshot = snapshotsByFoodId.get(foodId);
+        if (snapshot === undefined) throw new Error(`Expected snapshot for ${foodId}`);
+        return snapshot.id;
+      }).sort()
+    };
+  });
+  if (uncovered.size !== 0) throw new Error('Expected fixture to cover every common food');
+  return { ...input.currentPlan, days };
+}
+
+async function exactMinimumWeeklyDiversityFixture(harness = createHarness()) {
+  const input = await selectorInput(harness);
+  const control = selectManualMealReplacement(input);
+  if ('kind' in control) throw new Error('Expected valid control replacement');
+  const currentPlan = minimumWeeklyDiversityPlan(input, control);
+  return { input: { ...input, currentPlan }, control };
 }
 
 describe('meal plan day locking', () => {
@@ -386,6 +482,89 @@ describe('manual meal replacement selection', () => {
     expect(result.code).toBe('nutrition_constraints_infeasible');
     expect(result.conflicts.some((conflict) => conflict.code === code)).toBe(true);
   });
+
+  test('rejects a replacement that reduces a compliant 25-food week to 24 foods', async () => {
+    const { input, control } = await exactMinimumWeeklyDiversityFixture();
+    const coreFoodGroups = new Set<string>(CORE_FOOD_GROUPS);
+    const snapshotsByFoodId = new Map(input.snapshots.map((snapshot) => [
+      snapshot.foodId,
+      snapshot
+    ]));
+    const availableByFoodId = new Map(input.inventory.items.map((item) => [
+      item.foodId,
+      item.availableGrams
+    ]));
+
+    expect(positiveWeeklyFoodIds(input.currentPlan).size).toBe(25);
+    for (const day of input.currentPlan.days) {
+      expect(day.ingredientAmounts).toHaveLength(12);
+      expect(day.ingredientAmounts.every((amount) => amount.grams > 0)).toBe(true);
+      expect(new Set(day.ingredientAmounts.map((amount) => (
+        snapshotsByFoodId.get(amount.foodId)?.foodGroupId
+      )).filter((group) => group !== undefined && coreFoodGroups.has(group))).size)
+        .toBeGreaterThanOrEqual(5);
+    }
+    expect(control.ingredientAmounts).toHaveLength(12);
+    expect(new Set(control.ingredientAmounts.map((amount) => (
+      snapshotsByFoodId.get(amount.foodId)?.foodGroupId
+    )).filter((group) => group !== undefined && coreFoodGroups.has(group))).size)
+      .toBeGreaterThanOrEqual(5);
+    expect(control.nutritionTotals).toEqual({
+      energyKcal: 1944,
+      proteinG: 60.9,
+      fatG: 54.6,
+      carbohydrateG: 291.6,
+      fiberG: 26.7,
+      saturatedFatG: 4.8,
+      addedSugarG: 0
+    });
+    for (const [foodId, availableGrams] of availableByFoodId) {
+      const requiredGrams = input.currentPlan.days.reduce((weekTotal, day) => (
+        weekTotal + (day.businessDate === EDIT_DATE ? control : day).ingredientAmounts
+          .filter((amount) => amount.foodId === foodId)
+          .reduce((dayTotal, amount) => dayTotal + amount.grams, 0)
+      ), 0);
+      expect(requiredGrams).toBeLessThanOrEqual(availableGrams);
+    }
+    expect(positiveWeeklyFoodIds({
+      ...input.currentPlan,
+      days: input.currentPlan.days.map((day) => (
+        day.businessDate === EDIT_DATE ? control : day
+      ))
+    }).size).toBe(24);
+    const zeroOnlyFoodId = input.snapshots.find((snapshot) => (
+      !positiveWeeklyFoodIds(input.currentPlan).has(snapshot.foodId)
+    ))?.foodId;
+    if (zeroOnlyFoodId === undefined) throw new Error('Expected unused zero-only food fixture');
+    const inputWithZeroOnlyFood = {
+      ...input,
+      currentPlan: {
+        ...input.currentPlan,
+        days: input.currentPlan.days.map((day, index) => index === 0
+          ? {
+              ...day,
+              ingredientAmounts: [
+                ...day.ingredientAmounts,
+                { foodId: zeroOnlyFoodId, grams: 0 }
+              ]
+            }
+          : day)
+      }
+    };
+    expect(positiveWeeklyFoodIds(inputWithZeroOnlyFood.currentPlan).size).toBe(25);
+
+    const result = selectManualMealReplacement(inputWithZeroOnlyFood);
+
+    expect(result).toEqual({
+      kind: 'infeasible',
+      code: 'nutrition_constraints_infeasible',
+      conflicts: [
+        { businessDate: EDIT_DATE, code: 'food_diversity_insufficient' },
+        { businessDate: EDIT_DATE, code: 'nutrition_out_of_range' }
+      ]
+    });
+    expect(selectManualMealReplacement(inputWithZeroOnlyFood)).toEqual(result);
+  });
 });
 
 describe('manual meal edit transaction', () => {
@@ -514,6 +693,39 @@ describe('manual meal edit transaction', () => {
       }
     })).rejects.toMatchObject({ code: 'nutrition_constraints_infeasible' });
     expect(await harness.repository.read('user-a')).toEqual(before);
+  });
+
+  test('weekly diversity failure writes no successor, active pointer, or idempotency record', async () => {
+    const harness = createHarness();
+    const { input } = await exactMinimumWeeklyDiversityFixture(harness);
+    await harness.repository.transact('user-a', (state) => ({
+      nextState: {
+        ...state,
+        mealPlans: state.mealPlans.map((plan) => plan.id === input.currentPlan.id
+          ? input.currentPlan
+          : plan)
+      },
+      result: undefined
+    }));
+    const before = await harness.repository.read('user-a');
+    const originalPlanCopy = structuredClone(before.mealPlans[0]);
+
+    await expect(harness.service.updateMealPlanDay('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'meal-edit-weekly-diversity-001',
+      payload: {
+        businessDate: EDIT_DATE,
+        slot: 'dinner',
+        recipeTemplateVersionId: REPLACEMENT_ID
+      }
+    })).rejects.toMatchObject({ code: 'nutrition_constraints_infeasible' });
+
+    const after = await harness.repository.read('user-a');
+    expect(after.mealPlans).toHaveLength(1);
+    expect(after.activeMealPlanVersionId).toBe(before.activeMealPlanVersionId);
+    expect(after.idempotencyRecords).toEqual(before.idempotencyRecords);
+    expect(after.mealPlans[0]).toEqual(originalPlanCopy);
+    expect(after).toEqual(before);
   });
 
   test('rejects an active-plan race without a partial edit', async () => {
