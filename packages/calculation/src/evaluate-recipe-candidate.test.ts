@@ -1,0 +1,212 @@
+import { describe, expect, it } from 'vitest';
+import * as calculation from './index';
+
+type CandidateEvaluator = (input: unknown) => unknown;
+
+function evaluator(): CandidateEvaluator {
+  const candidate: unknown = Reflect.get(calculation, 'evaluateRecipeCandidate');
+  expect(candidate, 'evaluateRecipeCandidate must be exported').toBeTypeOf('function');
+  if (typeof candidate !== 'function') throw new Error('candidate evaluator unavailable');
+  return candidate as CandidateEvaluator;
+}
+
+const snapshots = [
+  {
+    id: 'snapshot-fixture-tofu-v1',
+    foodId: 'fixture-tofu',
+    canonicalNameZh: '测试豆腐',
+    foodGroupId: 'soy_nuts',
+    sourceId: 'FITNESS-TEST-FIXTURE-V1',
+    sourceRecordId: 'fixture-tofu-001',
+    provider: 'fitness-test-fixture',
+    originalUnit: 'per_100_g_edible_portion',
+    foodState: 'cooked',
+    datasetVersion: 'fixture-2026-08-10',
+    snapshotVersion: 1,
+    reviewedAt: '2026-08-10T00:00:00.000Z',
+    qualityStatus: 'test_fixture',
+    allergens: ['大豆'],
+    nutrientsPer100g: {
+      energyKcal: 100,
+      proteinG: 10,
+      fatG: 5,
+      carbohydrateG: 4,
+      fiberG: 2,
+      saturatedFatG: 1,
+      addedSugarG: 0
+    }
+  },
+  {
+    id: 'snapshot-fixture-noodles-v1',
+    foodId: 'fixture-noodles',
+    canonicalNameZh: '测试面条',
+    foodGroupId: 'grains_tubers',
+    sourceId: 'FITNESS-TEST-FIXTURE-V1',
+    sourceRecordId: 'fixture-noodles-001',
+    provider: 'fitness-test-fixture',
+    originalUnit: 'per_100_g_edible_portion',
+    foodState: 'cooked',
+    datasetVersion: 'fixture-2026-08-10',
+    snapshotVersion: 1,
+    reviewedAt: '2026-08-10T00:00:00.000Z',
+    qualityStatus: 'test_fixture',
+    allergens: ['含麸质谷物'],
+    nutrientsPer100g: {
+      energyKcal: 120,
+      proteinG: 2.5,
+      fatG: 0.5,
+      carbohydrateG: 26,
+      fiberG: 0.5,
+      saturatedFatG: 0.1,
+      addedSugarG: 0
+    }
+  },
+  {
+    id: 'snapshot-fixture-broccoli-v1',
+    foodId: 'fixture-broccoli',
+    canonicalNameZh: '测试西兰花',
+    foodGroupId: 'vegetables',
+    sourceId: 'FITNESS-TEST-FIXTURE-V1',
+    sourceRecordId: 'fixture-broccoli-001',
+    provider: 'fitness-test-fixture',
+    originalUnit: 'per_100_g_edible_portion',
+    foodState: 'cooked',
+    datasetVersion: 'fixture-2026-08-10',
+    snapshotVersion: 1,
+    reviewedAt: '2026-08-10T00:00:00.000Z',
+    qualityStatus: 'test_fixture',
+    allergens: [],
+    nutrientsPer100g: {
+      energyKcal: 30,
+      proteinG: 3,
+      fatG: 0.5,
+      carbohydrateG: 5,
+      fiberG: 3,
+      saturatedFatG: 0.1,
+      addedSugarG: 0
+    }
+  }
+] as const;
+
+const template = {
+  id: 'recipe-version-fixture-bowl-v1',
+  templateId: 'recipe-fixture-bowl',
+  version: 1,
+  dishNameZh: '测试三色碗',
+  sourceId: 'FITNESS-TEST-FIXTURE-V1',
+  datasetVersion: 'fixture-2026-08-10',
+  reviewedAt: '2026-08-10T00:00:00.000Z',
+  qualityStatus: 'test_fixture',
+  ingredients: [
+    { foodId: 'fixture-tofu', nutritionSnapshotId: 'snapshot-fixture-tofu-v1', grams: 50 },
+    { foodId: 'fixture-noodles', nutritionSnapshotId: 'snapshot-fixture-noodles-v1', grams: 100 },
+    { foodId: 'fixture-broccoli', nutritionSnapshotId: 'snapshot-fixture-broccoli-v1', grams: 150 }
+  ]
+} as const;
+
+const inventory = [
+  { foodId: 'fixture-tofu', availableGrams: 50 },
+  { foodId: 'fixture-noodles', availableGrams: 100 },
+  { foodId: 'fixture-broccoli', availableGrams: 150 }
+] as const;
+
+function evaluate(overrides: Readonly<Record<string, unknown>> = {}) {
+  return evaluator()({
+    template,
+    snapshots,
+    inventory,
+    allergens: [],
+    avoidFoodIds: [],
+    minimumDistinctFoodGroups: 3,
+    allowTestFixtures: true,
+    ...overrides
+  });
+}
+
+describe('evaluateRecipeCandidate', () => {
+  it('recomputes seven nutrients from per-100-g snapshots and actual grams', () => {
+    expect(evaluate()).toEqual({
+      kind: 'accepted',
+      totals: {
+        energyKcal: 215,
+        proteinG: 12,
+        fatG: 3.8,
+        carbohydrateG: 35.5,
+        fiberG: 6,
+        saturatedFatG: 0.8,
+        addedSugarG: 0
+      },
+      sourceSnapshotIds: [
+        'snapshot-fixture-tofu-v1',
+        'snapshot-fixture-noodles-v1',
+        'snapshot-fixture-broccoli-v1'
+      ],
+      foodGroupIds: ['soy_nuts', 'grains_tubers', 'vegetables']
+    });
+  });
+
+  it('never relaxes any allergen declared by a source snapshot', () => {
+    for (const snapshot of snapshots) {
+      for (const allergen of snapshot.allergens) {
+        const result = evaluate({ allergens: [`  ${allergen}  `] });
+        expect(result).toMatchObject({
+          kind: 'infeasible',
+          code: 'nutrition_constraints_infeasible',
+          conflicts: expect.arrayContaining([{
+            code: 'allergen_detected',
+            foodId: snapshot.foodId,
+            allergen
+          }])
+        });
+      }
+    }
+  });
+
+  it.each([
+    [
+      'avoided food',
+      { avoidFoodIds: ['fixture-noodles'] },
+      { code: 'avoided_food', foodId: 'fixture-noodles' }
+    ],
+    [
+      'insufficient inventory',
+      { inventory: [{ foodId: 'fixture-tofu', availableGrams: 49 }, ...inventory.slice(1)] },
+      { code: 'inventory_insufficient', foodId: 'fixture-tofu', requiredGrams: 50, availableGrams: 49 }
+    ],
+    [
+      'food group diversity',
+      { minimumDistinctFoodGroups: 4 },
+      { code: 'food_diversity_insufficient', requiredCount: 4, actualCount: 3 }
+    ],
+    [
+      'test fixture in production',
+      { allowTestFixtures: false },
+      { code: 'nutrition_snapshot_not_reviewed', foodId: 'fixture-tofu', snapshotId: 'snapshot-fixture-tofu-v1' }
+    ]
+  ])('returns a structured conflict for %s', (_name, overrides, conflict) => {
+    expect(evaluate(overrides)).toMatchObject({
+      kind: 'infeasible',
+      code: 'nutrition_constraints_infeasible',
+      conflicts: expect.arrayContaining([conflict])
+    });
+  });
+
+  it('rejects missing and mismatched source-chain snapshots', () => {
+    expect(evaluate({ snapshots: snapshots.slice(1) })).toMatchObject({
+      conflicts: expect.arrayContaining([{
+        code: 'nutrition_snapshot_missing',
+        foodId: 'fixture-tofu',
+        snapshotId: 'snapshot-fixture-tofu-v1'
+      }])
+    });
+    expect(evaluate({
+      snapshots: [{ ...snapshots[0], foodId: 'different-food' }, ...snapshots.slice(1)]
+    })).toMatchObject({
+      conflicts: expect.arrayContaining([{
+        code: 'nutrition_snapshot_identity_mismatch',
+        foodId: 'fixture-tofu',
+        snapshotId: 'snapshot-fixture-tofu-v1'
+      }])
+    });
+  });
+});
