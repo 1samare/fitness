@@ -146,6 +146,9 @@
     <button class="submit-button" type="primary" loading="{{loading}}" disabled="{{loading}}" bindtap="onSubmit">
       {{loading ? '正在保存…' : '保存并生成能量与营养目标'}}
     </button>
+    <button class="meal-link-button" disabled="{{loading}}" bindtap="onOpenMealExecution">
+      前往一周餐单与执行
+    </button>
   </view>
 
   <view wx:if="{{successMessage}}" class="card result-card" aria-live="polite">
@@ -153,7 +156,7 @@
     <view wx:for="{{displayTargets}}" wx:key="businessDate" class="target-row">
       <text>{{item.businessDate}}</text><text>{{item.summaryText}}</text>
     </view>
-    <text class="hint">能量和营养均为估算；食谱/餐单将在后续阶段加入；不构成医疗建议。</text>
+    <text class="hint">能量和营养均为估算；可前往“一周餐单与执行”录入库存并生成餐单；不构成医疗建议。</text>
   </view>
   <view wx:if="{{errorMessage}}" class="error" aria-role="alert" aria-live="assertive">{{errorMessage}}</view>
 </view>

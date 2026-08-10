@@ -68,6 +68,7 @@ interface PageActions {
   onTrainingEnabledChange(event: IndexedSwitchValueEvent): void;
   onTrainingSessionChange(event: IndexedTextValueEvent): void;
   onTrainingDurationInput(event: IndexedTextValueEvent): void;
+  onOpenMealExecution(): void;
   onSubmit(): Promise<void>;
 }
 
@@ -289,6 +290,9 @@ Page<PageData, PageActions>({
         durationMinutes: event.detail.value
       }))
     });
+  },
+  onOpenMealExecution() {
+    void wx.navigateTo({ url: '/pages/meal-execution/index' });
   },
   async onSubmit() {
     this.setData({ loading: true, errorMessage: '', successMessage: '', displayTargets: [] });

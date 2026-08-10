@@ -1,0 +1,182 @@
+<view class="page">
+  <view class="hero">
+    <text class="eyebrow">FITNESS · 一周联动</text>
+    <text class="title">餐单与训练执行</text>
+    <text class="subtitle">先校验并保存现有食材，再生成七日餐单；锁定、手动修改与训练事实都会保留清晰状态。</text>
+  </view>
+
+  <view wx:if="{{loadingContext}}" class="notice notice--neutral" aria-live="polite">正在读取当前规划…</view>
+  <view wx:if="{{contextMessage}}" class="notice notice--error" aria-role="alert" aria-live="assertive">
+    <text>{{contextMessage}}</text>
+    <button class="button button--secondary" disabled="{{loadingContext}}" bindtap="refreshContext">重新读取</button>
+  </view>
+
+  <view class="card">
+    <text class="section-title">1. 现有食材库存</text>
+    <text class="section-help">每行食材名称须先通过审核数据校验。克数由你确认，系统不会从名称或图片猜测重量。</text>
+    <view wx:for="{{inventoryRows}}" wx:key="index" wx:for-item="row" wx:for-index="rowIndex" class="inventory-row">
+      <label class="field">
+        <text class="field__label">第 {{rowIndex + 1}} 行食材名称</text>
+        <input
+          class="field__control"
+          value="{{row.name}}"
+          data-index="{{rowIndex}}"
+          disabled="{{row.resolutionStatus === 'resolving' || savingInventory || generatingMeal}}"
+          bindinput="onInventoryNameInput"
+          placeholder="例如 测试米饭"
+          aria-label="第 {{rowIndex + 1}} 行食材名称"
+        />
+      </label>
+      <label class="field">
+        <text class="field__label">可用重量（克）</text>
+        <input
+          class="field__control"
+          type="digit"
+          value="{{row.availableGrams}}"
+          data-index="{{rowIndex}}"
+          disabled="{{savingInventory || generatingMeal}}"
+          bindinput="onInventoryGramsInput"
+          placeholder="必须大于 0"
+          aria-label="第 {{rowIndex + 1}} 行可用克数"
+        />
+      </label>
+      <view class="row-actions">
+        <button
+          class="button button--secondary"
+          data-index="{{rowIndex}}"
+          loading="{{row.resolutionStatus === 'resolving'}}"
+          disabled="{{row.resolutionStatus === 'resolving' || savingInventory || generatingMeal}}"
+          bindtap="onResolveInventoryRow"
+        >{{row.resolutionStatus === 'resolved' ? '重新校验名称' : '校验名称'}}</button>
+        <button
+          wx:if="{{inventoryRows.length > 1}}"
+          class="button button--ghost"
+          data-index="{{rowIndex}}"
+          disabled="{{savingInventory || generatingMeal}}"
+          bindtap="onRemoveInventoryRow"
+        >移除此行</button>
+      </view>
+      <text wx:if="{{row.resolutionMessage}}" class="row-status row-status--{{row.resolutionStatus}}" aria-live="polite">
+        {{row.resolutionMessage}}
+      </text>
+    </view>
+    <button class="button button--ghost button--wide" disabled="{{savingInventory || generatingMeal}}" bindtap="onAddInventoryRow">添加一行食材</button>
+    <view class="field field--week">
+      <text class="field__label">餐单周开始日</text>
+      <picker mode="date" value="{{generationWeekStart}}" start="{{businessToday}}" disabled="{{savingInventory || generatingMeal}}" bindchange="onGenerationWeekChange">
+        <view class="field__control picker">{{generationWeekStart || '请选择今天或未来日期'}}</view>
+      </picker>
+      <text class="field__hint">通常使用训练计划的周开始日，生成连续七天。</text>
+    </view>
+    <button
+      class="button button--primary button--wide"
+      loading="{{savingInventory || generatingMeal}}"
+      disabled="{{!canSaveInventory || savingInventory || generatingMeal}}"
+      bindtap="onSaveInventoryAndGenerate"
+    >{{savingInventory ? '正在保存库存…' : generatingMeal ? '正在生成餐单…' : '保存库存并生成一周餐单'}}</button>
+  </view>
+
+  <view wx:if="{{staleBanner}}" class="notice notice--warning" aria-role="status" aria-live="polite">
+    <text class="notice__title">餐单待处理</text>
+    <text>{{staleBanner}}</text>
+  </view>
+
+  <view class="card">
+    <text class="section-title">2. 七日餐单</text>
+    <text class="section-help">热量与营养为确定性代码复算后的估算值。今天及过去日期作为事实不可修改。</text>
+    <view wx:if="{{mealDays.length === 0}}" class="empty-state">尚无餐单。请先完成规划、校验库存并生成一周餐单。</view>
+    <view wx:for="{{mealDays}}" wx:key="businessDate" wx:for-item="day" wx:for-index="dayIndex" class="meal-day">
+      <view class="meal-day__header">
+        <view class="meal-day__heading">
+          <text class="meal-day__date">{{day.businessDate}}</text>
+          <text class="status-pill">{{day.statusText}}</text>
+        </view>
+        <label class="switch-control">
+          <text>锁定餐单</text>
+          <switch
+            checked="{{day.locked}}"
+            disabled="{{!day.editable || updatingMeal}}"
+            data-index="{{dayIndex}}"
+            bindchange="onLockChange"
+            aria-label="{{day.businessDate}}锁定餐单"
+          />
+        </label>
+      </view>
+      <text class="meal-day__summary">{{day.ingredientSummaryText}}</text>
+      <text class="meal-day__summary">{{day.estimatedNutritionText}}</text>
+      <view wx:for="{{day.meals}}" wx:key="slot" wx:for-item="meal" wx:for-index="mealIndex" class="meal-row">
+        <view class="meal-row__label">
+          <text class="meal-row__slot">{{meal.slotLabel}}</text>
+          <text class="meal-row__dish">{{meal.dishNameZh}}</text>
+        </view>
+        <picker
+          range="{{meal.recipeLabels}}"
+          value="{{meal.selectedRecipeIndex}}"
+          disabled="{{!day.editable || updatingMeal || meal.recipeLabels.length === 0}}"
+          data-day-index="{{dayIndex}}"
+          data-meal-index="{{mealIndex}}"
+          bindchange="onRecipeChange"
+        >
+          <view class="picker picker--compact {{!day.editable ? 'control--disabled' : ''}}">选择替换菜品</view>
+        </picker>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{pendingDiffs.length > 0}}" class="card card--decision">
+    <text class="section-title">3. 确认锁定日差异</text>
+    <view wx:for="{{pendingDiffs}}" wx:key="businessDate" class="diff-row">
+      <text class="diff-row__date">{{item.businessDate}}</text>
+      <text>{{item.reasonText}}</text>
+    </view>
+    <radio-group class="decision-options" bindchange="onCandidateDecisionChange" aria-label="选择餐单差异处理方式">
+      <label wx:for="{{decisionOptions}}" wx:key="value" class="decision-option">
+        <radio value="{{item.value}}" checked="{{selectedDecision === item.value}}" />
+        <text>{{item.label}}</text>
+      </label>
+    </radio-group>
+    <button class="button button--secondary button--wide" loading="{{decidingCandidate}}" disabled="{{decidingCandidate}}" bindtap="onConfirmCandidateDecision">
+      {{decidingCandidate ? '正在处理差异…' : '确认差异处理方式'}}
+    </button>
+  </view>
+
+  <view class="card">
+    <text class="section-title">4. 记录训练完成情况</text>
+    <text class="section-help">训练事实保存与餐单重算是两个状态。即使重算暂时失败，成功保存的训练事实也不会被覆盖。</text>
+    <view class="field">
+      <text class="field__label">训练业务日期</text>
+      <picker mode="date" value="{{completionDate}}" end="{{businessToday}}" disabled="{{savingFact}}" bindchange="onCompletionDateChange">
+        <view class="field__control picker">{{completionDate || '请选择今天或过去日期'}}</view>
+      </picker>
+    </view>
+    <label class="field">
+      <text class="field__label">实际完成分钟数</text>
+      <input
+        class="field__control"
+        type="number"
+        value="{{completedDurationMinutes}}"
+        disabled="{{savingFact}}"
+        bindinput="onCompletionMinutesInput"
+        placeholder="0–300 的整数"
+        aria-label="实际完成分钟数"
+      />
+      <text class="field__hint">0 表示计划训练未完成；最多记录 300 分钟。</text>
+    </label>
+    <button class="button button--secondary button--wide" loading="{{savingFact}}" disabled="{{savingFact}}" bindtap="onRecordCompletion">
+      {{savingFact ? '正在保存训练事实…' : '保存训练完成情况'}}
+    </button>
+    <view wx:if="{{factMessage}}" class="notice notice--success" aria-live="polite">{{factMessage}}</view>
+    <view wx:if="{{mealMessage}}" class="notice notice--neutral" aria-live="polite">{{mealMessage}}</view>
+    <button
+      wx:if="{{retryJobId}}"
+      class="button button--secondary button--wide"
+      loading="{{recalculatingMeal}}"
+      disabled="{{recalculatingMeal}}"
+      bindtap="onRetryRecalculation"
+    >{{recalculatingMeal ? '正在重试餐单重算…' : '重试餐单重算'}}</button>
+  </view>
+
+  <view wx:if="{{actionMessage}}" class="notice notice--success" aria-live="polite">{{actionMessage}}</view>
+  <view wx:if="{{formError}}" class="notice notice--error" aria-role="alert" aria-live="assertive">{{formError}}</view>
+  <text class="disclaimer">本页面只提供健康成年人的一般健身与膳食规划；所有热量、营养和训练消耗均为估算，不构成医疗建议。</text>
+</view>

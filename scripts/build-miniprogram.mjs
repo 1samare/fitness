@@ -27,7 +27,8 @@ await build({
   entryPoints: {
     app: 'miniprogram/app.ts',
     'pages/planning-setup/index': 'miniprogram/pages/planning-setup/index.ts',
-    'pages/planning-preview/index': 'miniprogram/pages/planning-preview/index.ts'
+    'pages/planning-preview/index': 'miniprogram/pages/planning-preview/index.ts',
+    'pages/meal-execution/index': 'miniprogram/pages/meal-execution/index.ts'
   },
   bundle: true,
   format: 'iife',
@@ -50,7 +51,10 @@ const assets = [
   'pages/planning-setup/index.wxss',
   'pages/planning-preview/index.json',
   'pages/planning-preview/index.wxml',
-  'pages/planning-preview/index.wxss'
+  'pages/planning-preview/index.wxss',
+  'pages/meal-execution/index.json',
+  'pages/meal-execution/index.wxml',
+  'pages/meal-execution/index.wxss'
 ];
 
 for (const relativePath of assets) {

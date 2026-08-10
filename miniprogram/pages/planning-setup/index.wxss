@@ -91,6 +91,9 @@ page {
 .hint { display: block; margin: 20rpx 0 24rpx; }
 .submit-button { min-height: 96rpx; border-radius: 18rpx; background: var(--color-primary); font-size: 30rpx; font-weight: 700; }
 .submit-button:active { background: var(--color-primary-pressed); }
+.meal-link-button { min-height: 88rpx; margin-top: 16rpx; border: 2rpx solid var(--color-primary); border-radius: 18rpx; color: var(--color-primary); background: var(--color-surface); font-size: 28rpx; font-weight: 700; }
+.meal-link-button:active { color: #ffffff; background: var(--color-primary-pressed); }
+.meal-link-button[disabled] { color: var(--color-text-muted); border-color: var(--color-disabled); background: var(--color-disabled); opacity: 0.78; }
 .result-card { border-color: #88bba7; background: #f1fff8; }
 .success { display: block; margin-bottom: 20rpx; color: #0d5a42; font-size: 28rpx; font-weight: 700; }
 .target-row { display: flex; justify-content: space-between; gap: 16rpx; padding: 18rpx 0; border-bottom: 1rpx solid var(--color-border); font-size: 26rpx; }

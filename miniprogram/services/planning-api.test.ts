@@ -118,4 +118,146 @@ describe('mini program planning API client', () => {
 
     expect(calls).toEqual(['cloud']);
   });
+
+  it('forwards every weekly meal action type while accepting strict runtime error responses', async () => {
+    const calls: PlanningApiRequest[] = [];
+    const client = createPlanningApiClient((request) => {
+      calls.push(request);
+      return Promise.resolve({
+        success: false,
+        error: { code: 'internal_error', message: 'controlled test response' }
+      });
+    });
+    const requests: PlanningApiRequest[] = [
+      { action: 'resolveFoodName', payload: { name: '测试米饭' } },
+      {
+        action: 'saveInventory',
+        payload: {
+          expectedVersion: 0,
+          idempotencyKey: 'inventory-client-001',
+          payload: { items: [{ name: '测试米饭', availableGrams: 5000 }] }
+        }
+      },
+      {
+        action: 'generateWeeklyMealPlan',
+        payload: {
+          expectedVersion: 0,
+          idempotencyKey: 'generate-client-001',
+          payload: { weekStartDate: '2026-08-17' }
+        }
+      },
+      {
+        action: 'setMealPlanDayLock',
+        payload: {
+          expectedVersion: 1,
+          idempotencyKey: 'lock-client-001',
+          payload: { businessDate: '2026-08-18', locked: true }
+        }
+      },
+      {
+        action: 'updateMealPlanDay',
+        payload: {
+          expectedVersion: 2,
+          idempotencyKey: 'edit-client-001',
+          payload: {
+            businessDate: '2026-08-19',
+            slot: 'dinner',
+            recipeTemplateVersionId: 'recipe-from-server'
+          }
+        }
+      },
+      {
+        action: 'recordTrainingCompletion',
+        payload: {
+          expectedVersion: 0,
+          idempotencyKey: 'completion-client-001',
+          payload: { businessDate: '2026-08-19', completedDurationMinutes: 30 }
+        }
+      },
+      {
+        action: 'decideMealPlanCandidate',
+        payload: {
+          expectedVersion: 0,
+          idempotencyKey: 'candidate-client-001',
+          payload: {
+            candidateMealPlanVersionId: 'candidate-from-context',
+            decision: 'keep_existing'
+          }
+        }
+      },
+      {
+        action: 'retryPendingRecalculation',
+        payload: {
+          expectedVersion: 1,
+          idempotencyKey: 'retry-client-001',
+          payload: { recalculationJobId: 'job-from-response' }
+        }
+      },
+      { action: 'getCurrentContext' }
+    ];
+
+    for (const request of requests) {
+      await expect(client.call(request)).resolves.toEqual({
+        success: false,
+        error: { code: 'internal_error', message: 'controlled test response' }
+      });
+    }
+
+    expect(calls).toEqual(requests);
+  });
+
+  it('accepts strict public food-resolution and meal-context success responses', async () => {
+    const responses: unknown[] = [
+      {
+        success: true,
+        data: {
+          kind: 'food_name_resolved',
+          resolution: {
+            foodId: 'fixture-rice',
+            canonicalNameZh: '测试米饭',
+            nutritionSnapshotId: 'snapshot-fixture-rice-v1'
+          }
+        }
+      },
+      {
+        success: true,
+        data: {
+          kind: 'current_context',
+          bodyProfile: null,
+          goal: null,
+          trainingPlan: null,
+          dailyEnergyTargets: [],
+          dailyNutritionTargets: [],
+          inventory: null,
+          mealPlan: null,
+          mealPlanStale: false,
+          pendingMealPlanCandidate: null,
+          pendingMealPlanTargetDiffs: [],
+          selectableRecipes: [],
+          latestVersions: {
+            bodyProfile: 0,
+            goal: 0,
+            trainingPlan: 0,
+            inventory: 0,
+            mealPlan: 0,
+            mealPlanDecision: 0,
+            trainingCompletion: 0
+          }
+        }
+      }
+    ];
+    const client = createPlanningApiClient(() => Promise.resolve(responses.shift()));
+
+    await expect(client.call({
+      action: 'resolveFoodName',
+      payload: { name: '测试米饭' }
+    })).resolves.toMatchObject({
+      success: true,
+      data: { kind: 'food_name_resolved', resolution: { canonicalNameZh: '测试米饭' } }
+    });
+    await expect(client.call({ action: 'getCurrentContext' })).resolves.toMatchObject({
+      success: true,
+      data: { kind: 'current_context', mealPlan: null, mealPlanStale: false }
+    });
+  });
 });

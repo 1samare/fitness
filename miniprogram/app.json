@@ -1,7 +1,8 @@
 {
   "pages": [
     "pages/planning-setup/index",
-    "pages/planning-preview/index"
+    "pages/planning-preview/index",
+    "pages/meal-execution/index"
   ],
   "window": {
     "navigationBarTitleText": "Fitness 规划预览",
