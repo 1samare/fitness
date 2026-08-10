@@ -185,6 +185,57 @@ describe('evaluateRecipeCandidate', () => {
     });
   });
 
+  it('recomputes nutrients once from the merged grams of a repeated food', () => {
+    const result = evaluate({
+      template: {
+        ...template,
+        ingredients: [
+          { foodId: 'fixture-tofu', nutritionSnapshotId: 'snapshot-fixture-tofu-v1', grams: 50 },
+          { foodId: 'fixture-tofu', nutritionSnapshotId: 'snapshot-fixture-tofu-v1', grams: 50 },
+          ...template.ingredients.slice(1)
+        ]
+      },
+      inventory: [
+        { foodId: 'fixture-tofu', availableGrams: 100 },
+        ...inventory.slice(1)
+      ],
+      snapshots: [
+        {
+          ...snapshots[0],
+          nutrientsPer100g: {
+            energyKcal: 0.1,
+            proteinG: 0,
+            fatG: 0,
+            carbohydrateG: 0,
+            fiberG: 0,
+            saturatedFatG: 0,
+            addedSugarG: 0
+          }
+        },
+        ...snapshots.slice(1)
+      ]
+    });
+
+    expect(result).toEqual({
+      kind: 'accepted',
+      totals: {
+        energyKcal: 165.1,
+        proteinG: 7,
+        fatG: 1.3,
+        carbohydrateG: 33.5,
+        fiberG: 5,
+        saturatedFatG: 0.3,
+        addedSugarG: 0
+      },
+      sourceSnapshotIds: [
+        'snapshot-fixture-tofu-v1',
+        'snapshot-fixture-noodles-v1',
+        'snapshot-fixture-broccoli-v1'
+      ],
+      foodGroupIds: ['soy_nuts', 'grains_tubers', 'vegetables']
+    });
+  });
+
   it('never relaxes any allergen declared by a source snapshot', () => {
     for (const snapshot of snapshots) {
       for (const allergen of snapshot.allergens) {

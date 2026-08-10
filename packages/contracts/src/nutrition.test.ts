@@ -123,6 +123,22 @@ describe('nutrition runtime contracts', () => {
     expect(dailyMenuTemplateVersionSchema.safeParse(menu).success).toBe(false);
   });
 
+  it('rejects a daily menu missing any required breakfast, lunch, or dinner slot', () => {
+    const menu = {
+      id: 'menu-fixture-missing-dinner-v1',
+      datasetVersion: 'fixture-2026-08-10',
+      sourceId: 'FITNESS-TEST-FIXTURE-V2',
+      reviewedAt: '2026-08-10T00:00:00.000Z',
+      qualityStatus: 'test_fixture',
+      meals: [
+        { slot: 'breakfast', recipeTemplateVersionId: 'recipe-version-fixture-rice-v1' },
+        { slot: 'lunch', recipeTemplateVersionId: 'recipe-version-fixture-tofu-v1' },
+        { slot: 'snack', recipeTemplateVersionId: 'recipe-version-fixture-fruit-v1' }
+      ]
+    };
+    expect(dailyMenuTemplateVersionSchema.safeParse(menu).success).toBe(false);
+  });
+
   it('accepts inclusive serving multiplier boundaries and rejects quantities outside them', () => {
     const assignment = {
       slot: 'breakfast',

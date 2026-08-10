@@ -111,6 +111,15 @@ export const dailyMenuTemplateVersionSchema = z.object({
     }
     slots.add(meal.slot);
   });
+  for (const requiredSlot of ['breakfast', 'lunch', 'dinner'] as const) {
+    if (!slots.has(requiredSlot)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['meals'],
+        message: `daily menu must include exactly one ${requiredSlot}`
+      });
+    }
+  }
 });
 
 export const dailyMenuCatalogVersionSchema = z.object({

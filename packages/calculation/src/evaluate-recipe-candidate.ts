@@ -112,6 +112,10 @@ export function evaluateRecipeCandidate(
   const foodGroupIds: FoodGroupId[] = [];
   const sourceSnapshotIds: string[] = [];
   const requiredGramsByFood = new Map<string, number>();
+  const aggregatedIngredients = new Map<string, {
+    readonly snapshot: NutritionDataSnapshot;
+    grams: number;
+  }>();
   let totals = ZERO_TOTALS;
 
   for (const ingredient of input.template.ingredients) {
@@ -141,11 +145,25 @@ export function evaluateRecipeCandidate(
       ingredient.foodId,
       roundHalfUp((requiredGramsByFood.get(ingredient.foodId) ?? 0) + actualGrams, 1)
     );
-    totals = addScaled(totals, scaleNutrients(snapshot.nutrientsPer100g, actualGrams), 1);
+    const aggregateKey = `${ingredient.foodId}\u0000${ingredient.nutritionSnapshotId}`;
+    const aggregate = aggregatedIngredients.get(aggregateKey);
+    if (aggregate === undefined) {
+      aggregatedIngredients.set(aggregateKey, { snapshot, grams: actualGrams });
+    } else {
+      aggregate.grams = roundHalfUp(aggregate.grams + actualGrams, 1);
+    }
     if (!sourceSnapshotIds.includes(snapshot.id)) sourceSnapshotIds.push(snapshot.id);
     if (!foodGroupIds.includes(snapshot.foodGroupId)) {
       foodGroupIds.push(snapshot.foodGroupId);
     }
+  }
+
+  for (const aggregate of aggregatedIngredients.values()) {
+    totals = addScaled(
+      totals,
+      scaleNutrients(aggregate.snapshot.nutrientsPer100g, aggregate.grams),
+      1
+    );
   }
 
   for (const [foodId, requiredGrams] of requiredGramsByFood) {

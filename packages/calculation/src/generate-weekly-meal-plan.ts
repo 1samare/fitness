@@ -84,6 +84,11 @@ interface ConsumptionFailure {
   readonly availableGrams: number;
 }
 
+interface InventoryBalance {
+  readonly availableGrams: number;
+  readonly consumedDecigrams: number;
+}
+
 const MEAL_SLOT_ORDER: Readonly<Record<MealSlot, number>> = {
   breakfast: 0,
   lunch: 1,
@@ -206,6 +211,18 @@ function qualityAllowed(
   return value.qualityStatus === 'reviewed' || allowTestFixtures;
 }
 
+function hasRequiredUniqueMealSlots(
+  meals: readonly { readonly slot: MealSlot }[]
+): boolean {
+  const counts = new Map<MealSlot, number>();
+  for (const meal of meals) counts.set(meal.slot, (counts.get(meal.slot) ?? 0) + 1);
+  return counts.get('breakfast') === 1
+    && counts.get('lunch') === 1
+    && counts.get('dinner') === 1
+    && (counts.get('snack') ?? 0) <= 1
+    && counts.size === meals.length;
+}
+
 function mapRecipeConflict(
   businessDate: string,
   conflict: RecipeCandidateConflict
@@ -257,6 +274,7 @@ function expandCandidate(input: {
     }]
   });
   if (!qualityAllowed(input.menu, input.allowTestFixtures)) return sourceConflict();
+  if (!hasRequiredUniqueMealSlots(input.menu.meals)) return sourceConflict();
 
   const orderedMeals = [...input.menu.meals].sort((left, right) => (
     MEAL_SLOT_ORDER[left.slot] - MEAL_SLOT_ORDER[right.slot]
@@ -278,10 +296,21 @@ function expandCandidate(input: {
         inventoryItem !== undefined
         && inventoryItem.nutritionSnapshotId !== ingredient.nutritionSnapshotId
       ) return sourceConflict(ingredient.foodId);
+      const actualGrams = roundHalfUp(ingredient.grams * input.multiplier, 1);
+      if (actualGrams < 0.1) {
+        return {
+          kind: 'rejected',
+          conflicts: [{
+            businessDate: input.businessDate,
+            code: 'food_diversity_insufficient',
+            foodId: ingredient.foodId
+          }]
+        };
+      }
       ingredients.push({
         foodId: ingredient.foodId,
         nutritionSnapshotId: ingredient.nutritionSnapshotId,
-        grams: roundHalfUp(ingredient.grams * input.multiplier, 1)
+        grams: actualGrams
       });
     }
   }
@@ -391,24 +420,40 @@ function expandCandidate(input: {
 }
 
 function consumeIfAvailable(
-  remaining: ReadonlyMap<string, number>,
+  balances: ReadonlyMap<string, InventoryBalance>,
   ingredientAmounts: MealPlanDay['ingredientAmounts']
-): { readonly remaining: ReadonlyMap<string, number> } | { readonly failure: ConsumptionFailure } {
-  const next = new Map(remaining);
+): { readonly balances: ReadonlyMap<string, InventoryBalance> } | {
+  readonly failure: ConsumptionFailure;
+} {
+  const next = new Map(balances);
   for (const ingredient of ingredientAmounts) {
-    const availableGrams = next.get(ingredient.foodId) ?? 0;
-    if (availableGrams + Number.EPSILON < ingredient.grams) {
+    const balance = next.get(ingredient.foodId) ?? {
+      availableGrams: 0,
+      consumedDecigrams: 0
+    };
+    const requiredDecigrams = Math.round(ingredient.grams * 10);
+    const nextConsumedDecigrams = balance.consumedDecigrams + requiredDecigrams;
+    const totalRequiredGrams = nextConsumedDecigrams / 10;
+    const comparisonTolerance = Number.EPSILON * Math.max(
+      1,
+      Math.abs(balance.availableGrams),
+      Math.abs(totalRequiredGrams)
+    ) * 8;
+    if (totalRequiredGrams > balance.availableGrams + comparisonTolerance) {
       return {
         failure: {
           foodId: ingredient.foodId,
           requiredGrams: ingredient.grams,
-          availableGrams: roundHalfUp(availableGrams, 1)
+          availableGrams: balance.availableGrams - balance.consumedDecigrams / 10
         }
       };
     }
-    next.set(ingredient.foodId, roundHalfUp(availableGrams - ingredient.grams, 1));
+    next.set(ingredient.foodId, {
+      availableGrams: balance.availableGrams,
+      consumedDecigrams: nextConsumedDecigrams
+    });
   }
-  return { remaining: next };
+  return { balances: next };
 }
 
 function repeatedFoodCount(candidate: ExpandedCandidate, selected: readonly MealPlanDay[]): number {
@@ -426,6 +471,99 @@ function weeklyDiversitySatisfied(days: readonly MealPlanDay[]): boolean {
   return new Set(days.flatMap((day) => (
     day.ingredientAmounts.map(({ foodId }) => foodId)
   ))).size >= FOOD_DIVERSITY_POLICY_V1.minimumDistinctFoodsPerWeek;
+}
+
+function validateFixedDay(input: {
+  readonly day: MealPlanDay;
+  readonly catalog: DailyMenuCatalogVersion;
+  readonly menusById: ReadonlyMap<string, DailyMenuTemplateVersion>;
+  readonly recipesById: ReadonlyMap<string, RecipeTemplateVersion>;
+  readonly snapshotsById: ReadonlyMap<string, NutritionDataSnapshot>;
+  readonly inventoryByFoodId: ReadonlyMap<string, InventoryVersion['items'][number]>;
+  readonly declaredAllergens: ReadonlySet<string>;
+  readonly avoidFoodIds: ReadonlySet<string>;
+  readonly allowTestFixtures: boolean;
+}): readonly WeeklyMealConflict[] {
+  const conflicts: WeeklyMealConflict[] = [];
+  const sourceConflict = (foodId?: string): void => {
+    conflicts.push({
+      businessDate: input.day.businessDate,
+      code: 'source_chain_incomplete',
+      ...(foodId === undefined ? {} : { foodId })
+    });
+  };
+  const menu = input.menusById.get(input.day.dailyMenuTemplateVersionId);
+  if (
+    !input.catalog.dailyMenuTemplateVersionIds.includes(input.day.dailyMenuTemplateVersionId)
+    || menu === undefined
+    || !qualityAllowed(menu, input.allowTestFixtures)
+    || !hasRequiredUniqueMealSlots(menu.meals)
+  ) sourceConflict();
+  if (!hasRequiredUniqueMealSlots(input.day.meals)) sourceConflict();
+
+  for (const meal of input.day.meals) {
+    const recipe = input.recipesById.get(meal.recipeTemplateVersionId);
+    if (recipe === undefined || !qualityAllowed(recipe, input.allowTestFixtures)) sourceConflict();
+  }
+
+  const usedSnapshotIds = new Set<string>();
+  for (const ingredient of input.day.ingredientAmounts) {
+    if (ingredient.grams < 0.1) {
+      conflicts.push({
+        businessDate: input.day.businessDate,
+        code: 'food_diversity_insufficient',
+        foodId: ingredient.foodId
+      });
+      continue;
+    }
+    if (input.avoidFoodIds.has(ingredient.foodId)) {
+      conflicts.push({
+        businessDate: input.day.businessDate,
+        code: 'avoided_food',
+        foodId: ingredient.foodId
+      });
+    }
+    const inventoryItem = input.inventoryByFoodId.get(ingredient.foodId);
+    if (inventoryItem === undefined) {
+      conflicts.push({
+        businessDate: input.day.businessDate,
+        code: 'inventory_insufficient',
+        foodId: ingredient.foodId,
+        requiredGrams: ingredient.grams,
+        availableGrams: 0
+      });
+    }
+    const pinnedSnapshotId = inventoryItem?.nutritionSnapshotId
+      ?? input.day.nutritionSourceSnapshotIds.find((snapshotId) => (
+        input.snapshotsById.get(snapshotId)?.foodId === ingredient.foodId
+      ));
+    const snapshot = pinnedSnapshotId === undefined
+      ? undefined
+      : input.snapshotsById.get(pinnedSnapshotId);
+    if (
+      snapshot === undefined
+      || snapshot.foodId !== ingredient.foodId
+      || !input.day.nutritionSourceSnapshotIds.includes(snapshot.id)
+      || !qualityAllowed(snapshot, input.allowTestFixtures)
+    ) {
+      sourceConflict(ingredient.foodId);
+      continue;
+    }
+    usedSnapshotIds.add(snapshot.id);
+    if (snapshot.allergens.some((allergen) => (
+      input.declaredAllergens.has(canonicalizeAllergenTerm(allergen))
+    ))) {
+      conflicts.push({
+        businessDate: input.day.businessDate,
+        code: 'allergen_detected',
+        foodId: ingredient.foodId
+      });
+    }
+  }
+  if (input.day.nutritionSourceSnapshotIds.some((snapshotId) => (
+    !usedSnapshotIds.has(snapshotId)
+  ))) sourceConflict();
+  return conflicts;
 }
 
 export function generateWeeklyMealPlan(
@@ -455,15 +593,53 @@ export function generateWeeklyMealPlan(
     }
   }
 
+  const expectedDateSet = new Set(expectedDates);
+  const seenFixedDates = new Set<string>();
+  for (const fixedDay of input.fixedDays) {
+    if (!expectedDateSet.has(fixedDay.businessDate) || seenFixedDates.has(fixedDay.businessDate)) {
+      return infeasible([{
+        businessDate: fixedDay.businessDate,
+        code: 'source_chain_incomplete'
+      }]);
+    }
+    seenFixedDates.add(fixedDay.businessDate);
+  }
+
   const fixedByDate = new Map(input.fixedDays.map((day) => [day.businessDate, day]));
   const inventoryByFoodId = new Map(input.inventory.map((item) => [item.foodId, item]));
-  let initialRemaining: ReadonlyMap<string, number> = new Map(
-    input.inventory.map((item) => [item.foodId, item.availableGrams])
+  const menusById = new Map(input.menus.map((menu) => [menu.id, menu]));
+  const recipesById = new Map(input.recipes.map((recipe) => [recipe.id, recipe]));
+  const snapshotsById = new Map(input.snapshots.map((snapshot) => [snapshot.id, snapshot]));
+  const declaredAllergens = new Set(input.allergens.map(canonicalizeAllergenTerm));
+  const avoidFoodIds = new Set(input.avoidFoodIds);
+  if (!qualityAllowed(input.catalog, input.allowTestFixtures)) {
+    return infeasible([{
+      businessDate: expectedDates[0] ?? input.weekStartDate,
+      code: 'source_chain_incomplete'
+    }]);
+  }
+  let initialBalances: ReadonlyMap<string, InventoryBalance> = new Map(
+    input.inventory.map((item) => [item.foodId, {
+      availableGrams: item.availableGrams,
+      consumedDecigrams: 0
+    }])
   );
   for (const businessDate of expectedDates) {
     const fixedDay = fixedByDate.get(businessDate);
     if (fixedDay === undefined) continue;
-    const consumption = consumeIfAvailable(initialRemaining, fixedDay.ingredientAmounts);
+    const fixedDayConflicts = validateFixedDay({
+      day: fixedDay,
+      catalog: input.catalog,
+      menusById,
+      recipesById,
+      snapshotsById,
+      inventoryByFoodId,
+      declaredAllergens,
+      avoidFoodIds,
+      allowTestFixtures: input.allowTestFixtures
+    });
+    if (fixedDayConflicts.length > 0) return infeasible(fixedDayConflicts);
+    const consumption = consumeIfAvailable(initialBalances, fixedDay.ingredientAmounts);
     if ('failure' in consumption) {
       return infeasible([{
         businessDate,
@@ -471,18 +647,9 @@ export function generateWeeklyMealPlan(
         ...consumption.failure
       }]);
     }
-    initialRemaining = consumption.remaining;
+    initialBalances = consumption.balances;
   }
 
-  const firstGeneratedDate = expectedDates.find((date) => !fixedByDate.has(date));
-  if (
-    firstGeneratedDate !== undefined
-    && !qualityAllowed(input.catalog, input.allowTestFixtures)
-  ) return infeasible([{ businessDate: firstGeneratedDate, code: 'source_chain_incomplete' }]);
-
-  const menusById = new Map(input.menus.map((menu) => [menu.id, menu]));
-  const recipesById = new Map(input.recipes.map((recipe) => [recipe.id, recipe]));
-  const snapshotsById = new Map(input.snapshots.map((snapshot) => [snapshot.id, snapshot]));
   const catalogMenuIds = [...new Set(input.catalog.dailyMenuTemplateVersionIds)].sort();
   const candidatesByDate = new Map<string, readonly ExpandedCandidate[]>();
 
@@ -549,7 +716,10 @@ export function generateWeeklyMealPlan(
     }
   };
 
-  function search(dayIndex: number, remaining: ReadonlyMap<string, number>): MealPlanDay[] | null {
+  function search(
+    dayIndex: number,
+    balances: ReadonlyMap<string, InventoryBalance>
+  ): MealPlanDay[] | null {
     if (dayIndex === expectedDates.length) {
       if (weeklyDiversitySatisfied(selected)) return [...selected];
       const lastDate = expectedDates[expectedDates.length - 1] ?? input.weekStartDate;
@@ -564,7 +734,7 @@ export function generateWeeklyMealPlan(
     const fixedDay = fixedByDate.get(businessDate);
     if (fixedDay !== undefined) {
       selected.push(fixedDay);
-      const complete = search(dayIndex + 1, remaining);
+      const complete = search(dayIndex + 1, balances);
       selected.pop();
       return complete;
     }
@@ -579,7 +749,7 @@ export function generateWeeklyMealPlan(
       )
     ));
     for (const candidate of candidates) {
-      const consumption = consumeIfAvailable(remaining, candidate.day.ingredientAmounts);
+      const consumption = consumeIfAvailable(balances, candidate.day.ingredientAmounts);
       if ('failure' in consumption) {
         rememberFailure(dayIndex, {
           businessDate,
@@ -589,14 +759,14 @@ export function generateWeeklyMealPlan(
         continue;
       }
       selected.push(candidate.day);
-      const complete = search(dayIndex + 1, consumption.remaining);
+      const complete = search(dayIndex + 1, consumption.balances);
       selected.pop();
       if (complete !== null) return complete;
     }
     return null;
   }
 
-  const days = search(0, initialRemaining);
+  const days = search(0, initialBalances);
   if (days === null) {
     const fallback: WeeklyMealConflict = {
       businessDate: expectedDates[expectedDates.length - 1] ?? input.weekStartDate,
