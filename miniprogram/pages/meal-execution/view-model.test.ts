@@ -238,6 +238,7 @@ describe('meal execution view model', () => {
       { value: 'keep_existing', label: '保留当前锁定餐单' },
       { value: 'overwrite_locked', label: '确认并覆盖锁定日' }
     ]);
+    expect(viewModel.decisionRecoveryMessage).toContain('继续处理餐单差异');
     expect(JSON.stringify(viewModel.pendingDiffs)).not.toMatch(/diff-internal|target-old|target-new/);
   });
 
@@ -301,6 +302,12 @@ describe('meal execution view model', () => {
       targetChangeText: '历史餐单差异缺少展示快照，数值记录仍保留；可保留当前餐单，或重新生成后再确认覆盖。',
       mealChangeText: ''
     });
+    expect(viewModel.decisionOptions).toEqual([
+      { value: 'keep_existing', label: '保留当前锁定餐单' }
+    ]);
+    expect(viewModel.decisionRecoveryMessage).toBe(
+      '历史差异摘要不可用，不能安全覆盖；可保留现有计划或重新生成。'
+    );
     expect(JSON.stringify(viewModel)).not.toMatch(
       /recipe-breakfast|internal-rice|diff-internal|target-old|target-new/
     );

@@ -486,6 +486,94 @@ describe('planning API contracts', () => {
     }
   );
 
+  it.each([
+    ['pending with a completion timestamp', {
+      status: 'pending', completedAt: '2026-08-19T04:01:00.000Z',
+      activatedMealPlanVersionId: null, failureCode: null
+    }],
+    ['pending with an activated meal plan', {
+      status: 'pending', completedAt: null,
+      activatedMealPlanVersionId: 'meal-plan-activated', failureCode: null
+    }],
+    ['pending with a failure code', {
+      status: 'pending', completedAt: null,
+      activatedMealPlanVersionId: null, failureCode: 'provider_unavailable'
+    }],
+    ['failed_retryable without a failure code', {
+      status: 'failed_retryable', completedAt: null,
+      activatedMealPlanVersionId: null, failureCode: null
+    }],
+    ['failed_retryable with a completion timestamp', {
+      status: 'failed_retryable', completedAt: '2026-08-19T04:01:00.000Z',
+      activatedMealPlanVersionId: null, failureCode: 'provider_unavailable'
+    }],
+    ['completed without a completion timestamp', {
+      status: 'completed', completedAt: null,
+      activatedMealPlanVersionId: null, failureCode: null
+    }],
+    ['completed with a failure code', {
+      status: 'completed', completedAt: '2026-08-19T04:01:00.000Z',
+      activatedMealPlanVersionId: null, failureCode: 'provider_unavailable'
+    }]
+  ] as const)('rejects a public recalculation job that is %s', (_name, lifecycle) => {
+    const response = {
+      success: true,
+      data: {
+        kind: 'meal_plan_recalculation_processed',
+        recalculationJob: {
+          kind: 'recalculation_job',
+          id: 'job-public-lifecycle',
+          triggerEventId: 'training-completion-public-lifecycle',
+          triggerType: 'training_completion',
+          affectedDates: ['2026-08-19'],
+          createdAt: '2026-08-19T04:00:00.000Z',
+          candidateMealPlanVersionId: null,
+          ...lifecycle
+        },
+        candidateMealPlan: null,
+        activatedMealPlan: null,
+        targetDiffs: []
+      }
+    } as const;
+
+    expect(planningApiResponseSchema.safeParse(response).success).toBe(false);
+  });
+
+  it.each([
+    ['pending', null, null, null],
+    ['failed_retryable', null, null, 'provider_unavailable'],
+    ['completed', '2026-08-19T04:01:00.000Z', null, null],
+    ['completed', '2026-08-19T04:01:00.000Z', 'meal-plan-activated', null]
+  ] as const)(
+    'accepts a public %s recalculation job with a coherent lifecycle',
+    (status, completedAt, activatedMealPlanVersionId, failureCode) => {
+      const response = {
+        success: true,
+        data: {
+          kind: 'meal_plan_recalculation_processed',
+          recalculationJob: {
+            kind: 'recalculation_job',
+            id: `job-valid-${status}`,
+            triggerEventId: 'training-completion-valid-lifecycle',
+            triggerType: 'training_completion',
+            affectedDates: ['2026-08-19'],
+            status,
+            createdAt: '2026-08-19T04:00:00.000Z',
+            completedAt,
+            candidateMealPlanVersionId: status === 'pending' ? 'meal-plan-candidate' : null,
+            activatedMealPlanVersionId,
+            failureCode
+          },
+          candidateMealPlan: null,
+          activatedMealPlan: null,
+          targetDiffs: []
+        }
+      } as const;
+
+      expect(planningApiResponseSchema.safeParse(response).success).toBe(true);
+    }
+  );
+
   it('parses public inventory responses and rejects stored user identity', () => {
     const response = {
       success: true,

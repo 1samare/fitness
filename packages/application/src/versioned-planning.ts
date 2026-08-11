@@ -569,7 +569,7 @@ export function recalculationJobMatchesActiveTrainingChain(
     && job.affectedDates.every((businessDate) => weekDates.has(businessDate));
 }
 
-export function recalculationJobCanRetryForCurrentContext(
+export function recalculationJobHasCurrentProcessPrerequisites(
   state: PlanningAggregateState,
   job: RecalculationJob
 ): boolean {
@@ -595,6 +595,14 @@ export function recalculationJobCanRetryForCurrentContext(
     && nutritionTargets.every((target) => (
       target.nutrition !== null && target.nutrition.kind === 'feasible'
     ));
+}
+
+export function recalculationJobCanRetryForCurrentContext(
+  state: PlanningAggregateState,
+  job: RecalculationJob
+): boolean {
+  return job.candidateMealPlanVersionId === null
+    && recalculationJobHasCurrentProcessPrerequisites(state, job);
 }
 
 function nutritionTargetsForEnergyTargets(
@@ -868,9 +876,11 @@ export function createVersionedPlanningService(
         bodyProfile === null
         || goal === null
         || trainingPlan === null
+        || inventory === null
         || mealPlan.bodyProfileVersionId !== bodyProfile.id
         || mealPlan.goalVersionId !== goal.id
         || mealPlan.trainingPlanVersionId !== trainingPlan.id
+        || mealPlan.inventoryVersionId !== inventory.id
         || mealPlanTargetIds.length !== currentTargetIds.length
         || mealPlanTargetIds.some((id, index) => id !== currentTargetIds[index])
       );

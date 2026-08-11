@@ -865,6 +865,37 @@ describe('handlePlanningApi', () => {
       displayMessage: '历史餐单差异缺少展示快照，数值记录仍保留；可保留当前餐单，或重新生成后再确认覆盖。'
     }));
     expect(await harness.repository.read('trusted-user-a')).toEqual(beforeRead);
+    const candidateId = context.data.pendingMealPlanCandidate?.id;
+    if (candidateId === undefined) throw new Error('Expected legacy pending candidate');
+    const overwrite = await harness.handler({
+      action: 'decideMealPlanCandidate',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'legacy-display-overwrite-001',
+        payload: { candidateMealPlanVersionId: candidateId, decision: 'overwrite_locked' }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(overwrite).toEqual({
+      success: false,
+      error: {
+        code: 'candidate_diff_unavailable',
+        message: '历史餐单差异缺少安全摘要，不能覆盖锁定日；请保留当前餐单或重新生成。'
+      }
+    });
+    expect(await harness.repository.read('trusted-user-a')).toEqual(beforeRead);
+
+    const keep = await harness.handler({
+      action: 'decideMealPlanCandidate',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'legacy-display-keep-001',
+        payload: { candidateMealPlanVersionId: candidateId, decision: 'keep_existing' }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(keep).toMatchObject({
+      success: true,
+      data: { kind: 'meal_plan_candidate_decided', decision: { decision: 'keep_existing' } }
+    });
   });
 
   it('publishes the exact recalculation-job version and retries a failed job when meal-plan count differs', async () => {

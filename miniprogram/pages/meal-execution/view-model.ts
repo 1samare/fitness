@@ -54,6 +54,7 @@ export interface MealExecutionViewModel {
     readonly value: CandidateDecision;
     readonly label: string;
   }[];
+  readonly decisionRecoveryMessage: string;
 }
 
 export interface CompletionFeedback {
@@ -154,6 +155,8 @@ export function buildMealExecutionViewModel(context: CurrentContext): MealExecut
     .sort((left, right) => left.businessDate.localeCompare(right.businessDate));
 
   const hasCandidate = context.pendingMealPlanCandidate !== null;
+  const hasLegacyCandidateDiff = hasCandidate
+    && context.pendingMealPlanTargetDiffs.some((diff) => diff.displayStatus === 'legacy_unavailable');
   return {
     days,
     staleBanner: context.mealPlanStale
@@ -175,11 +178,18 @@ export function buildMealExecutionViewModel(context: CurrentContext): MealExecut
         ? '当前没有可替换的备选菜品。请刷新备选菜品或重新校验库存。'
         : '',
     decisionOptions: hasCandidate
-      ? [
-          { value: 'keep_existing', label: '保留当前锁定餐单' },
-          { value: 'overwrite_locked', label: '确认并覆盖锁定日' }
-        ]
-      : []
+      ? hasLegacyCandidateDiff
+        ? [{ value: 'keep_existing', label: '保留当前锁定餐单' }]
+        : [
+            { value: 'keep_existing', label: '保留当前锁定餐单' },
+            { value: 'overwrite_locked', label: '确认并覆盖锁定日' }
+          ]
+      : [],
+    decisionRecoveryMessage: !hasCandidate
+      ? ''
+      : hasLegacyCandidateDiff
+        ? '历史差异摘要不可用，不能安全覆盖；可保留现有计划或重新生成。'
+        : '餐单差异仍待确认，请继续处理餐单差异。'
   };
 }
 

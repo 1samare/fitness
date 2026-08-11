@@ -22,10 +22,19 @@ import {
 } from './view-model';
 import {
   parsePendingMealCommand,
+  pendingCommandDisposition,
   pendingMealCommandStorageKey,
   selectPendingMealCommand,
   type MealWriteRequest
 } from './pending-command';
+import {
+  advanceInventoryGenerationWorkflow,
+  createInventoryGenerationWorkflow,
+  inventoryGenerationWorkflowMatches,
+  inventoryGenerationWorkflowStorageKey,
+  parseInventoryGenerationWorkflow,
+  type InventoryGenerationWorkflow
+} from './inventory-generation-workflow';
 
 type SuccessData = Extract<PlanningApiResponse, { success: true }>['data'];
 type LatestVersions = CurrentContext['latestVersions'];
@@ -52,6 +61,7 @@ interface PageData {
   staleBanner: string;
   pendingDiffs: ReturnType<typeof buildMealExecutionViewModel>['pendingDiffs'];
   decisionOptions: readonly { readonly value: CandidateDecision; readonly label: string }[];
+  decisionRecoveryMessage: string;
   selectedDecision: CandidateDecision;
   pendingCandidateId: string;
   retryJobId: string;
@@ -74,6 +84,9 @@ interface PageData {
   factMessage: string;
   mealMessage: string;
   generationMessage: string;
+  inventoryGenerationRecoveryVisible: boolean;
+  inventoryGenerationRecoveryDamaged: boolean;
+  inventoryGenerationRecoveryMessage: string;
 }
 
 interface TextValueEvent { readonly detail: { readonly value: string } }
@@ -97,6 +110,9 @@ interface PageActions {
   onResolveInventoryRow(event: IndexedEvent): Promise<void>;
   onGenerationWeekChange(event: TextValueEvent): void;
   onSaveInventoryAndGenerate(): Promise<void>;
+  onResumeInventoryGeneration(): Promise<void>;
+  onClearDamagedInventoryGeneration(): void;
+  syncInventoryGenerationRecovery(): void;
   onLockChange(event: IndexedSwitchValueEvent): Promise<void>;
   onRecipeChange(event: RecipePickerEvent): Promise<void>;
   onCandidateDecisionChange(event: TextValueEvent): void;
@@ -167,15 +183,59 @@ function responseError(response: PlanningApiResponse): string {
 async function callPendingWrite(
   request: MealWriteRequest,
   confirmedKind: SuccessData['kind'],
-  nextKey: () => string
+  nextKey: () => string,
+  refreshAfterDiscard: () => Promise<void>
 ): Promise<PlanningApiResponse> {
   const storageKey = pendingMealCommandStorageKey(request.action);
   const stored = parsePendingMealCommand(wx.getStorageSync(storageKey));
   const selected = selectPendingMealCommand({ request, pending: stored, nextKey });
   if (!selected.reused) wx.setStorageSync(storageKey, selected.pending);
   const response = await planningApiClient.call(selected.pending.request);
-  if (response.success && response.data.kind === confirmedKind) wx.removeStorageSync(storageKey);
+  const disposition = pendingCommandDisposition(response, confirmedKind);
+  if (disposition !== 'retain') wx.removeStorageSync(storageKey);
+  if (disposition === 'discard') await refreshAfterDiscard();
   return response;
+}
+
+function storedInventoryGenerationWorkflow(): {
+  readonly exists: boolean;
+  readonly workflow: InventoryGenerationWorkflow | undefined;
+} {
+  const stored = wx.getStorageSync<unknown>(inventoryGenerationWorkflowStorageKey);
+  const exists = stored !== undefined && stored !== null && stored !== '';
+  return {
+    exists,
+    workflow: exists ? parseInventoryGenerationWorkflow(stored) : undefined
+  };
+}
+
+function storeExactPendingRequest(request: MealWriteRequest): void {
+  const selected = selectPendingMealCommand({
+    request,
+    pending: undefined,
+    nextKey: () => request.payload.idempotencyKey
+  });
+  wx.setStorageSync(pendingMealCommandStorageKey(request.action), selected.pending);
+}
+
+function selectAndStorePendingRequest(
+  request: MealWriteRequest,
+  nextKey: () => string
+): MealWriteRequest {
+  const storageKey = pendingMealCommandStorageKey(request.action);
+  const selected = selectPendingMealCommand({
+    request,
+    pending: parsePendingMealCommand(wx.getStorageSync(storageKey)),
+    nextKey
+  });
+  wx.setStorageSync(storageKey, selected.pending);
+  return selected.pending.request;
+}
+
+function clearInventoryGenerationWorkflow(): void {
+  wx.removeStorageSync(inventoryGenerationWorkflowStorageKey);
+  wx.removeStorageSync(pendingMealCommandStorageKey('saveInventory'));
+  wx.removeStorageSync(pendingMealCommandStorageKey('generateWeeklyMealPlan'));
 }
 
 Page<PageData, PageActions>({
@@ -197,6 +257,7 @@ Page<PageData, PageActions>({
     staleBanner: '',
     pendingDiffs: [],
     decisionOptions: [],
+    decisionRecoveryMessage: '',
     selectedDecision: 'keep_existing',
     pendingCandidateId: '',
     retryJobId: '',
@@ -218,7 +279,10 @@ Page<PageData, PageActions>({
     formError: '',
     factMessage: '',
     mealMessage: '',
-    generationMessage: ''
+    generationMessage: '',
+    inventoryGenerationRecoveryVisible: false,
+    inventoryGenerationRecoveryDamaged: false,
+    inventoryGenerationRecoveryMessage: ''
   },
 
   async onLoad() {
@@ -253,6 +317,10 @@ Page<PageData, PageActions>({
         staleBanner: viewModel.staleBanner,
         pendingDiffs: viewModel.pendingDiffs,
         decisionOptions: viewModel.decisionOptions,
+        decisionRecoveryMessage: viewModel.decisionRecoveryMessage,
+        selectedDecision: viewModel.decisionOptions.some(
+          (option) => option.value === this.data.selectedDecision
+        ) ? this.data.selectedDecision : 'keep_existing',
         pendingCandidateId: context.pendingMealPlanCandidate?.id ?? '',
         retryJobId: context.retryableRecalculationJob?.id ?? '',
         needsRecalculationStatusRefresh: context.retryableRecalculationJob === null
@@ -270,7 +338,56 @@ Page<PageData, PageActions>({
       });
     } finally {
       this.setData({ loadingContext: false });
+      this.syncInventoryGenerationRecovery();
     }
+  },
+
+  syncInventoryGenerationRecovery() {
+    const stored = storedInventoryGenerationWorkflow();
+    if (!stored.exists) {
+      this.setData({
+        inventoryGenerationRecoveryVisible: false,
+        inventoryGenerationRecoveryDamaged: false,
+        inventoryGenerationRecoveryMessage: ''
+      });
+      return;
+    }
+    if (stored.workflow === undefined) {
+      this.setData({
+        inventoryGenerationRecoveryVisible: true,
+        inventoryGenerationRecoveryDamaged: true,
+        inventoryGenerationRecoveryMessage: '上次库存与餐单生成恢复记录已损坏，系统不会猜测或重放请求。请明确清除损坏记录后重新提交。'
+      });
+      return;
+    }
+    let inputsChanged = true;
+    try {
+      inputsChanged = !inventoryGenerationWorkflowMatches(stored.workflow, {
+        inventoryRequest: buildInventoryRequest({
+          rows: this.data.inventoryRows,
+          expectedVersion: stored.workflow.inventoryRequest.payload.expectedVersion,
+          idempotencyKey: stored.workflow.inventoryRequest.payload.idempotencyKey
+        }),
+        generationRequest: buildGenerateMealPlanRequest({
+          weekStartDate: this.data.generationWeekStart,
+          businessToday: this.data.businessToday,
+          expectedVersion: stored.workflow.generationRequest.payload.expectedVersion,
+          idempotencyKey: stored.workflow.generationRequest.payload.idempotencyKey
+        })
+      });
+    } catch {
+      inputsChanged = true;
+    }
+    const stageText = stored.workflow.stage === 'inventory_pending'
+      ? '库存保存尚待确认'
+      : '库存已保存，餐单生成尚待确认';
+    this.setData({
+      inventoryGenerationRecoveryVisible: true,
+      inventoryGenerationRecoveryDamaged: false,
+      inventoryGenerationRecoveryMessage: inputsChanged
+        ? `检测到上次未完成流程（${stageText}），且当前食材或餐单周已变化。新输入不会替代旧请求，请先恢复上次流程。`
+        : `检测到上次未完成流程（${stageText}）。请先恢复上次流程，系统会精确重放原请求。`
+    });
   },
 
   onInventoryNameInput(event) {
@@ -284,6 +401,7 @@ Page<PageData, PageActions>({
       resolutionMessage: '名称变化后需要重新校验。'
     }));
     this.setData({ inventoryRows, canSaveInventory: rowsResolved(inventoryRows), formError: '' });
+    this.syncInventoryGenerationRecovery();
   },
 
   onInventoryGramsInput(event) {
@@ -295,6 +413,7 @@ Page<PageData, PageActions>({
       resolutionStatus: row.resolutionStatus === 'resolved' ? 'resolved' : 'idle'
     }));
     this.setData({ inventoryRows, canSaveInventory: rowsResolved(inventoryRows), formError: '' });
+    this.syncInventoryGenerationRecovery();
   },
 
   onAddInventoryRow() {
@@ -314,6 +433,7 @@ Page<PageData, PageActions>({
       canSaveInventory: false,
       formError: ''
     });
+    this.syncInventoryGenerationRecovery();
   },
 
   onRemoveInventoryRow(event) {
@@ -321,6 +441,7 @@ Page<PageData, PageActions>({
     if (index === undefined || this.data.inventoryRows.length === 1) return;
     const inventoryRows = this.data.inventoryRows.filter((_row, rowIndex) => rowIndex !== index);
     this.setData({ inventoryRows, canSaveInventory: rowsResolved(inventoryRows), formError: '' });
+    this.syncInventoryGenerationRecovery();
   },
 
   async onResolveInventoryRow(event) {
@@ -388,58 +509,140 @@ Page<PageData, PageActions>({
 
   onGenerationWeekChange(event) {
     this.setData({ generationWeekStart: event.detail.value, formError: '' });
+    this.syncInventoryGenerationRecovery();
   },
 
   async onSaveInventoryAndGenerate() {
     if (this.data.savingInventory || this.data.generatingMeal) return;
+    const stored = storedInventoryGenerationWorkflow();
+    if (stored.exists) {
+      this.syncInventoryGenerationRecovery();
+      this.setData({ formError: '检测到上次未完成的库存与餐单生成流程，请先恢复或处理损坏记录。' });
+      return;
+    }
     if (!this.data.canSaveInventory) {
       this.setData({ formError: '请先逐行校验所有食材名称，再保存并生成餐单。' });
       return;
     }
-    let inventorySaved = false;
-    this.setData({
-      savingInventory: true,
-      actionMessage: '',
-      generationMessage: '',
-      formError: ''
-    });
     try {
-      const inventoryResponse = await callPendingWrite(buildInventoryRequest({
+      const inventoryRequest = selectAndStorePendingRequest(buildInventoryRequest({
         rows: this.data.inventoryRows,
         expectedVersion: this.data.latestVersions.inventory,
         idempotencyKey: 'inventory-ui-pending-placeholder'
-      }), 'inventory_saved', () => idempotencyKey('inventory-ui'));
-      if (!inventoryResponse.success || inventoryResponse.data.kind !== 'inventory_saved') {
-        this.setData({ formError: responseError(inventoryResponse) });
-        return;
-      }
-      inventorySaved = true;
-      this.setData({
-        savingInventory: false,
-        generatingMeal: true,
-        actionMessage: '食材库存已保存。'
-      });
-      const mealResponse = await callPendingWrite(buildGenerateMealPlanRequest({
+      }), () => idempotencyKey('inventory-ui'));
+      const generationRequest = selectAndStorePendingRequest(buildGenerateMealPlanRequest({
         weekStartDate: this.data.generationWeekStart,
         businessToday: this.data.businessToday,
         expectedVersion: this.data.latestVersions.mealPlan,
         idempotencyKey: 'meal-generate-ui-pending-placeholder'
-      }), 'weekly_meal_plan_generated', () => idempotencyKey('meal-generate-ui'));
-      if (!mealResponse.success || mealResponse.data.kind !== 'weekly_meal_plan_generated') {
-        this.setData({ generationMessage: `库存已保存，但餐单生成未完成。${responseError(mealResponse)}` });
+      }), () => idempotencyKey('meal-generate-ui'));
+      if (
+        inventoryRequest.action !== 'saveInventory'
+        || generationRequest.action !== 'generateWeeklyMealPlan'
+      ) throw new Error('库存与餐单生成恢复请求类型不匹配');
+      const workflow = createInventoryGenerationWorkflow({
+        inventoryRequest,
+        generationRequest
+      });
+      wx.setStorageSync(inventoryGenerationWorkflowStorageKey, workflow);
+      this.syncInventoryGenerationRecovery();
+      await this.onResumeInventoryGeneration();
+    } catch (error: unknown) {
+      clearInventoryGenerationWorkflow();
+      this.syncInventoryGenerationRecovery();
+      this.setData({ formError: error instanceof Error ? error.message : '请求参数无效，请检查后重试。' });
+    }
+  },
+
+  async onResumeInventoryGeneration() {
+    if (this.data.savingInventory || this.data.generatingMeal) return;
+    const stored = storedInventoryGenerationWorkflow();
+    if (stored.workflow === undefined) {
+      this.syncInventoryGenerationRecovery();
+      return;
+    }
+    let workflow = stored.workflow;
+    let shouldRefresh = false;
+    this.setData({ actionMessage: '', generationMessage: '', formError: '' });
+    try {
+      if (workflow.stage === 'inventory_pending') {
+        this.setData({ savingInventory: true });
+        storeExactPendingRequest(workflow.inventoryRequest);
+        const inventoryResponse = await planningApiClient.call(workflow.inventoryRequest);
+        const inventoryDisposition = pendingCommandDisposition(inventoryResponse, 'inventory_saved');
+        if (inventoryDisposition === 'discard') {
+          clearInventoryGenerationWorkflow();
+          this.setData({ formError: responseError(inventoryResponse) });
+          shouldRefresh = true;
+          return;
+        }
+        if (
+          inventoryDisposition !== 'confirmed'
+          || !inventoryResponse.success
+          || inventoryResponse.data.kind !== 'inventory_saved'
+        ) {
+          this.setData({ generationMessage: `库存保存尚未确认。${responseError(inventoryResponse)}` });
+          return;
+        }
+        wx.removeStorageSync(pendingMealCommandStorageKey('saveInventory'));
+        workflow = advanceInventoryGenerationWorkflow(workflow, inventoryResponse.data.version.id);
+        wx.setStorageSync(inventoryGenerationWorkflowStorageKey, workflow);
+        shouldRefresh = true;
+        this.setData({ savingInventory: false, generatingMeal: true, actionMessage: '食材库存已保存。' });
+      } else {
+        this.setData({ generatingMeal: true });
+      }
+
+      storeExactPendingRequest(workflow.generationRequest);
+      const generationResponse = await planningApiClient.call(workflow.generationRequest);
+      const generationDisposition = pendingCommandDisposition(
+        generationResponse,
+        'weekly_meal_plan_generated'
+      );
+      if (generationDisposition === 'discard') {
+        clearInventoryGenerationWorkflow();
+        this.setData({ generationMessage: `库存已保存，但餐单生成请求已失效。${responseError(generationResponse)}` });
+        shouldRefresh = true;
         return;
       }
+      if (
+        generationDisposition !== 'confirmed'
+        || !generationResponse.success
+        || generationResponse.data.kind !== 'weekly_meal_plan_generated'
+      ) {
+        this.setData({ generationMessage: `库存已保存，但餐单生成尚未确认。${responseError(generationResponse)}` });
+        return;
+      }
+      if (generationResponse.data.version.inventoryVersionId !== workflow.inventoryVersionId) {
+        this.setData({
+          generationMessage: '餐单返回的库存版本与已保存库存不一致，已保留恢复记录，请刷新后重试。'
+        });
+        shouldRefresh = true;
+        return;
+      }
+      clearInventoryGenerationWorkflow();
+      shouldRefresh = true;
       this.setData({ generationMessage: '一周餐单已生成，所有营养数值均为估算。' });
     } catch (error: unknown) {
       this.setData({
-        generationMessage: inventorySaved
-          ? `库存已保存，但餐单生成未完成。${error instanceof Error ? error.message : '请稍后重试。'}`
-          : `库存未保存。${error instanceof Error ? error.message : '请检查网络后重试。'}`
+        generationMessage: workflow.stage === 'generation_pending'
+          ? `库存已保存，但餐单生成尚未确认。${error instanceof Error ? error.message : '请稍后恢复。'}`
+          : `库存保存尚未确认。${error instanceof Error ? error.message : '请检查网络后恢复。'}`
       });
+      shouldRefresh = true;
     } finally {
       this.setData({ savingInventory: false, generatingMeal: false });
-      if (inventorySaved) await this.refreshContext();
+      this.syncInventoryGenerationRecovery();
+      if (shouldRefresh) await this.refreshContext();
     }
+  },
+
+  onClearDamagedInventoryGeneration() {
+    const stored = storedInventoryGenerationWorkflow();
+    if (!stored.exists || stored.workflow !== undefined) return;
+    clearInventoryGenerationWorkflow();
+    this.syncInventoryGenerationRecovery();
+    this.setData({ generationMessage: '损坏的恢复记录已清除，请重新校验输入后提交。' });
   },
 
   async onLockChange(event) {
@@ -455,7 +658,7 @@ Page<PageData, PageActions>({
         locked: event.detail.value,
         expectedVersion: this.data.latestVersions.mealPlan,
         idempotencyKey: 'meal-lock-ui-pending-placeholder'
-      }), 'meal_plan_updated', () => idempotencyKey('meal-lock-ui'));
+      }), 'meal_plan_updated', () => idempotencyKey('meal-lock-ui'), () => this.refreshContext());
       if (!response.success || response.data.kind !== 'meal_plan_updated') {
         this.setData({ formError: responseError(response) });
         return;
@@ -493,7 +696,7 @@ Page<PageData, PageActions>({
         recipeOptions: this.data.selectableRecipes,
         expectedVersion: this.data.latestVersions.mealPlan,
         idempotencyKey: 'meal-edit-ui-pending-placeholder'
-      }), 'meal_plan_updated', () => idempotencyKey('meal-edit-ui'));
+      }), 'meal_plan_updated', () => idempotencyKey('meal-edit-ui'), () => this.refreshContext());
       if (!response.success || response.data.kind !== 'meal_plan_updated') {
         this.setData({ formError: responseError(response) });
         return;
@@ -508,9 +711,9 @@ Page<PageData, PageActions>({
   },
 
   onCandidateDecisionChange(event) {
-    if (event.detail.value === 'keep_existing' || event.detail.value === 'overwrite_locked') {
-      this.setData({ selectedDecision: event.detail.value, formError: '' });
-    }
+    const selected = this.data.decisionOptions.find((option) => option.value === event.detail.value);
+    if (selected === undefined) return;
+    this.setData({ selectedDecision: selected.value, formError: '' });
   },
 
   async onConfirmCandidateDecision() {
@@ -522,7 +725,7 @@ Page<PageData, PageActions>({
         decision: this.data.selectedDecision,
         expectedVersion: this.data.latestVersions.mealPlanDecision,
         idempotencyKey: 'meal-decision-ui-pending-placeholder'
-      }), 'meal_plan_candidate_decided', () => idempotencyKey('meal-decision-ui'));
+      }), 'meal_plan_candidate_decided', () => idempotencyKey('meal-decision-ui'), () => this.refreshContext());
       if (!response.success || response.data.kind !== 'meal_plan_candidate_decided') {
         this.setData({ formError: responseError(response) });
         return;
@@ -562,7 +765,7 @@ Page<PageData, PageActions>({
         completedDurationMinutes: this.data.completedDurationMinutes,
         expectedVersion: this.data.latestVersions.trainingCompletion,
         idempotencyKey: 'training-completion-ui-pending-placeholder'
-      }), 'training_completion_recorded', () => idempotencyKey('training-completion-ui'));
+      }), 'training_completion_recorded', () => idempotencyKey('training-completion-ui'), () => this.refreshContext());
       const feedback = buildCompletionFeedback(response);
       this.setData({
         factMessage: feedback.factMessage,
@@ -592,7 +795,7 @@ Page<PageData, PageActions>({
         recalculationJobId: this.data.retryJobId,
         expectedVersion: this.data.latestVersions.recalculationJob,
         idempotencyKey: 'meal-retry-ui-pending-placeholder'
-      }), 'meal_plan_recalculation_processed', () => idempotencyKey('meal-retry-ui'));
+      }), 'meal_plan_recalculation_processed', () => idempotencyKey('meal-retry-ui'), () => this.refreshContext());
       if (!response.success || response.data.kind !== 'meal_plan_recalculation_processed') {
         this.setData({ mealMessage: responseError(response) });
         return;

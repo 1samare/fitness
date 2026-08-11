@@ -460,6 +460,16 @@ describe('meal plan generation application service', () => {
       latestVersions: { inventory: 1, mealPlan: 1 }
     });
 
+    const newerInventory = await service.saveInventory('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'inventory-context-change-002',
+      payload: { items: allFixtureInventory(9000) }
+    });
+    const inventoryStale = await service.getCurrentContext('user-a');
+    expect(inventoryStale.inventory?.id).toBe(newerInventory.id);
+    expect(inventoryStale.mealPlan?.inventoryVersionId).toBe(inventory.id);
+    expect(inventoryStale.mealPlanStale).toBe(true);
+
     await service.saveTrainingPlan('user-a', {
       expectedVersion: 1,
       idempotencyKey: 'training-context-change-002',

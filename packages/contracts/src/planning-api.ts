@@ -597,10 +597,34 @@ const storedRecalculationJobSchema = z.object({
   ]).nullable()
 }).strict();
 
+function recalculationJobHasCoherentLifecycle(job: {
+  readonly status: 'pending' | 'completed' | 'failed_retryable';
+  readonly completedAt: string | null;
+  readonly activatedMealPlanVersionId: string | null;
+  readonly failureCode: 'provider_unavailable' | 'nutrition_constraints_infeasible' | null;
+}): boolean {
+  if (job.status === 'pending') {
+    return job.completedAt === null
+      && job.activatedMealPlanVersionId === null
+      && job.failureCode === null;
+  }
+  if (job.status === 'failed_retryable') {
+    return job.completedAt === null
+      && job.activatedMealPlanVersionId === null
+      && job.failureCode !== null;
+  }
+  return job.completedAt !== null && job.failureCode === null;
+}
+
 const trainingCompletionEventSchema = storedTrainingCompletionEventSchema
   .omit({ userId: true })
   .strict();
-const recalculationJobSchema = storedRecalculationJobSchema.omit({ userId: true }).strict();
+const recalculationJobSchema = storedRecalculationJobSchema
+  .omit({ userId: true })
+  .strict()
+  .refine(recalculationJobHasCoherentLifecycle, {
+    message: 'public recalculation job lifecycle is inconsistent'
+  });
 const mealPlanDecisionSchema = storedMealPlanDecisionSchema.omit({ userId: true }).strict();
 
 const trainingCompletionRecordedSchema = z.object({
@@ -761,6 +785,7 @@ const apiErrorSchema = z.object({
     'provider_unavailable',
     'recipe_not_selectable',
     'candidate_not_pending',
+    'candidate_diff_unavailable',
     'nutrition_constraints_infeasible',
     'internal_error'
   ]),

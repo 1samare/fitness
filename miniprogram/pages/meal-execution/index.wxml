@@ -68,10 +68,26 @@
       </picker>
       <text class="field__hint">通常使用训练计划的周开始日，生成连续七天。</text>
     </view>
+    <view wx:if="{{inventoryGenerationRecoveryVisible}}" class="notice notice--warning" aria-role="status" aria-live="polite">
+      <text class="notice__title">有未完成的库存与餐单生成流程</text>
+      <text>{{inventoryGenerationRecoveryMessage}}</text>
+      <button
+        class="button button--secondary button--wide"
+        loading="{{savingInventory || generatingMeal}}"
+        disabled="{{savingInventory || generatingMeal || inventoryGenerationRecoveryDamaged}}"
+        bindtap="onResumeInventoryGeneration"
+      >{{savingInventory ? '正在恢复库存保存…' : generatingMeal ? '正在恢复餐单生成…' : '恢复上次流程'}}</button>
+      <button
+        wx:if="{{inventoryGenerationRecoveryDamaged}}"
+        class="button button--ghost button--wide"
+        disabled="{{savingInventory || generatingMeal}}"
+        bindtap="onClearDamagedInventoryGeneration"
+      >清除损坏记录并重新开始</button>
+    </view>
     <button
       class="button button--primary button--wide"
       loading="{{savingInventory || generatingMeal}}"
-      disabled="{{!canSaveInventory || savingInventory || generatingMeal}}"
+      disabled="{{!canSaveInventory || savingInventory || generatingMeal || inventoryGenerationRecoveryVisible}}"
       bindtap="onSaveInventoryAndGenerate"
     >{{savingInventory ? '正在保存库存…' : generatingMeal ? '正在生成餐单…' : '保存库存并生成一周餐单'}}</button>
     <view wx:if="{{generationMessage}}" class="notice notice--neutral" aria-live="polite">{{generationMessage}}</view>
@@ -142,6 +158,7 @@
       <text wx:if="{{item.targetChangeText}}">{{item.targetChangeText}}</text>
       <text wx:if="{{item.mealChangeText}}">{{item.mealChangeText}}</text>
     </view>
+    <text wx:if="{{decisionRecoveryMessage}}" class="section-help">{{decisionRecoveryMessage}}</text>
     <radio-group class="decision-options" bindchange="onCandidateDecisionChange" aria-label="选择餐单差异处理方式">
       <label wx:for="{{decisionOptions}}" wx:key="value" class="decision-option">
         <radio value="{{item.value}}" checked="{{selectedDecision === item.value}}" />

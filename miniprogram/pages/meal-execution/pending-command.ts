@@ -1,6 +1,7 @@
 import {
   planningApiRequestSchema,
-  type PlanningApiRequest
+  type PlanningApiRequest,
+  type PlanningApiResponse
 } from '@fitness/contracts';
 
 export type MealWriteAction =
@@ -28,6 +29,35 @@ const mealWriteActions = new Set<PlanningApiRequest['action']>([
   'recordTrainingCompletion',
   'retryPendingRecalculation'
 ]);
+
+const deterministicFailureCodes = new Set([
+  'invalid_request',
+  'unknown_action',
+  'unknown_training_session',
+  'unauthenticated',
+  'version_conflict',
+  'idempotency_key_reused',
+  'planning_prerequisite_missing',
+  'invalid_goal',
+  'invalid_training_plan',
+  'invalid_calendar_date',
+  'past_training_change_forbidden',
+  'past_fact_immutable',
+  'training_date_outside_goal_period',
+  'recipe_not_selectable',
+  'candidate_not_pending',
+  'candidate_diff_unavailable'
+]);
+
+export type PendingCommandDisposition = 'confirmed' | 'discard' | 'retain';
+
+export function pendingCommandDisposition(
+  response: PlanningApiResponse,
+  confirmedKind: Extract<PlanningApiResponse, { success: true }>['data']['kind']
+): PendingCommandDisposition {
+  if (response.success) return response.data.kind === confirmedKind ? 'confirmed' : 'retain';
+  return deterministicFailureCodes.has(response.error.code) ? 'discard' : 'retain';
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

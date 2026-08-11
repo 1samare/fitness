@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  CandidateDiffUnavailableError,
   CandidateNotPendingError,
   IdempotencyKeyReuseError,
   InvalidGoalError,
@@ -589,6 +590,12 @@ async function handlePlanningApiResult(
     }
     if (error instanceof CandidateNotPendingError) {
       return errorResponse(error.code, '餐单候选已处理或不再等待确认。');
+    }
+    if (error instanceof CandidateDiffUnavailableError) {
+      return errorResponse(
+        error.code,
+        '历史餐单差异缺少安全摘要，不能覆盖锁定日；请保留当前餐单或重新生成。'
+      );
     }
     if (error instanceof NutritionConstraintsInfeasibleError) {
       return errorResponse(error.code, '当前食材与营养目标无法生成可行的一周餐单。');

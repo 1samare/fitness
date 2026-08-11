@@ -1,5 +1,19 @@
 import { readFile } from 'node:fs/promises';
 import { planningApiResponseSchema, type PlanningApiRequest } from '@fitness/contracts';
+import { createMealPlanEditingService } from '../../../packages/application/src/index';
+import {
+  TEST_DAILY_MENU_CATALOG,
+  TEST_DAILY_MENU_TEMPLATES,
+  TEST_NUTRITION_SNAPSHOTS,
+  TEST_RECIPE_TEMPLATES
+} from '../../../data/nutrition-fixtures/src/index';
+import { InMemoryPlanningRepository } from '../../../packages/persistence/src/index';
+import {
+  ReviewedNutritionCache,
+  StaticDailyMenuCatalogProvider,
+  StaticRecipeTemplateProvider
+} from '../../../packages/providers/src/index';
+import { createPlanningApiHandler } from '../../../cloudfunctions/planning-api/src/handler';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 interface PageOptions {
@@ -11,6 +25,8 @@ interface PageOptions {
   onRemoveInventoryRow(event: IndexedEvent): void;
   onResolveInventoryRow(event: IndexedEvent): Promise<void>;
   onSaveInventoryAndGenerate(): Promise<void>;
+  onResumeInventoryGeneration(): Promise<void>;
+  onClearDamagedInventoryGeneration(): void;
   onLockChange(event: IndexedSwitchEvent): Promise<void>;
   onRecipeChange(event: RecipePickerEvent): Promise<void>;
   onCandidateDecisionChange(event: TextEvent): void;
@@ -48,13 +64,16 @@ interface PageInstance extends PageOptions {
 const calls: PlanningApiRequest[] = [];
 const responses: unknown[] = [];
 const storage = new Map<string, unknown>();
+let apiCallOverride: ((request: PlanningApiRequest) => Promise<unknown>) | undefined;
 let registeredPage: PageOptions | undefined;
 
 vi.mock('../../services/planning-api', () => ({
   planningApiClient: {
     call(request: PlanningApiRequest) {
       calls.push(request);
-      return Promise.resolve(responses.shift()).then((response) => (
+      return Promise.resolve().then(() => (
+        apiCallOverride === undefined ? responses.shift() : apiCallOverride(request)
+      )).then((response) => (
         planningApiResponseSchema.parse(response)
       ));
     }
@@ -197,6 +216,7 @@ beforeEach(async () => {
   calls.length = 0;
   responses.length = 0;
   storage.clear();
+  apiCallOverride = undefined;
   registeredPage = undefined;
   vi.resetModules();
   vi.stubGlobal('Page', (options: PageOptions) => { registeredPage = options; });
@@ -430,6 +450,96 @@ describe('meal execution page controller', () => {
     expect(calls[3].payload.idempotencyKey).not.toBe(lostRequest.payload.idempotencyKey);
   });
 
+  it('discards a deterministic completion conflict and rebuilds it from the refreshed version', async () => {
+    const refreshed = emptyContextResponse();
+    responses.push(
+      { success: false, error: { code: 'version_conflict', message: 'conflict' } },
+      {
+        ...refreshed,
+        data: {
+          ...refreshed.data,
+          latestVersions: { ...refreshed.data.latestVersions, trainingCompletion: 9 }
+        }
+      }
+    );
+    const page = pageInstance();
+    page.setData({
+      businessToday: '2026-08-19',
+      completionDate: '2026-08-19',
+      completedDurationMinutes: '30',
+      latestVersions: { ...emptyContextResponse().data.latestVersions, trainingCompletion: 4 }
+    });
+
+    await page.onRecordCompletion.call(page);
+    const conflicted = calls[0];
+    expect(storage.size).toBe(0);
+    expect((page.data.latestVersions as { trainingCompletion: number }).trainingCompletion).toBe(9);
+
+    responses.push({
+      success: true,
+      data: {
+        kind: 'training_completion_recorded',
+        event: {
+          kind: 'training_completion_event', id: 'completion-after-conflict', version: 10,
+          trainingPlanVersionId: 'training-1', businessDate: '2026-08-19',
+          completedDurationMinutes: 30, occurredAt: '2026-08-19T04:05:00.000Z'
+        },
+        dailyEnergyTargets: [], dailyNutritionTargets: [], recalculationJob: null,
+        candidateMealPlan: null, targetDiffs: [], recalculationStatus: 'not_required'
+      }
+    }, emptyContextResponse());
+    await page.onRecordCompletion.call(page);
+
+    expect(calls[2]).toMatchObject({
+      action: 'recordTrainingCompletion', payload: { expectedVersion: 9 }
+    });
+    if (conflicted?.action !== 'recordTrainingCompletion' || calls[2]?.action !== 'recordTrainingCompletion') {
+      throw new Error('Expected completion requests');
+    }
+    expect(calls[2].payload.idempotencyKey).not.toBe(conflicted.payload.idempotencyKey);
+  });
+
+  it('discards a deterministic lock conflict and rebuilds it from the refreshed version', async () => {
+    const refreshed = emptyContextResponse();
+    responses.push(
+      { success: false, error: { code: 'version_conflict', message: 'conflict' } },
+      {
+        ...refreshed,
+        data: {
+          ...refreshed.data,
+          latestVersions: { ...refreshed.data.latestVersions, mealPlan: 9 }
+        }
+      }
+    );
+    const page = pageInstance();
+    const mealDays = [{ businessDate: '2026-08-18', meals: [] }];
+    page.setData({
+      businessToday: '2026-08-10', mealDays,
+      latestVersions: { ...emptyContextResponse().data.latestVersions, mealPlan: 4 }
+    });
+
+    await page.onLockChange.call(page, {
+      detail: { value: true }, currentTarget: { dataset: { index: 0 } }
+    });
+    const conflicted = calls[0];
+    expect(storage.size).toBe(0);
+
+    responses.push(
+      { success: true, data: { kind: 'meal_plan_updated', version: publicMealPlanVersion() } },
+      emptyContextResponse()
+    );
+    page.setData({ mealDays });
+    await page.onLockChange.call(page, {
+      detail: { value: true }, currentTarget: { dataset: { index: 0 } }
+    });
+
+    expect(calls[2]).toMatchObject({ action: 'setMealPlanDayLock', payload: { expectedVersion: 9 } });
+    if (conflicted?.action !== 'setMealPlanDayLock' || calls[2]?.action !== 'setMealPlanDayLock') {
+      throw new Error('Expected lock requests');
+    }
+    expect(calls[2].payload.idempotencyKey).not.toBe(conflicted.payload.idempotencyKey);
+  });
+
   it('retries the discoverable failed job with the server recalculation-job version', async () => {
     responses.push({
       success: true,
@@ -554,6 +664,226 @@ describe('meal execution page controller', () => {
         }
       }
     });
+  });
+
+  it('resumes an exact generation request after response loss without saving another inventory', async () => {
+    responses.push({
+      success: true,
+      data: {
+        kind: 'inventory_saved',
+        version: {
+          kind: 'inventory_version', id: 'inventory-1', version: 1,
+          createdAt: '2026-08-10T00:00:00.000Z',
+          items: [{ foodId: 'food-rice', nutritionSnapshotId: 'snapshot-rice', availableGrams: 5000 }]
+        }
+      }
+    }, Promise.reject(new Error('generation response lost after commit')));
+    const firstPage = pageInstance();
+    firstPage.setData({
+      businessToday: '2026-08-10', generationWeekStart: '2026-08-17', canSaveInventory: true,
+      inventoryRows: [{
+        key: 'row-rice', resolutionToken: 0, name: '测试米饭', availableGrams: '5000',
+        resolutionStatus: 'resolved', resolutionMessage: '已校验'
+      }],
+      latestVersions: { ...emptyContextResponse().data.latestVersions, inventory: 0, mealPlan: 0 }
+    });
+
+    await firstPage.onSaveInventoryAndGenerate.call(firstPage);
+    const firstGenerate = calls.find((request) => request.action === 'generateWeeklyMealPlan');
+    expect(storage.has('fitness.inventoryGenerationWorkflow.v1')).toBe(true);
+
+    const reenteredPage = pageInstance();
+    responses.push(emptyContextResponse());
+    await reenteredPage.onLoad.call(reenteredPage);
+    reenteredPage.setData({
+      businessToday: '2026-08-10', generationWeekStart: '2026-08-24',
+      inventoryRows: [{
+        key: 'changed-row', resolutionToken: 0, name: '测试鸡胸肉', availableGrams: '3000',
+        resolutionStatus: 'resolved', resolutionMessage: '已校验'
+      }]
+    });
+    await reenteredPage.onSaveInventoryAndGenerate.call(reenteredPage);
+    expect(calls.filter((request) => request.action === 'saveInventory')).toHaveLength(1);
+    expect(calls.filter((request) => request.action === 'generateWeeklyMealPlan')).toHaveLength(1);
+    expect(reenteredPage.data.inventoryGenerationRecoveryMessage).toContain('先恢复');
+
+    responses.push(
+      { success: true, data: { kind: 'weekly_meal_plan_generated', version: publicMealPlanVersion() } },
+      emptyContextResponse()
+    );
+    await reenteredPage.onResumeInventoryGeneration.call(reenteredPage);
+
+    const saveCalls = calls.filter((request) => request.action === 'saveInventory');
+    const generateCalls = calls.filter((request) => request.action === 'generateWeeklyMealPlan');
+    expect(saveCalls).toHaveLength(1);
+    expect(generateCalls).toHaveLength(2);
+    expect(generateCalls[1]).toEqual(firstGenerate);
+    expect(storage.has('fitness.inventoryGenerationWorkflow.v1')).toBe(false);
+  });
+
+  it('replays a committed generation through the real handler without creating a second inventory', async () => {
+    const repository = new InMemoryPlanningRepository();
+    let sequence = 0;
+    const balancedSnapshots = TEST_NUTRITION_SNAPSHOTS.map((snapshot) => ({
+      ...snapshot,
+      nutrientsPer100g: {
+        energyKcal: 160,
+        proteinG: 5,
+        fatG: 4.5,
+        carbohydrateG: 24,
+        fiberG: 2.2,
+        saturatedFatG: 0.4,
+        addedSugarG: 0
+      }
+    }));
+    const handler = createPlanningApiHandler(createMealPlanEditingService({
+      repository,
+      now: () => '2026-08-10T00:00:00.000Z',
+      nextId: (prefix) => `${prefix}-${String(++sequence)}`,
+      providers: {
+        nutrition: new ReviewedNutritionCache({ mode: 'test', snapshots: balancedSnapshots }),
+        recipes: new StaticRecipeTemplateProvider({ mode: 'test', templates: TEST_RECIPE_TEMPLATES }),
+        menus: new StaticDailyMenuCatalogProvider({
+          mode: 'test', catalog: TEST_DAILY_MENU_CATALOG, menus: TEST_DAILY_MENU_TEMPLATES
+        }),
+        allowTestFixtures: true
+      }
+    }));
+    await handler({
+      action: 'completePlanningSetup',
+      payload: {
+        expectedVersions: { bodyProfile: 0, goal: 0, trainingPlan: 0 },
+        idempotencyKey: 'workflow-real-setup-001',
+        bodyProfile: {
+          ageYears: 30, sexCode: 0, heightCm: 175, weightKg: 60,
+          healthScopeConfirmed: true, nonTrainingActivity: 'light',
+          allergens: [], avoidFoods: [], dietPreferences: [], businessTimezone: 'Asia/Shanghai'
+        },
+        goal: { goal: 'fat_loss', effectiveDate: '2026-08-10', targetDate: '2026-10-30' },
+        trainingPlan: {
+          weekStartDate: '2026-08-17', businessTimezone: 'Asia/Shanghai', sessions: []
+        }
+      }
+    }, { userId: 'trusted-workflow-user' });
+
+    let loseFirstGenerationResponse = true;
+    apiCallOverride = async (request) => {
+      const response = await handler(request, { userId: 'trusted-workflow-user' });
+      if (request.action === 'generateWeeklyMealPlan' && loseFirstGenerationResponse) {
+        loseFirstGenerationResponse = false;
+        throw new Error('generation response lost after real commit');
+      }
+      return response;
+    };
+    const rows = TEST_NUTRITION_SNAPSHOTS.map((snapshot, index) => ({
+      key: `real-row-${String(index)}`,
+      resolutionToken: 0,
+      name: snapshot.canonicalNameZh,
+      availableGrams: '50000',
+      resolutionStatus: 'resolved' as const,
+      resolutionMessage: '已校验'
+    }));
+    const firstPage = pageInstance();
+    firstPage.setData({
+      businessToday: '2026-08-10', generationWeekStart: '2026-08-17',
+      canSaveInventory: true, inventoryRows: rows,
+      latestVersions: { ...emptyContextResponse().data.latestVersions, inventory: 0, mealPlan: 0 }
+    });
+
+    await firstPage.onSaveInventoryAndGenerate.call(firstPage);
+    const firstState = await repository.read('trusted-workflow-user');
+    expect(firstState.inventories).toHaveLength(1);
+    expect(firstState.mealPlans).toHaveLength(1);
+    expect(storage.get('fitness.inventoryGenerationWorkflow.v1')).toMatchObject({
+      stage: 'generation_pending'
+    });
+
+    const reenteredPage = pageInstance();
+    await reenteredPage.onLoad.call(reenteredPage);
+    await reenteredPage.onResumeInventoryGeneration.call(reenteredPage);
+
+    const finalState = await repository.read('trusted-workflow-user');
+    const activeInventory = finalState.inventories.find((version) => (
+      version.id === finalState.activeInventoryVersionId
+    ));
+    const activeMeal = finalState.mealPlans.find((version) => (
+      version.id === finalState.activeMealPlanVersionId
+    ));
+    expect(finalState.inventories).toHaveLength(1);
+    expect(finalState.mealPlans).toHaveLength(1);
+    expect(activeMeal?.inventoryVersionId).toBe(activeInventory?.id);
+    const generationCalls = calls.filter((request) => request.action === 'generateWeeklyMealPlan');
+    expect(generationCalls).toHaveLength(2);
+    expect(generationCalls[1]).toEqual(generationCalls[0]);
+    expect(storage.has('fitness.inventoryGenerationWorkflow.v1')).toBe(false);
+    expect(storage.has('fitness.pendingMealCommand.v1.saveInventory')).toBe(false);
+    expect(storage.has('fitness.pendingMealCommand.v1.generateWeeklyMealPlan')).toBe(false);
+  });
+
+  it('replays the exact inventory request before generation when the inventory response was lost', async () => {
+    responses.push(Promise.reject(new Error('inventory response lost after commit')));
+    const firstPage = pageInstance();
+    firstPage.setData({
+      businessToday: '2026-08-10', generationWeekStart: '2026-08-17', canSaveInventory: true,
+      inventoryRows: [{
+        key: 'row-rice', resolutionToken: 0, name: '测试米饭', availableGrams: '5000',
+        resolutionStatus: 'resolved', resolutionMessage: '已校验'
+      }],
+      latestVersions: { ...emptyContextResponse().data.latestVersions, inventory: 0, mealPlan: 0 }
+    });
+
+    await firstPage.onSaveInventoryAndGenerate.call(firstPage);
+    const firstSave = calls.find((request) => request.action === 'saveInventory');
+    expect(storage.get('fitness.inventoryGenerationWorkflow.v1')).toMatchObject({
+      stage: 'inventory_pending', inventoryVersionId: null
+    });
+
+    responses.push(
+      emptyContextResponse(),
+      {
+        success: true,
+        data: {
+          kind: 'inventory_saved',
+          version: {
+            kind: 'inventory_version', id: 'inventory-1', version: 1,
+            createdAt: '2026-08-10T00:00:00.000Z',
+            items: [{ foodId: 'food-rice', nutritionSnapshotId: 'snapshot-rice', availableGrams: 5000 }]
+          }
+        }
+      },
+      { success: true, data: { kind: 'weekly_meal_plan_generated', version: publicMealPlanVersion() } },
+      emptyContextResponse()
+    );
+    const reenteredPage = pageInstance();
+    await reenteredPage.onLoad.call(reenteredPage);
+    await reenteredPage.onResumeInventoryGeneration.call(reenteredPage);
+
+    const saveCalls = calls.filter((request) => request.action === 'saveInventory');
+    expect(saveCalls).toHaveLength(2);
+    expect(saveCalls[1]).toEqual(firstSave);
+    expect(calls.filter((request) => request.action === 'generateWeeklyMealPlan')).toHaveLength(1);
+    expect(storage.has('fitness.inventoryGenerationWorkflow.v1')).toBe(false);
+  });
+
+  it('fails closed on damaged workflow storage and clears it only through explicit recovery', async () => {
+    storage.set('fitness.inventoryGenerationWorkflow.v1', {
+      stage: 'generation_pending', inventoryRequest: { action: 'saveInventory' }
+    });
+    responses.push(emptyContextResponse());
+    const page = pageInstance();
+
+    await page.onLoad.call(page);
+
+    expect(page.data.inventoryGenerationRecoveryDamaged).toBe(true);
+    expect(page.data.inventoryGenerationRecoveryMessage).toContain('恢复记录已损坏');
+    await page.onResumeInventoryGeneration.call(page);
+    expect(calls).toEqual([{ action: 'getCurrentContext' }]);
+    expect(storage.has('fitness.inventoryGenerationWorkflow.v1')).toBe(true);
+
+    page.onClearDamagedInventoryGeneration.call(page);
+    expect(storage.has('fitness.inventoryGenerationWorkflow.v1')).toBe(false);
+    expect(page.data.inventoryGenerationRecoveryVisible).toBe(false);
+    expect(page.data.generationMessage).toContain('已清除');
   });
 
   it('merges concurrent row resolutions by stable key when responses finish in reverse order', async () => {
@@ -788,6 +1118,10 @@ describe('meal execution page controller', () => {
     page.setData({
       pendingCandidateId: 'candidate-from-context',
       selectedDecision: 'keep_existing',
+      decisionOptions: [
+        { value: 'keep_existing', label: '保留当前锁定餐单' },
+        { value: 'overwrite_locked', label: '确认并覆盖锁定日' }
+      ],
       latestVersions: {
         bodyProfile: 1,
         goal: 1,
@@ -838,5 +1172,9 @@ describe('meal execution page controller', () => {
     expect(markup).toContain('刷新备选菜品');
     expect(markup).toContain('wx:if="{{needsRecalculationStatusRefresh}}"');
     expect(markup).toContain('刷新重算状态');
+    expect(markup).toContain('bindtap="onResumeInventoryGeneration"');
+    expect(markup).toContain('bindtap="onClearDamagedInventoryGeneration"');
+    expect(markup).toContain('wx:if="{{inventoryGenerationRecoveryVisible}}"');
+    expect(markup).toContain('disabled="{{savingInventory || generatingMeal || inventoryGenerationRecoveryDamaged}}"');
   });
 });

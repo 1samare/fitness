@@ -31,7 +31,7 @@ import {
   InvalidTrainingPlanError,
   PlanningPrerequisiteError,
   VersionConflictError,
-  recalculationJobCanRetryForCurrentContext,
+  recalculationJobHasCurrentProcessPrerequisites,
   type SavedTrainingPlan
 } from './versioned-planning';
 
@@ -43,6 +43,15 @@ export class CandidateNotPendingError extends Error {
   public constructor(public readonly candidateMealPlanVersionId: string) {
     super(`Meal plan candidate is not pending: ${candidateMealPlanVersionId}`);
     this.name = 'CandidateNotPendingError';
+  }
+}
+
+export class CandidateDiffUnavailableError extends Error {
+  public readonly code = 'candidate_diff_unavailable' as const;
+
+  public constructor(public readonly candidateMealPlanVersionId: string) {
+    super(`Meal plan candidate diff is unavailable: ${candidateMealPlanVersionId}`);
+    this.name = 'CandidateDiffUnavailableError';
   }
 }
 
@@ -246,7 +255,7 @@ function prerequisitesForJob(
 ): RecalculationPrerequisites {
   const trainingPlan = findById(state.trainingPlans, state.activeTrainingPlanVersionId);
   if (trainingPlan === null) throw new PlanningPrerequisiteError('training_plan');
-  if (!recalculationJobCanRetryForCurrentContext(state, job)) {
+  if (!recalculationJobHasCurrentProcessPrerequisites(state, job)) {
     throw new VersionConflictError(state.trainingPlans.length, state.trainingPlans.length);
   }
   const prerequisites = generationPrerequisites(state, trainingPlan.payload.weekStartDate);
@@ -951,6 +960,19 @@ export function createMealPlanRecalculationService(
           };
         });
       }
+
+      const candidateDiffs = initialState.mealPlanTargetDiffs.filter(
+        (diff) => diff.candidateMealPlanVersionId === candidate.id
+      );
+      if (
+        candidateDiffs.length === 0
+        || candidateDiffs.some((diff) => (
+          diff.previousTarget === undefined
+          || diff.proposedTarget === undefined
+          || diff.previousMeals === undefined
+          || diff.proposedMeals === undefined
+        ))
+      ) throw new CandidateDiffUnavailableError(candidate.id);
 
       let providerSnapshot: Awaited<ReturnType<typeof loadProviderSnapshot>>;
       try {

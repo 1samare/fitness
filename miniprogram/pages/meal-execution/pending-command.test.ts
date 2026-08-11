@@ -1,5 +1,8 @@
 import { describe, expect, test, vi } from 'vitest';
-import { planningApiRequestSchema } from '@fitness/contracts';
+import {
+  planningApiRequestSchema,
+  planningApiResponseSchema
+} from '@fitness/contracts';
 import {
   buildCandidateDecisionRequest,
   buildCompletionRequest,
@@ -11,6 +14,7 @@ import {
 } from './form';
 import {
   parsePendingMealCommand,
+  pendingCommandDisposition,
   selectPendingMealCommand,
   type MealWriteRequest
 } from './pending-command';
@@ -69,6 +73,37 @@ const requests = [
 ] as const;
 
 describe('pending meal commands', () => {
+  test.each([
+    ['version_conflict', 'discard'],
+    ['idempotency_key_reused', 'discard'],
+    ['candidate_not_pending', 'discard'],
+    ['candidate_diff_unavailable', 'discard'],
+    ['provider_unavailable', 'retain'],
+    ['nutrition_constraints_infeasible', 'retain'],
+    ['internal_error', 'retain']
+  ] as const)('classifies %s failures as %s', (code, expected) => {
+    const response = planningApiResponseSchema.parse({
+      success: false,
+      error: { code, message: code }
+    });
+
+    expect(pendingCommandDisposition(response, 'meal_plan_updated')).toBe(expected);
+  });
+
+  test('classifies only the expected successful response as confirmed', () => {
+    const response = planningApiResponseSchema.parse({
+      success: true,
+      data: { kind: 'inventory_saved', version: {
+        kind: 'inventory_version', id: 'inventory-1', version: 1,
+        createdAt: '2026-08-10T00:00:00.000Z',
+        items: [{ foodId: 'food-1', availableGrams: 100, nutritionSnapshotId: 'snapshot-1' }]
+      } }
+    });
+
+    expect(pendingCommandDisposition(response, 'inventory_saved')).toBe('confirmed');
+    expect(pendingCommandDisposition(response, 'meal_plan_updated')).toBe('retain');
+  });
+
   test.each(requests.map((request) => [request.action, request] as const))(
     'reuses the exact stored %s request when only the newly observed version changes',
     (_action, request) => {

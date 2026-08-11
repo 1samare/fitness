@@ -669,6 +669,72 @@ describe('training-change recalculation lifecycle', () => {
     expect(locked.days.find((day) => day.businessDate === '2026-08-20')?.locked).toBe(true);
   });
 
+  test('rejects overwrite for legacy diffs without changing state while keep_existing remains available', async () => {
+    const harness = createHarness();
+    await prepareGeneratedPlan(harness);
+    await harness.service.setMealPlanDayLock('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'meal-lock-legacy-diff',
+      payload: { businessDate: '2026-08-20', locked: true }
+    });
+    const saved = await harness.service.saveTrainingPlan('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'training-save-legacy-diff',
+      payload: {
+        weekStartDate: WEEK_START,
+        businessTimezone: 'Asia/Shanghai',
+        sessions: [{
+          businessDate: '2026-08-20',
+          sessionCode: '02054',
+          durationMinutes: 60
+        }]
+      }
+    });
+    if (saved.candidateMealPlan === null) throw new Error('Expected pending candidate');
+    await harness.repository.transact('user-a', (state) => ({
+      nextState: {
+        ...state,
+        mealPlanTargetDiffs: state.mealPlanTargetDiffs.map((diff) => ({
+          id: diff.id,
+          userId: diff.userId,
+          candidateMealPlanVersionId: diff.candidateMealPlanVersionId,
+          businessDate: diff.businessDate,
+          previousNutritionTargetVersionId: diff.previousNutritionTargetVersionId,
+          proposedNutritionTargetVersionId: diff.proposedNutritionTargetVersionId,
+          reason: diff.reason
+        }))
+      },
+      result: undefined
+    }));
+    const beforeOverwrite = await harness.repository.read('user-a');
+
+    await expect(harness.service.decideMealPlanCandidate('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'legacy-diff-overwrite-001',
+      payload: {
+        candidateMealPlanVersionId: saved.candidateMealPlan.id,
+        decision: 'overwrite_locked'
+      }
+    })).rejects.toMatchObject({ code: 'candidate_diff_unavailable' });
+
+    expect(await harness.repository.read('user-a')).toEqual(beforeOverwrite);
+    const kept = await harness.service.decideMealPlanCandidate('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'legacy-diff-keep-001',
+      payload: {
+        candidateMealPlanVersionId: saved.candidateMealPlan.id,
+        decision: 'keep_existing'
+      }
+    });
+    const afterKeep = await harness.repository.read('user-a');
+    expect(kept.decision.decision).toBe('keep_existing');
+    expect(kept.recalculationJob.status).toBe('completed');
+    expect(afterKeep.activeMealPlanVersionId).toBe(beforeOverwrite.activeMealPlanVersionId);
+    expect(afterKeep.idempotencyRecords.some((record) => (
+      record.key === 'legacy-diff-overwrite-001'
+    ))).toBe(false);
+  });
+
   test('retry rejects a failed overwrite candidate while the decision remains retryable', async () => {
     const baseProviders = fixtureProviders();
     const harness = createHarness({ providers: baseProviders });
@@ -721,6 +787,9 @@ describe('training-change recalculation lifecycle', () => {
       candidateMealPlanVersionId: saved.candidateMealPlan.id,
       activatedMealPlanVersionId: null
     });
+    const failedContext = await harness.service.getCurrentContext('user-a');
+    expect(failedContext.pendingMealPlanCandidate?.id).toBe(saved.candidateMealPlan.id);
+    expect(failedContext.retryableRecalculationJob).toBeNull();
 
     let providerCalls = 0;
     harness.setProviders({
