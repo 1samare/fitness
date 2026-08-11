@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import type {
   CloudBaseDatabase,
   CloudBaseDocumentReference,
@@ -156,6 +156,8 @@ describe('runtime planning handler', () => {
     expect(localResolution.success).toBe(true);
     if (localResolution.success && localResolution.data.kind === 'food_name_resolved') {
       expect(localResolution.data.resolution?.foodId).toBe('fixture-rice');
+      expect(localResolution.data.resolution?.nutritionSnapshotId)
+        .toBe('snapshot-fixture-balanced-meal-rice-v1');
     }
 
     const cloud = createRuntimePlanningHandler({
@@ -173,6 +175,31 @@ describe('runtime planning handler', () => {
         message: '营养数据暂时不可用。'
       }
     });
+  });
+
+  test('constructs and calls cloud providers without loading either fixture graph', async () => {
+    vi.resetModules();
+    vi.doMock('@fitness/nutrition-fixtures', () => {
+      throw new Error('cloud mode attempted to load test fixtures');
+    });
+    try {
+      const runtime = await import('./runtime-handler');
+      const cloudProviders = runtime.createRuntimeMealPlanningProviders('cloud');
+      expect(cloudProviders.allowTestFixtures).toBe(false);
+      await expect(cloudProviders.nutrition.resolveCanonicalName('fixture'))
+        .rejects.toThrow('production nutrition provider unavailable');
+      await expect(cloudProviders.nutrition.getSnapshot('snapshot-fixture-rice-v1'))
+        .rejects.toThrow('production nutrition provider unavailable');
+      await expect(cloudProviders.recipes.getByVersionId('recipe-version-fixture-day-1-breakfast-v1'))
+        .rejects.toThrow('production recipe provider unavailable');
+      await expect(cloudProviders.menus.getActiveCatalog())
+        .rejects.toThrow('production menu provider unavailable');
+      await expect(cloudProviders.menus.getMenuByVersionId('daily-menu-version-fixture-day-1-v1'))
+        .rejects.toThrow('production menu provider unavailable');
+    } finally {
+      vi.doUnmock('@fitness/nutrition-fixtures');
+      vi.resetModules();
+    }
   });
 
   test.each([2, 3] as const)(

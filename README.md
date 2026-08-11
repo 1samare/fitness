@@ -43,7 +43,7 @@ pnpm.cmd dev:api
 
 从小程序规划建档页的“一周餐单与执行”入口可进入 `pages/meal-execution/index`。该页支持按天锁定、从服务端备选列表结构化换菜和录入实际训练分钟。手动换菜成功后自动锁定当天。训练变更或当天完成度变化时，未受保护日可在完整生成成功后原子激活新版本；锁定或手改日只生成 stale 提示、待确认候选和结构化差异，由用户选择保留或覆盖，后台不静默覆盖。完成度事实先独立保存；Provider 失败时旧活动餐单继续可用，重算任务可显式重试，幂等重放不增长版本计数。
 
-planning API 已提供 `resolveFoodName`、`saveInventory`、`generateWeeklyMealPlan`、`setMealPlanDayLock`、`updateMealPlanDay`、`recordTrainingCompletion`、`decideMealPlanCandidate`、`retryPendingRecalculation` 和扩展后的 `getCurrentContext`。本地运行只使用显式标记的合成 `test_fixture` 餐单/营养数据；生产模式拒绝 fixture，且当前没有可用的生产餐单 Provider。阶段四并未完成生产审核餐单数据及授权、阶段四能力的 CloudBase 部署、微信 IDE/真机渲染与交互验收、食材图像识别，或 LLM 有限对话；生产上线前仍须复核正式 `CN-DRI-2023` 表格。因此当前不宣称 production ready。
+planning API 已提供 `resolveFoodName`、`saveInventory`、`generateWeeklyMealPlan`、`setMealPlanDayLock`、`updateMealPlanDay`、`recordTrainingCompletion`、`decideMealPlanCandidate`、`retryPendingRecalculation` 和扩展后的 `getCurrentContext`。本地运行只使用显式标记的合成 `test_fixture` 餐单/营养数据；其中可执行的均衡餐单 fixture 从营养快照、食谱、每日菜单到目录均使用独立且闭合的稳定 ID、版本和来源链，不会改写原始营养 fixture 的身份或数值。生产模式不会加载 fixture，且当前没有可用的生产餐单 Provider。阶段四并未完成生产审核餐单数据及授权、阶段四能力的 CloudBase 部署、微信 IDE/真机渲染与交互验收、食材图像识别，或 LLM 有限对话；生产上线前仍须复核正式 `CN-DRI-2023` 表格。因此当前不宣称 production ready。
 
 ## 项目简介
 

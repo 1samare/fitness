@@ -71,12 +71,12 @@ function loadLocalProviders(): Promise<MealPlanningProviders> {
     }),
     recipes: new StaticRecipeTemplateProvider({
       mode: 'test',
-      templates: fixtures.TEST_RECIPE_TEMPLATES
+      templates: fixtures.TEST_MEAL_PLANNING_RECIPE_TEMPLATES
     }),
     menus: new StaticDailyMenuCatalogProvider({
       mode: 'test',
-      catalog: fixtures.TEST_DAILY_MENU_CATALOG,
-      menus: fixtures.TEST_DAILY_MENU_TEMPLATES
+      catalog: fixtures.TEST_MEAL_PLANNING_DAILY_MENU_CATALOG,
+      menus: fixtures.TEST_MEAL_PLANNING_DAILY_MENU_TEMPLATES
     }),
     allowTestFixtures: true
   }));

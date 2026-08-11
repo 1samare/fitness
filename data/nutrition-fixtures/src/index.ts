@@ -96,20 +96,6 @@ export const TEST_NUTRITION_SNAPSHOTS = Object.freeze(TEST_FOOD_KEYS.map((key): 
   };
 }) satisfies readonly NutritionDataSnapshot[]);
 
-/**
- * Deliberately synthetic, nutritionally balanced snapshots for exercising the
- * deterministic whole-week solver in local/test runtime mode. These records
- * remain `test_fixture` data and must never be admitted by production mode.
- */
-export const TEST_MEAL_PLANNING_NUTRITION_SNAPSHOTS = Object.freeze(
-  TEST_NUTRITION_SNAPSHOTS.map((snapshot): NutritionDataSnapshot => ({
-    ...snapshot,
-    sourceRecordId: `${snapshot.sourceRecordId}-balanced-meal-planning`,
-    datasetVersion: 'fixture-balanced-meal-planning-2026-08-10',
-    nutrientsPer100g: nutrients(160, 6.7, 4.5, 24, 2.2, 0.4)
-  }))
-);
-
 const TEST_MENU_FOOD_KEY_SETS = [
   ['rice', 'oats', 'sweet-potato', 'corn', 'broccoli', 'spinach', 'apple', 'banana', 'chicken', 'beef', 'tofu', 'milk'],
   ['rice', 'corn', 'carrot', 'tomato', 'orange', 'blueberry', 'egg', 'fish', 'soybean', 'peanut', 'yogurt', 'canola-oil'],
@@ -165,4 +151,88 @@ export const TEST_DAILY_MENU_CATALOG: DailyMenuCatalogVersion = Object.freeze({
   reviewedAt: FIXTURE_METADATA.reviewedAt,
   qualityStatus: FIXTURE_METADATA.qualityStatus,
   dailyMenuTemplateVersionIds: TEST_DAILY_MENU_TEMPLATES.map((menu) => menu.id)
+});
+
+const BALANCED_MEAL_FIXTURE_METADATA = {
+  sourceId: 'FITNESS-TEST-FIXTURE-BALANCED-MEAL-V1',
+  provider: 'fitness-test-fixture-balanced-meal',
+  originalUnit: 'per_100_g_edible_portion',
+  datasetVersion: 'fixture-balanced-meal-planning-2026-08-10',
+  snapshotVersion: 1,
+  reviewedAt: '2026-08-10T00:00:00.000Z',
+  qualityStatus: 'test_fixture'
+} as const;
+
+function balancedMealSnapshotId(foodKey: TestFoodKey): string {
+  return `snapshot-fixture-balanced-meal-${foodKey}-v1`;
+}
+
+function balancedMealRecipeVersionId(dayIndex: number, mealIndex: number): string {
+  return `recipe-version-fixture-balanced-meal-day-${String(dayIndex + 1)}-${MEAL_SLOTS[mealIndex] ?? 'unknown'}-v1`;
+}
+
+/**
+ * Deliberately synthetic, nutritionally balanced fixture graph for exercising
+ * the deterministic whole-week solver in local/test runtime mode. Every node
+ * has an identity independent from the raw fixture graph so persisted source
+ * references remain immutable and reproducible.
+ */
+export const TEST_MEAL_PLANNING_NUTRITION_SNAPSHOTS = Object.freeze(
+  TEST_FOOD_KEYS.map((foodKey): NutritionDataSnapshot => {
+    const food = TEST_FOOD_DATA[foodKey];
+    return {
+      id: balancedMealSnapshotId(foodKey),
+      foodId: `fixture-${foodKey}`,
+      canonicalNameZh: food.canonicalNameZh,
+      foodGroupId: food.foodGroupId,
+      sourceRecordId: `fixture-balanced-meal-${foodKey}-001`,
+      foodState: food.foodState,
+      allergens: food.allergens,
+      nutrientsPer100g: nutrients(160, 6.7, 4.5, 24, 2.2, 0.4),
+      ...BALANCED_MEAL_FIXTURE_METADATA
+    };
+  }) satisfies readonly NutritionDataSnapshot[]
+);
+
+export const TEST_MEAL_PLANNING_RECIPE_TEMPLATES = Object.freeze(
+  TEST_MENU_FOOD_KEY_SETS.flatMap((foodKeys, dayIndex) => (
+    MEAL_SLOTS.map((slot, mealIndex): RecipeTemplateVersion => ({
+      id: balancedMealRecipeVersionId(dayIndex, mealIndex),
+      templateId: `recipe-fixture-balanced-meal-day-${String(dayIndex + 1)}-${slot}`,
+      version: 1,
+      dishNameZh: `测试均衡第${String(dayIndex + 1)}日${slot}`,
+      sourceId: BALANCED_MEAL_FIXTURE_METADATA.sourceId,
+      datasetVersion: BALANCED_MEAL_FIXTURE_METADATA.datasetVersion,
+      reviewedAt: BALANCED_MEAL_FIXTURE_METADATA.reviewedAt,
+      qualityStatus: BALANCED_MEAL_FIXTURE_METADATA.qualityStatus,
+      ingredients: foodKeys.slice(mealIndex * 3, mealIndex * 3 + 3).map((foodKey) => ({
+        foodId: `fixture-${foodKey}`,
+        nutritionSnapshotId: balancedMealSnapshotId(foodKey),
+        grams: 100
+      }))
+    }))
+  )) satisfies readonly RecipeTemplateVersion[]
+);
+
+export const TEST_MEAL_PLANNING_DAILY_MENU_TEMPLATES = Object.freeze(
+  TEST_MENU_FOOD_KEY_SETS.map((_, dayIndex): DailyMenuTemplateVersion => ({
+    id: `daily-menu-version-fixture-balanced-meal-day-${String(dayIndex + 1)}-v1`,
+    datasetVersion: BALANCED_MEAL_FIXTURE_METADATA.datasetVersion,
+    sourceId: BALANCED_MEAL_FIXTURE_METADATA.sourceId,
+    reviewedAt: BALANCED_MEAL_FIXTURE_METADATA.reviewedAt,
+    qualityStatus: BALANCED_MEAL_FIXTURE_METADATA.qualityStatus,
+    meals: MEAL_SLOTS.map((slot, mealIndex) => ({
+      slot,
+      recipeTemplateVersionId: balancedMealRecipeVersionId(dayIndex, mealIndex)
+    }))
+  })) satisfies readonly DailyMenuTemplateVersion[]
+);
+
+export const TEST_MEAL_PLANNING_DAILY_MENU_CATALOG: DailyMenuCatalogVersion = Object.freeze({
+  id: 'daily-menu-catalog-fixture-balanced-meal-week-v1',
+  datasetVersion: BALANCED_MEAL_FIXTURE_METADATA.datasetVersion,
+  sourceId: BALANCED_MEAL_FIXTURE_METADATA.sourceId,
+  reviewedAt: BALANCED_MEAL_FIXTURE_METADATA.reviewedAt,
+  qualityStatus: BALANCED_MEAL_FIXTURE_METADATA.qualityStatus,
+  dailyMenuTemplateVersionIds: TEST_MEAL_PLANNING_DAILY_MENU_TEMPLATES.map((menu) => menu.id)
 });

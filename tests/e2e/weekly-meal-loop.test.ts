@@ -11,11 +11,10 @@ import type {
   PlanningAggregateState
 } from '../../packages/domain/src/index';
 import {
-  TEST_DAILY_MENU_CATALOG,
-  TEST_DAILY_MENU_TEMPLATES,
+  TEST_MEAL_PLANNING_DAILY_MENU_CATALOG,
+  TEST_MEAL_PLANNING_DAILY_MENU_TEMPLATES,
   TEST_MEAL_PLANNING_NUTRITION_SNAPSHOTS,
-  TEST_NUTRITION_SNAPSHOTS,
-  TEST_RECIPE_TEMPLATES
+  TEST_MEAL_PLANNING_RECIPE_TEMPLATES
 } from '../../data/nutrition-fixtures/src/index';
 import { InMemoryPlanningRepository } from '../../packages/persistence/src/index';
 import {
@@ -35,7 +34,7 @@ const MOVED_FROM = '2026-08-21';
 const MOVED_TO = '2026-08-22';
 const INITIAL_NOW = '2026-08-10T00:00:00.000Z';
 const TODAY_NOW = '2026-08-19T04:00:00.000Z';
-const REPLACEMENT_RECIPE_ID = 'recipe-version-fixture-day-2-dinner-v1';
+const REPLACEMENT_RECIPE_ID = 'recipe-version-fixture-balanced-meal-day-2-dinner-v1';
 const NUTRIENT_KEYS = [
   'energyKcal',
   'proteinG',
@@ -48,6 +47,9 @@ const NUTRIENT_KEYS = [
 
 const BALANCED_SNAPSHOTS: readonly NutritionDataSnapshot[] =
   TEST_MEAL_PLANNING_NUTRITION_SNAPSHOTS;
+const BALANCED_SNAPSHOTS_BY_ID = new Map(
+  BALANCED_SNAPSHOTS.map((snapshot) => [snapshot.id, snapshot])
+);
 
 type SuccessData = Extract<PlanningApiResponse, { readonly success: true }>['data'];
 
@@ -78,12 +80,12 @@ function fixtureProviders(): MealPlanRecalculationServiceDependencies['providers
     nutrition: new ReviewedNutritionCache({ mode: 'test', snapshots: BALANCED_SNAPSHOTS }),
     recipes: new StaticRecipeTemplateProvider({
       mode: 'test',
-      templates: TEST_RECIPE_TEMPLATES
+      templates: TEST_MEAL_PLANNING_RECIPE_TEMPLATES
     }),
     menus: new StaticDailyMenuCatalogProvider({
       mode: 'test',
-      catalog: TEST_DAILY_MENU_CATALOG,
-      menus: TEST_DAILY_MENU_TEMPLATES
+      catalog: TEST_MEAL_PLANNING_DAILY_MENU_CATALOG,
+      menus: TEST_MEAL_PLANNING_DAILY_MENU_TEMPLATES
     }),
     allowTestFixtures: true
   };
@@ -201,7 +203,7 @@ function inventoryRequest(
       expectedVersion: 0,
       idempotencyKey,
       payload: {
-        items: TEST_NUTRITION_SNAPSHOTS.map((snapshot) => ({
+        items: BALANCED_SNAPSHOTS.map((snapshot) => ({
           name: snapshot.canonicalNameZh,
           availableGrams
         }))
@@ -227,11 +229,12 @@ function roundHalfUpOneDecimal(value: number): number {
 
 function independentlyRecomputedTotals(
   day: MealPlanVersion['days'][number],
-  snapshots: readonly NutritionDataSnapshot[]
+  snapshotIdByFoodId: ReadonlyMap<string, string>
 ): NutrientValues {
   expect(day.ingredientAmounts.length).toBeGreaterThan(0);
-  expect(snapshots).toHaveLength(28);
-  const byFoodId = new Map(snapshots.map((snapshot) => [snapshot.foodId, snapshot]));
+  expect(snapshotIdByFoodId.size).toBe(28);
+  expect(BALANCED_SNAPSHOTS_BY_ID.size).toBe(28);
+  expect(day.nutritionSourceSnapshotIds.length).toBeGreaterThan(0);
   const raw: Record<(typeof NUTRIENT_KEYS)[number], number> = {
     energyKcal: 0,
     proteinG: 0,
@@ -242,10 +245,19 @@ function independentlyRecomputedTotals(
     addedSugarG: 0
   };
   for (const ingredient of day.ingredientAmounts) {
-    const snapshot = byFoodId.get(ingredient.foodId);
-    if (snapshot === undefined) {
-      throw new Error(`Missing independent snapshot for ${ingredient.foodId}`);
+    const snapshotId = snapshotIdByFoodId.get(ingredient.foodId);
+    if (snapshotId === undefined) {
+      throw new Error(`Missing persisted inventory snapshot id for ${ingredient.foodId}`);
     }
+    expect(day.nutritionSourceSnapshotIds).toContain(snapshotId);
+    const snapshot = BALANCED_SNAPSHOTS_BY_ID.get(snapshotId);
+    if (snapshot === undefined) {
+      throw new Error(`Missing unique balanced snapshot for returned id ${snapshotId}`);
+    }
+    expect(snapshot.foodId).toBe(ingredient.foodId);
+    expect(snapshot.sourceId).toBe('FITNESS-TEST-FIXTURE-BALANCED-MEAL-V1');
+    expect(snapshot.datasetVersion).toBe('fixture-balanced-meal-planning-2026-08-10');
+    expect(snapshot.sourceRecordId).toBeTruthy();
     for (const key of NUTRIENT_KEYS) {
       raw[key] += roundHalfUpOneDecimal(
         snapshot.nutrientsPer100g[key] * ingredient.grams / 100
@@ -285,13 +297,21 @@ async function currentContext(harness: Harness) {
   return requireData(await call(harness, { action: 'getCurrentContext' }), 'current_context');
 }
 
-async function saveFullInventory(harness: Harness, key: string, grams = 50_000): Promise<void> {
+async function saveFullInventory(harness: Harness, key: string, grams = 50_000) {
   const saved = requireData(
     await call(harness, inventoryRequest(key, grams)),
     'inventory_saved'
   );
   expect(saved.version.items).toHaveLength(28);
   expect(new Set(saved.version.items.map((item) => item.foodId)).size).toBe(28);
+  expect(new Set(saved.version.items.map((item) => item.nutritionSnapshotId)).size).toBe(28);
+  for (const item of saved.version.items) {
+    expect(BALANCED_SNAPSHOTS_BY_ID.get(item.nutritionSnapshotId)).toMatchObject({
+      foodId: item.foodId,
+      qualityStatus: 'test_fixture'
+    });
+  }
+  return saved.version;
 }
 
 async function runCompleteFlow(): Promise<FlowSignature> {
@@ -321,9 +341,9 @@ async function runCompleteFlow(): Promise<FlowSignature> {
   expect(setup.dailyNutritionTargets).toHaveLength(7);
 
   // 2. Ordinary Chinese fixture names resolve through the public provider boundary.
-  expect(TEST_NUTRITION_SNAPSHOTS).toHaveLength(28);
+  expect(BALANCED_SNAPSHOTS).toHaveLength(28);
   const resolvedFoodIds: string[] = [];
-  for (const snapshot of TEST_NUTRITION_SNAPSHOTS) {
+  for (const snapshot of BALANCED_SNAPSHOTS) {
     const resolved = requireData(
       await call(harness, {
         action: 'resolveFoodName',
@@ -340,7 +360,10 @@ async function runCompleteFlow(): Promise<FlowSignature> {
   }
   expect(resolvedFoodIds).toHaveLength(28);
   expect(new Set(resolvedFoodIds).size).toBe(28);
-  await saveFullInventory(harness, 'e2e-inventory-001');
+  const inventory = await saveFullInventory(harness, 'e2e-inventory-001');
+  const inventorySnapshotIdByFoodId = new Map(
+    inventory.items.map((item) => [item.foodId, item.nutritionSnapshotId])
+  );
 
   // 3. A complete plan has seven unique dates and every total is independently reproducible.
   const generated = requireData(
@@ -352,7 +375,7 @@ async function runCompleteFlow(): Promise<FlowSignature> {
   for (const day of generated.days) {
     expect(day.ingredientAmounts.length).toBeGreaterThan(0);
     expect(day.nutritionTotals).toEqual(
-      independentlyRecomputedTotals(day, BALANCED_SNAPSHOTS)
+      independentlyRecomputedTotals(day, inventorySnapshotIdByFoodId)
     );
   }
   const historicalState = await harness.repository.read(USER.userId);
@@ -711,7 +734,7 @@ describe('weekly meal loop end-to-end acceptance', () => {
             resolveCanonicalName: (name) => sourceProviders.nutrition.resolveCanonicalName(name),
             async getSnapshot(id) {
               const snapshot = await sourceProviders.nutrition.getSnapshot(id);
-              if (id !== BALANCED_SNAPSHOTS[0]?.id) return snapshot;
+              if (id !== 'snapshot-fixture-balanced-meal-rice-v1') return snapshot;
               return { ...snapshot, sourceId: '' };
             }
           }

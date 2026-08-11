@@ -139,13 +139,13 @@
 ### 代码与验证证据
 
 - 设计与计划：`docs/superpowers/specs/2026-08-10-phase-4-weekly-meal-loop-design.md`、`docs/superpowers/plans/2026-08-10-phase-4-weekly-meal-loop.md`。
-- 任务 1–7 实现及加固提交：`3fe7261`、`0eb1a29`、`963280a`、`ecd5316`、`ba3611c`、`268eff9`、`fbbc0ca`、`797ace0`、`2b979fc`、`8a0c780`、`8338249`、`bea9130`、`b4fff46`、`dbf44df`、`1ee23ef`、`b718cf0`、`4c3e2af`、`da66233`、`25c98c6`、`7d35c1f`、`9668f3f`、`8090b51`、`4caebf0`、`1e7dc3c`；端到端验收、本地可行 fixture、进程烟雾与文档在本阶段完成提交 `test: complete weekly meal loop acceptance`。
+- 任务 1–7 实现及加固提交：`3fe7261`、`0eb1a29`、`963280a`、`ecd5316`、`ba3611c`、`268eff9`、`fbbc0ca`、`797ace0`、`2b979fc`、`8a0c780`、`8338249`、`bea9130`、`b4fff46`、`dbf44df`、`1ee23ef`、`b718cf0`、`4c3e2af`、`da66233`、`25c98c6`、`7d35c1f`、`9668f3f`、`8090b51`、`4caebf0`、`1e7dc3c`；端到端验收、本地可行 fixture、进程烟雾与文档提交为 `ff06b2a`（`test: complete weekly meal loop acceptance`），随后以 `fix: version balanced meal fixtures` 将均衡营养快照、食谱、每日菜单和目录迁移到完全独立且闭合的稳定身份/来源版本图。
 - 验收项 1 由 `packages/application/src/meal-plan-generation.test.ts`、`packages/calculation/src/generate-weekly-meal-plan.test.ts`、`tests/e2e/weekly-meal-loop.test.ts` 以及 schema-v4 库存/餐单版本实现证明；E2E 对七天的每个显示营养汇总都从每 100 克快照和实际克数独立复算。
 - 验收项 2 由 `packages/application/src/meal-plan-editing.test.ts`、`packages/application/src/meal-plan-recalculation.test.ts`、`miniprogram/pages/meal-execution/*.test.ts` 及 E2E 的主动锁定、手改自动锁定、stale/候选/差异、保留/覆盖证明。
 - 验收项 3 由 `packages/application/src/meal-plan-recalculation.test.ts`、`cloudfunctions/planning-api/src/handler.test.ts` 及 E2E 的 `TrainingPlanChanged` 消费、当天完成度事实和精确 event-linked 目标证明。
 - 验收项 4 由重算生命周期、Provider 失败/重试/并发测试和 E2E 证明：旧活动餐单在完整候选成功前保留，未锁定结果或用户明确覆盖后才原子切换。
 - 验收项 5 由 `packages/application/src/meal-plan-recalculation.test.ts` 的移动/取消/时长/完成度/过去事实/守恒/幂等/回滚用例和 E2E 的完整公共 handler 时间线证明。
-- 2026-08-11 文档前 fresh 验收：`pnpm.cmd lint` 退出 0；`pnpm.cmd typecheck` 完成 10/11 个工作区项目及小程序严格检查；`pnpm.cmd test` 通过 43 个测试文件、490 项测试（其中阶段四 E2E 2/2，0 跳过）；`pnpm.cmd build` 生成 planning-api 、CloudBase 部署制品和云模式小程序构建；`pnpm.cmd dry-run:api` 成功加载函数；`pnpm.cmd smoke:api` 通过 1/1 个真实本地函数进程烟雾。
+- 2026-08-11 Round 1 修复后文档前 fresh 验收：`pnpm.cmd lint` 退出 0；`pnpm.cmd typecheck` 完成 10/11 个工作区项目及小程序严格检查；`pnpm.cmd test` 通过 43 个测试文件、492 项测试（其中阶段四 E2E 2/2，0 跳过）；`pnpm.cmd build` 生成 planning-api、CloudBase 部署制品和云模式小程序构建；`pnpm.cmd dry-run:api` 成功加载函数；`pnpm.cmd smoke:api` 通过 1/1 个真实本地函数进程烟雾。独立 E2E 连续两次均为 1 个测试文件、2/2 项通过；fixture 身份图测试 4/4，cloud fixture 隔离测试确认 `allowTestFixtures=false` 且构造/调用不加载 fixture 模块。
 
 ### 剩余工作
 
@@ -244,6 +244,7 @@
 
 | 日期 | 分支/基线 | 更新 |
 |---|---|---|
+| 2026-08-11 | `feat/v1.0` / `fix: version balanced meal fixtures` | 修复阶段四验收 fixture 的身份冲突：均衡营养快照、食谱、菜单和目录使用独立闭合版本图；本地/E2E/smoke 使用该图，cloud 构造和调用不加载 fixture；阶段四完成状态经 43 文件、492 测试及六门禁复验后继续成立 |
 | 2026-08-11 | `feat/v1.0` / `test: complete weekly meal loop acceptance` | 完成阶段四：手动库存、确定性七天餐单、锁定/手改保护、训练变更与完成度联动、公共 handler E2E 和真实本地进程烟雾；下一阶段调整为阶段五 |
 | 2026-08-10 | `feat/v1.0` / `8097695` | 将 `CN-DRI-2023` 正式表格复核及营养数据授权、缓存许可和退出方案集中记录为生产上线前待办；明确不阻塞严格个人本地自用或后续功能开发 |
 | 2026-08-10 | `feat/v1.0` / `d727563` | 完成阶段三：确定性营养目标、约束求解、审核动作/MET 与营养数据边界、离线 Provider、每日营养目标版本链和本地全量验收；下一阶段调整为阶段四 |

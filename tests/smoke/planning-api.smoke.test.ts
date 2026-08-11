@@ -3,7 +3,10 @@ import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { TEST_NUTRITION_SNAPSHOTS } from '../../data/nutrition-fixtures/src/index';
+import {
+  TEST_MEAL_PLANNING_DAILY_MENU_CATALOG,
+  TEST_MEAL_PLANNING_NUTRITION_SNAPSHOTS
+} from '../../data/nutrition-fixtures/src/index';
 import { addBusinessDays } from '../../packages/contracts/src/business-date';
 import { planningApiResponseSchema } from '../../packages/contracts/src/planning-api';
 
@@ -277,14 +280,14 @@ describe('local planning API process', () => {
       expect(context.data.dailyEnergyTargets).toHaveLength(7);
     }
 
-    expect(TEST_NUTRITION_SNAPSHOTS).toHaveLength(28);
+    expect(TEST_MEAL_PLANNING_NUTRITION_SNAPSHOTS).toHaveLength(28);
     const inventory = planningApiResponseSchema.parse(await call({
       action: 'saveInventory',
       payload: {
         expectedVersion: 0,
         idempotencyKey: 'smoke-inventory-001',
         payload: {
-          items: TEST_NUTRITION_SNAPSHOTS.map((snapshot) => ({
+          items: TEST_MEAL_PLANNING_NUTRITION_SNAPSHOTS.map((snapshot) => ({
             name: snapshot.canonicalNameZh,
             availableGrams: 50_000
           }))
@@ -313,6 +316,8 @@ describe('local planning API process', () => {
       data: { kind: 'weekly_meal_plan_generated' }
     });
     if (generated.data.kind === 'weekly_meal_plan_generated') {
+      expect(generated.data.version.catalogVersionId)
+        .toBe(TEST_MEAL_PLANNING_DAILY_MENU_CATALOG.id);
       expect(generated.data.version.days).toHaveLength(7);
       expect(new Set(generated.data.version.days.map((day) => day.businessDate)).size).toBe(7);
     }
