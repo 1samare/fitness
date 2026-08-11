@@ -10,6 +10,7 @@ import type {
   GoalPayload,
   GoalVersion,
   IdempotencyRecord,
+  MealPlanVersion,
   PlanningAggregateState,
   RecalculationJob,
   TrainingPlanChangedEvent,
@@ -605,6 +606,38 @@ export function recalculationJobCanRetryForCurrentContext(
     && recalculationJobHasCurrentProcessPrerequisites(state, job);
 }
 
+export function pendingMealPlanCandidateMatchesCurrentContext(
+  state: PlanningAggregateState,
+  candidate: MealPlanVersion
+): boolean {
+  const matchingJobs = state.recalculationJobs.filter(
+    (job) => job.candidateMealPlanVersionId === candidate.id
+  );
+  const job = matchingJobs[0];
+  const bodyProfile = findById(state.bodyProfiles, state.activeBodyProfileVersionId);
+  const goal = findById(state.goals, state.activeGoalVersionId);
+  const trainingPlan = findById(state.trainingPlans, state.activeTrainingPlanVersionId);
+  const inventory = findById(state.inventories, state.activeInventoryVersionId);
+  if (
+    matchingJobs.length !== 1
+    || job === undefined
+    || job.status === 'completed'
+    || candidate.readiness !== 'pending_confirmation'
+    || candidate.supersedesVersionId !== state.activeMealPlanVersionId
+    || bodyProfile === null
+    || goal === null
+    || trainingPlan === null
+    || inventory === null
+    || candidate.bodyProfileVersionId !== bodyProfile.id
+    || candidate.goalVersionId !== goal.id
+    || candidate.trainingPlanVersionId !== trainingPlan.id
+    || candidate.inventoryVersionId !== inventory.id
+    || candidate.weekStartDate !== trainingPlan.payload.weekStartDate
+    || !recalculationJobMatchesActiveTrainingChain(state, job)
+  ) return false;
+  return true;
+}
+
 function nutritionTargetsForEnergyTargets(
   state: PlanningAggregateState,
   energyTargets: readonly DailyEnergyTargetVersion[]
@@ -864,7 +897,7 @@ export function createVersionedPlanningService(
       );
       const pendingMealPlanCandidate = [...state.mealPlans]
         .filter((candidate) => (
-          candidate.readiness === 'pending_confirmation'
+          pendingMealPlanCandidateMatchesCurrentContext(state, candidate)
           && !decidedCandidateIds.has(candidate.id)
         ))
         .sort((left, right) => right.version - left.version)[0] ?? null;

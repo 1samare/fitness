@@ -5,6 +5,7 @@ import {
   IdempotencyKeyReuseError,
   InvalidGoalError,
   InvalidTrainingPlanError,
+  FutureCompletionForbiddenError,
   PastFactImmutableError,
   PastTrainingChangeError,
   PlanningPrerequisiteError,
@@ -24,7 +25,8 @@ import {
   dailyNutritionTargetVersionSchema,
   planningApiRequestSchema,
   planningApiResponseSchema,
-  type PlanningApiResponse
+  type PlanningApiResponse,
+  type PublicWeeklyMealConflict
 } from '@fitness/contracts';
 import type {
   BodyProfileVersion,
@@ -338,9 +340,48 @@ function currentContextResponse(context: CurrentPlanningContext) {
 
 function errorResponse(
   code: Extract<PlanningApiResponse, { success: false }>['error']['code'],
-  message: string
+  message: string,
+  conflicts?: readonly PublicWeeklyMealConflict[]
 ): PlanningApiResponse {
+  if (code === 'nutrition_constraints_infeasible') {
+    return { success: false, error: { code, message, conflicts: [...(conflicts ?? [])] } };
+  }
   return { success: false, error: { code, message } };
+}
+
+function publicWeeklyMealConflicts(
+  conflicts: NutritionConstraintsInfeasibleError['conflicts']
+): readonly PublicWeeklyMealConflict[] {
+  const sanitized = new Map<string, PublicWeeklyMealConflict>();
+  for (const conflict of conflicts) {
+    const key = `${conflict.businessDate}\u0000${conflict.code}`;
+    if (sanitized.has(key)) continue;
+    let publicConflict: PublicWeeklyMealConflict;
+    if (conflict.code === 'inventory_insufficient') {
+      publicConflict = {
+        code: conflict.code,
+        businessDate: conflict.businessDate,
+        ...(conflict.foodNameZh === undefined ? {} : { foodNameZh: conflict.foodNameZh }),
+        ...(conflict.requiredGrams === undefined ? {} : { requiredGrams: conflict.requiredGrams }),
+        ...(conflict.availableGrams === undefined ? {} : { availableGrams: conflict.availableGrams })
+      };
+    } else if (
+      conflict.code === 'source_chain_incomplete'
+      || conflict.code === 'allergen_detected'
+      || conflict.code === 'avoided_food'
+    ) {
+      publicConflict = {
+        code: conflict.code,
+        businessDate: conflict.businessDate,
+        ...(conflict.foodNameZh === undefined ? {} : { foodNameZh: conflict.foodNameZh })
+      };
+    } else {
+      publicConflict = { code: conflict.code, businessDate: conflict.businessDate };
+    }
+    sanitized.set(key, publicConflict);
+    if (sanitized.size === 49) break;
+  }
+  return [...sanitized.values()];
 }
 
 async function executeAuthenticatedAction(
@@ -576,6 +617,9 @@ async function handlePlanningApiResult(
     if (error instanceof PastFactImmutableError) {
       return errorResponse(error.code, '今天及过去日期的餐单事实不可修改。');
     }
+    if (error instanceof FutureCompletionForbiddenError) {
+      return errorResponse(error.code, '训练完成记录不能填写未来日期。');
+    }
     if (error instanceof TrainingDateOutsideGoalPeriodError) {
       return errorResponse(error.code, '训练日期必须位于当前目标周期内。');
     }
@@ -598,7 +642,11 @@ async function handlePlanningApiResult(
       );
     }
     if (error instanceof NutritionConstraintsInfeasibleError) {
-      return errorResponse(error.code, '当前食材与营养目标无法生成可行的一周餐单。');
+      return errorResponse(
+        error.code,
+        '当前食材与营养目标无法生成可行的一周餐单。',
+        publicWeeklyMealConflicts(error.conflicts)
+      );
     }
     return errorResponse('internal_error', '规划服务暂时不可用。');
   }

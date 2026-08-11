@@ -4,7 +4,10 @@ import {
   nutritionDataSnapshotSchema,
   recipeTemplateVersionSchema
 } from '@fitness/contracts';
-import { generateWeeklyMealPlan as generateDeterministicWeeklyMealPlan } from '@fitness/calculation';
+import {
+  generateWeeklyMealPlan as generateDeterministicWeeklyMealPlan,
+  type WeeklyMealConflict
+} from '@fitness/calculation';
 import type {
   BodyProfileVersion,
   DailyMenuCatalogProvider,
@@ -71,20 +74,73 @@ export class NutritionConstraintsInfeasibleError extends Error {
   public readonly code = 'nutrition_constraints_infeasible' as const;
 
   public constructor(
-    public readonly conflicts: readonly {
-      readonly businessDate: string;
-      readonly code: string;
-    }[]
+    public readonly conflicts: readonly (Omit<WeeklyMealConflict, 'foodId'> & {
+      readonly foodNameZh?: string | undefined;
+    })[]
   ) {
     super(`Weekly meal constraints are infeasible: ${JSON.stringify(conflicts)}`);
     this.name = 'NutritionConstraintsInfeasibleError';
   }
 }
 
+export function withReviewedFoodNames(
+  conflicts: readonly WeeklyMealConflict[],
+  snapshots: readonly NutritionDataSnapshot[]
+): NutritionConstraintsInfeasibleError['conflicts'] {
+  const namesByFoodId = new Map(
+    snapshots.map((snapshot) => [snapshot.foodId, snapshot.canonicalNameZh] as const)
+  );
+  return conflicts.map(({ foodId, ...conflict }) => ({
+    ...conflict,
+    ...(foodId === undefined || namesByFoodId.get(foodId) === undefined
+      ? {}
+      : { foodNameZh: namesByFoodId.get(foodId) })
+  }));
+}
+
 interface ResolvedInventoryItem {
   readonly foodId: string;
   readonly nutritionSnapshotId: string;
   readonly availableGrams: number;
+}
+
+function normalizeInventoryRequestName(value: string): string {
+  return value.trim().replaceAll(/\s+/g, '').toLocaleLowerCase('zh-CN');
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function inventoryRequestFingerprint(
+  envelope: WriteCommandEnvelope<{
+    readonly items: readonly { readonly name: string; readonly availableGrams: number }[];
+  }>
+): string {
+  const gramsByName = new Map<string, number[]>();
+  for (const item of envelope.payload.items) {
+    if (!Number.isFinite(item.availableGrams) || item.availableGrams <= 0) {
+      throw new ProviderUnavailableError('food_name_unresolved');
+    }
+    const name = normalizeInventoryRequestName(item.name);
+    const grams = gramsByName.get(name) ?? [];
+    grams.push(item.availableGrams);
+    gramsByName.set(name, grams);
+  }
+  const items = [...gramsByName.entries()]
+    .sort(([left], [right]) => compareCodeUnits(left, right))
+    .map(([name, grams]) => ({
+      name,
+      availableGrams: [...grams]
+        .sort((left, right) => left - right)
+        .reduce((sum, value) => sum + value, 0)
+    }));
+  return requestFingerprint({
+    expectedVersion: envelope.expectedVersion,
+    payload: { items }
+  });
 }
 
 export interface GenerationPrerequisites {
@@ -104,35 +160,38 @@ export interface ProviderSnapshot {
 }
 
 export function providerSnapshotToken(snapshot: ProviderSnapshot): string {
-  return JSON.stringify({
-    catalog: [
-      snapshot.catalog.id,
-      snapshot.catalog.datasetVersion,
-      snapshot.catalog.sourceId,
-      [...snapshot.catalog.dailyMenuTemplateVersionIds].sort()
-    ],
+  return `provider-graph-v1:${requestFingerprint({
+    catalog: {
+      ...snapshot.catalog,
+      dailyMenuTemplateVersionIds: [...snapshot.catalog.dailyMenuTemplateVersionIds]
+        .sort(compareCodeUnits)
+    },
     menus: [...snapshot.menus]
-      .sort((left, right) => left.id.localeCompare(right.id))
-      .map((menu) => [menu.id, menu.datasetVersion, menu.sourceId]),
+      .sort((left, right) => compareCodeUnits(left.id, right.id))
+      .map((menu) => ({
+        ...menu,
+        meals: [...menu.meals].sort((left, right) => (
+          compareCodeUnits(left.slot, right.slot)
+          || compareCodeUnits(left.recipeTemplateVersionId, right.recipeTemplateVersionId)
+        ))
+      })),
     recipes: [...snapshot.recipes]
-      .sort((left, right) => left.id.localeCompare(right.id))
-      .map((recipe) => [
-        recipe.id,
-        recipe.version,
-        recipe.datasetVersion,
-        recipe.sourceId
-      ]),
+      .sort((left, right) => compareCodeUnits(left.id, right.id))
+      .map((recipe) => ({
+        ...recipe,
+        ingredients: [...recipe.ingredients].sort((left, right) => (
+          compareCodeUnits(left.foodId, right.foodId)
+          || compareCodeUnits(left.nutritionSnapshotId, right.nutritionSnapshotId)
+          || left.grams - right.grams
+        ))
+      })),
     nutritionSnapshots: [...snapshot.snapshots]
-      .sort((left, right) => left.id.localeCompare(right.id))
-      .map((nutrition) => [
-        nutrition.id,
-        nutrition.snapshotVersion,
-        nutrition.datasetVersion,
-        nutrition.sourceId,
-        nutrition.sourceRecordId,
-        nutrition.provider
-      ])
-  });
+      .sort((left, right) => compareCodeUnits(left.id, right.id))
+      .map((nutrition) => ({
+        ...nutrition,
+        allergens: [...nutrition.allergens].sort(compareCodeUnits)
+      }))
+  })}`;
 }
 
 function findById<T extends { readonly id: string }>(values: readonly T[], id: string | null): T | null {
@@ -422,11 +481,16 @@ export function createMealPlanGenerationService(
         readonly items: readonly { readonly name: string; readonly availableGrams: number }[];
       }>
     ): Promise<InventoryVersion> {
+      const expectedFingerprint = inventoryRequestFingerprint(envelope);
+      const initialState = await repository.read(userId);
+      const initialReplay = findRecord(initialState, 'saveInventory', envelope.idempotencyKey);
+      if (initialReplay !== undefined) {
+        assertReplay(initialReplay, expectedFingerprint, envelope.idempotencyKey);
+        const previous = findById(initialState.inventories, initialReplay.resultVersionId);
+        if (previous === null) throw new Error('Stored idempotency result is missing');
+        return previous;
+      }
       const items = await normalizeInventory(providers, envelope.payload.items);
-      const expectedFingerprint = requestFingerprint({
-        expectedVersion: envelope.expectedVersion,
-        payload: { items }
-      });
       return repository.transact(userId, (state) => {
         const replay = findRecord(state, 'saveInventory', envelope.idempotencyKey);
         if (replay !== undefined) {
@@ -503,7 +567,16 @@ export function createMealPlanGenerationService(
         fixedDays: []
       });
       if (generated.kind === 'infeasible') {
-        throw new NutritionConstraintsInfeasibleError(generated.conflicts);
+        throw new NutritionConstraintsInfeasibleError(
+          withReviewedFoodNames(generated.conflicts, providerSnapshot.snapshots)
+        );
+      }
+      const initialProviderSnapshotToken = providerSnapshotToken(providerSnapshot);
+      const commitProviderSnapshotToken = providerSnapshotToken(
+        await loadProviderSnapshot(providers)
+      );
+      if (commitProviderSnapshotToken !== initialProviderSnapshotToken) {
+        throw new VersionConflictError(envelope.expectedVersion, initialState.mealPlans.length);
       }
 
       return repository.transact(userId, (state) => {

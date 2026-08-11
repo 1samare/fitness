@@ -84,7 +84,13 @@ describe('pending meal commands', () => {
   ] as const)('classifies %s failures as %s', (code, expected) => {
     const response = planningApiResponseSchema.parse({
       success: false,
-      error: { code, message: code }
+      error: {
+        code,
+        message: code,
+        ...(code === 'nutrition_constraints_infeasible'
+          ? { conflicts: [{ code: 'target_nutrition_infeasible', businessDate: '2026-08-17' }] }
+          : {})
+      }
     });
 
     expect(pendingCommandDisposition(response, 'meal_plan_updated')).toBe(expected);

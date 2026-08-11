@@ -772,6 +772,65 @@ describe('manual meal edit transaction', () => {
     ))).toBe(false);
   });
 
+  test('rejects a content-only menu-reference race before a manual edit commits', async () => {
+    const base = fixtureProviders();
+    const changedMenus = TEST_DAILY_MENU_TEMPLATES.map((menu, menuIndex) => menuIndex === 0
+      ? {
+          ...menu,
+          meals: menu.meals.map((meal, mealIndex) => mealIndex === 0
+            ? { ...meal, recipeTemplateVersionId: REPLACEMENT_ID }
+            : meal)
+        }
+      : menu);
+    const changedMenuProvider = new StaticDailyMenuCatalogProvider({
+      mode: 'test',
+      catalog: TEST_DAILY_MENU_CATALOG,
+      menus: changedMenus
+    });
+    let armed = false;
+    let snapshotReads = 0;
+    let changed = false;
+    const harness = createHarness({
+      providers: {
+        ...base,
+        menus: {
+          getActiveCatalog: () => changed
+            ? changedMenuProvider.getActiveCatalog()
+            : base.menus.getActiveCatalog(),
+          getMenuByVersionId: (id) => changed
+            ? changedMenuProvider.getMenuByVersionId(id)
+            : base.menus.getMenuByVersionId(id)
+        },
+        nutrition: {
+          resolveCanonicalName: (name) => base.nutrition.resolveCanonicalName(name),
+          async getSnapshot(id) {
+            const snapshot = await base.nutrition.getSnapshot(id);
+            if (armed) {
+              snapshotReads += 1;
+              if (snapshotReads === BALANCED_SNAPSHOTS.length) changed = true;
+            }
+            return snapshot;
+          }
+        }
+      }
+    });
+    await prepareGeneratedPlan(harness);
+    armed = true;
+    const before = await harness.repository.read('user-a');
+
+    await expect(harness.service.updateMealPlanDay('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'meal-edit-menu-content-race',
+      payload: {
+        businessDate: EDIT_DATE,
+        slot: 'dinner',
+        recipeTemplateVersionId: REPLACEMENT_ID
+      }
+    })).rejects.toBeInstanceOf(VersionConflictError);
+
+    expect(await harness.repository.read('user-a')).toEqual(before);
+  });
+
   test('rejects inventory and target token races without writing a successor', async () => {
     for (const race of ['inventory', 'target'] as const) {
       const repository = new InMemoryPlanningRepository();

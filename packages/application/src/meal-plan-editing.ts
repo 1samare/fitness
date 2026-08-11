@@ -40,6 +40,8 @@ import {
   NutritionConstraintsInfeasibleError,
   ProviderUnavailableError,
   createMealPlanGenerationService,
+  providerSnapshotToken,
+  withReviewedFoodNames,
   type MealPlanGenerationServiceDependencies,
   type MealPlanningProviders
 } from './meal-plan-generation';
@@ -893,7 +895,19 @@ export function createMealPlanEditingService(
         allowTestFixtures: providers.allowTestFixtures
       });
       if ('kind' in selected) {
-        throw new NutritionConstraintsInfeasibleError(selected.conflicts);
+        throw new NutritionConstraintsInfeasibleError(
+          withReviewedFoodNames(selected.conflicts, providerSnapshot.snapshots)
+        );
+      }
+      const initialProviderSnapshotToken = providerSnapshotToken(providerSnapshot);
+      const commitProviderSnapshotToken = providerSnapshotToken(
+        await loadProviderSnapshot({
+          providers,
+          currentPlan: initial.mealPlan
+        })
+      );
+      if (commitProviderSnapshotToken !== initialProviderSnapshotToken) {
+        throw new VersionConflictError(envelope.expectedVersion, initialState.mealPlans.length);
       }
       return repository.transact(userId, (state) => {
         const replay = findRecord(state, 'updateMealPlanDay', envelope.idempotencyKey);

@@ -891,7 +891,11 @@ describe('meal execution page controller', () => {
       inventorySaved('inventory-1', 1),
       {
         success: false,
-        error: { code: 'nutrition_constraints_infeasible', message: 'infeasible' }
+        error: {
+          code: 'nutrition_constraints_infeasible',
+          message: 'infeasible',
+          conflicts: [{ code: 'target_nutrition_infeasible', businessDate: '2026-08-17' }]
+        }
       },
       {
         ...refreshed,

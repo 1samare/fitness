@@ -19,12 +19,14 @@ import type {
 } from '@fitness/domain';
 import { InMemoryPlanningRepository } from '@fitness/persistence';
 import { PastFactImmutableError } from './meal-plan-editing';
+import { FutureCompletionForbiddenError } from './planning-errors';
 import {
   IdempotencyKeyReuseError,
   VersionConflictError,
   type PlanningRepository
 } from './versioned-planning';
 import {
+  CandidateNotPendingError,
   analyzeMealPlanRecalculation,
   analyzeTrainingChangeAffectedDates,
   createMealPlanRecalculationService,
@@ -210,6 +212,53 @@ async function prepareGeneratedPlan(
     idempotencyKey: 'meal-generate-001',
     payload: { weekStartDate: WEEK_START }
   });
+}
+
+async function prepareConsecutivePendingCandidates(
+  harness: ReturnType<typeof createHarness>
+) {
+  await prepareGeneratedPlan(harness);
+  const active = await harness.service.setMealPlanDayLock('user-a', {
+    expectedVersion: 1,
+    idempotencyKey: 'meal-lock-consecutive-candidates',
+    payload: { businessDate: '2026-08-20', locked: true }
+  });
+  const first = await harness.service.saveTrainingPlan('user-a', {
+    expectedVersion: 1,
+    idempotencyKey: 'training-consecutive-candidate-a',
+    payload: {
+      weekStartDate: WEEK_START,
+      businessTimezone: 'Asia/Shanghai',
+      sessions: [{
+        businessDate: '2026-08-20',
+        sessionCode: '02054',
+        durationMinutes: 60
+      }]
+    }
+  });
+  const second = await harness.service.saveTrainingPlan('user-a', {
+    expectedVersion: 2,
+    idempotencyKey: 'training-consecutive-candidate-b',
+    payload: {
+      weekStartDate: WEEK_START,
+      businessTimezone: 'Asia/Shanghai',
+      sessions: [{
+        businessDate: '2026-08-20',
+        sessionCode: '02054',
+        durationMinutes: 30
+      }]
+    }
+  });
+  if (first.candidateMealPlan === null || second.candidateMealPlan === null) {
+    throw new Error('Expected two pending candidates');
+  }
+  return {
+    active,
+    first,
+    second,
+    firstCandidate: first.candidateMealPlan,
+    secondCandidate: second.candidateMealPlan
+  };
 }
 
 function sampleDay(input: {
@@ -625,6 +674,64 @@ describe('training-change recalculation lifecycle', () => {
     expect(state.activeMealPlanVersionId).toBe(locked.id);
     expect(state.mealPlanDecisions).toHaveLength(1);
     expect((await harness.service.getCurrentContext('user-a')).mealPlanStale).toBe(true);
+  });
+
+  test('keeping the newest candidate never resurfaces or accepts an obsolete earlier candidate', async () => {
+    const harness = createHarness();
+    const { firstCandidate, secondCandidate } = await prepareConsecutivePendingCandidates(harness);
+
+    await harness.service.decideMealPlanCandidate('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'candidate-keep-consecutive-b',
+      payload: {
+        candidateMealPlanVersionId: secondCandidate.id,
+        decision: 'keep_existing'
+      }
+    });
+    const beforeObsoleteDecision = await harness.repository.read('user-a');
+
+    await expect(harness.service.decideMealPlanCandidate('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'candidate-keep-consecutive-a',
+      payload: {
+        candidateMealPlanVersionId: firstCandidate.id,
+        decision: 'keep_existing'
+      }
+    })).rejects.toBeInstanceOf(CandidateNotPendingError);
+
+    expect(await harness.repository.read('user-a')).toEqual(beforeObsoleteDecision);
+    expect((await harness.service.getCurrentContext('user-a')).pendingMealPlanCandidate).toBeNull();
+  });
+
+  test('rejects obsolete overwrite without state changes and still accepts the newest candidate', async () => {
+    const harness = createHarness();
+    const { firstCandidate, secondCandidate } = await prepareConsecutivePendingCandidates(harness);
+    const beforeObsoleteDecision = await harness.repository.read('user-a');
+
+    await expect(harness.service.decideMealPlanCandidate('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'candidate-overwrite-consecutive-a',
+      payload: {
+        candidateMealPlanVersionId: firstCandidate.id,
+        decision: 'overwrite_locked'
+      }
+    })).rejects.toBeInstanceOf(CandidateNotPendingError);
+    expect(await harness.repository.read('user-a')).toEqual(beforeObsoleteDecision);
+
+    const decided = await harness.service.decideMealPlanCandidate('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'candidate-overwrite-consecutive-b',
+      payload: {
+        candidateMealPlanVersionId: secondCandidate.id,
+        decision: 'overwrite_locked'
+      }
+    });
+    expect(decided.activatedMealPlan?.trainingPlanVersionId).toBe(
+      secondCandidate.trainingPlanVersionId
+    );
+    expect((await harness.repository.read('user-a')).activeMealPlanVersionId).toBe(
+      decided.activatedMealPlan?.id
+    );
   });
 
   test('overwrite_locked activates a complete direct successor only after full generation', async () => {
@@ -1284,12 +1391,14 @@ describe('training-change recalculation lifecycle', () => {
   test('provider version changing between generation load and commit check returns version_conflict without partial result writes', async () => {
     const baseProviders = fixtureProviders();
     let catalogReads = 0;
+    let raceArmed = false;
     const harness = createHarness({
       providers: {
         ...baseProviders,
         menus: {
           async getActiveCatalog() {
             const catalog = await baseProviders.menus.getActiveCatalog();
+            if (!raceArmed) return catalog;
             catalogReads += 1;
             return catalogReads === 2
               ? { ...catalog, datasetVersion: `${catalog.datasetVersion}-switched` }
@@ -1300,6 +1409,7 @@ describe('training-change recalculation lifecycle', () => {
       }
     });
     await prepareGeneratedPlan(harness);
+    raceArmed = true;
     catalogReads = 0;
     const before = await harness.repository.read('user-a');
 
@@ -1326,6 +1436,74 @@ describe('training-change recalculation lifecycle', () => {
     expect(after.recalculationJobs).toHaveLength(before.recalculationJobs.length + 1);
     expect(after.recalculationJobs.at(-1)?.status).toBe('pending');
   });
+
+  test.each(['allergens', 'nutrients'] as const)(
+    'provider %s changing without a version bump returns version_conflict without meal writes',
+    async (field) => {
+      const baseProviders = fixtureProviders();
+      const changedSnapshots = BALANCED_SNAPSHOTS.map((snapshot, index) => index !== 0
+        ? snapshot
+        : field === 'allergens'
+          ? { ...snapshot, allergens: [...snapshot.allergens, '甲壳类'] }
+          : {
+              ...snapshot,
+              nutrientsPer100g: {
+                ...snapshot.nutrientsPer100g,
+                energyKcal: snapshot.nutrientsPer100g.energyKcal + 0.1
+              }
+            });
+      const changedNutrition = new ReviewedNutritionCache({
+        mode: 'test',
+        snapshots: changedSnapshots
+      });
+      let armed = false;
+      let snapshotReads = 0;
+      let changed = false;
+      const harness = createHarness({
+        providers: {
+          ...baseProviders,
+          nutrition: {
+            resolveCanonicalName: (name) => baseProviders.nutrition.resolveCanonicalName(name),
+            async getSnapshot(id) {
+              const snapshot = changed
+                ? await changedNutrition.getSnapshot(id)
+                : await baseProviders.nutrition.getSnapshot(id);
+              if (armed) {
+                snapshotReads += 1;
+                if (snapshotReads === BALANCED_SNAPSHOTS.length) changed = true;
+              }
+              return snapshot;
+            }
+          }
+        }
+      });
+      await prepareGeneratedPlan(harness);
+      armed = true;
+      const before = await harness.repository.read('user-a');
+
+      await expect(harness.service.saveTrainingPlan('user-a', {
+        expectedVersion: 1,
+        idempotencyKey: `training-save-provider-${field}-content-switch`,
+        payload: {
+          weekStartDate: WEEK_START,
+          businessTimezone: 'Asia/Shanghai',
+          sessions: [{
+            businessDate: '2026-08-20',
+            sessionCode: '02054',
+            durationMinutes: 60
+          }]
+        }
+      })).rejects.toBeInstanceOf(VersionConflictError);
+      const after = await harness.repository.read('user-a');
+
+      expect(after.mealPlans).toEqual(before.mealPlans);
+      expect(after.mealPlanTargetDiffs).toEqual(before.mealPlanTargetDiffs);
+      expect(after.mealPlanDecisions).toEqual(before.mealPlanDecisions);
+      expect(after.activeMealPlanVersionId).toBe(before.activeMealPlanVersionId);
+      expect(after.recalculationJobs).toHaveLength(before.recalculationJobs.length + 1);
+      expect(after.recalculationJobs.at(-1)?.status).toBe('pending');
+    }
+  );
 });
 
 describe('training completion facts', () => {
@@ -1515,7 +1693,7 @@ describe('training completion facts', () => {
       expectedVersion: 0,
       idempotencyKey: 'completion-future',
       payload: { businessDate: '2026-08-19', completedDurationMinutes: 30 }
-    })).rejects.toMatchObject({ code: 'past_fact_immutable' });
+    })).rejects.toBeInstanceOf(FutureCompletionForbiddenError);
     await expect(harness.service.recordTrainingCompletion('user-a', {
       expectedVersion: 0,
       idempotencyKey: 'completion-unplanned',

@@ -206,6 +206,59 @@ describe('meal plan generation application service', () => {
     expect((await repository.read('user-a')).inventories).toHaveLength(1);
   });
 
+  test('replays a committed canonical inventory request without consulting an offline provider', async () => {
+    const base = fixtureProviders();
+    let offline = false;
+    let providerCalls = 0;
+    const providers: MealPlanningProviders = {
+      ...base,
+      nutrition: {
+        async resolveCanonicalName(name) {
+          providerCalls += 1;
+          if (offline) throw new Error('offline');
+          return base.nutrition.resolveCanonicalName(name);
+        },
+        async getSnapshot(snapshotId) {
+          providerCalls += 1;
+          if (offline) throw new Error('offline');
+          return base.nutrition.getSnapshot(snapshotId);
+        }
+      }
+    };
+    const { repository, service } = createHarness({ providers });
+    const first = await service.saveInventory('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'inventory-response-lost-001',
+      payload: {
+        items: [
+          { name: ' 测试 米饭 ', availableGrams: 2000 },
+          { name: '测试米饭', availableGrams: 3000 }
+        ]
+      }
+    });
+
+    offline = true;
+    providerCalls = 0;
+    await expect(service.saveInventory('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'inventory-response-lost-001',
+      payload: {
+        items: [
+          { name: '测试米饭', availableGrams: 3000 },
+          { name: '测试 米饭', availableGrams: 2000 }
+        ]
+      }
+    })).resolves.toEqual(first);
+    await expect(service.saveInventory('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'inventory-response-lost-001',
+      payload: { items: [{ name: '测试米饭', availableGrams: 4999 }] }
+    })).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
+
+    expect(providerCalls).toBe(0);
+    expect((await repository.read('user-a')).inventories).toEqual([first]);
+  });
+
   test('requires an active profile, goal, training plan, inventory, and seven feasible targets', async () => {
     const missing = createHarness();
     await expect(missing.service.generateWeeklyMealPlan('user-a', {
@@ -438,6 +491,58 @@ describe('meal plan generation application service', () => {
       payload: { weekStartDate: WEEK_START }
     })).rejects.toBeInstanceOf(VersionConflictError);
     expect((await repository.read('user-a')).mealPlans).toHaveLength(0);
+  });
+
+  test('rejects a content-only recipe grams race before initial generation commits', async () => {
+    const base = fixtureProviders();
+    const changedRecipes = TEST_RECIPE_TEMPLATES.map((recipe, recipeIndex) => recipeIndex === 0
+      ? {
+          ...recipe,
+          ingredients: recipe.ingredients.map((ingredient, ingredientIndex) => ingredientIndex === 0
+            ? { ...ingredient, grams: ingredient.grams + 0.1 }
+            : ingredient)
+        }
+      : recipe);
+    const changedRecipeProvider = new StaticRecipeTemplateProvider({
+      mode: 'test',
+      templates: changedRecipes
+    });
+    let armed = false;
+    let snapshotReads = 0;
+    let changed = false;
+    const providers: MealPlanningProviders = {
+      ...base,
+      recipes: {
+        getByVersionId: (id) => changed
+          ? changedRecipeProvider.getByVersionId(id)
+          : base.recipes.getByVersionId(id)
+      },
+      nutrition: {
+        resolveCanonicalName: (name) => base.nutrition.resolveCanonicalName(name),
+        async getSnapshot(id) {
+          const snapshot = await base.nutrition.getSnapshot(id);
+          if (armed) {
+            snapshotReads += 1;
+            if (snapshotReads === BALANCED_NUTRITION_SNAPSHOTS.length) changed = true;
+          }
+          return snapshot;
+        }
+      }
+    };
+    const { repository, service } = createHarness({ providers });
+    await completeSetup(service);
+    await saveFullInventory(service);
+    armed = true;
+    const before = await repository.read('user-a');
+
+    await expect(service.generateWeeklyMealPlan('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'meal-generate-recipe-content-race',
+      payload: { weekStartDate: WEEK_START }
+    })).rejects.toBeInstanceOf(VersionConflictError);
+
+    expect((await repository.read('user-a')).mealPlans).toEqual(before.mealPlans);
+    expect((await repository.read('user-a')).activeMealPlanVersionId).toBeNull();
   });
 
   test('returns active inventory and meal plan with dynamic stale and phase-four counters', async () => {

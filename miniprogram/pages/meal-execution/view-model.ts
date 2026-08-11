@@ -8,6 +8,10 @@ type CompletePendingMealPlanTargetDiff = Extract<
   PendingMealPlanTargetDiff,
   { displayStatus: 'complete' }
 >;
+type WeeklyMealConflict = Extract<
+  Extract<PlanningApiResponse, { success: false }>['error'],
+  { code: 'nutrition_constraints_infeasible' }
+>['conflicts'][number];
 
 export const MEAL_SLOT_LABELS = {
   breakfast: '早餐',
@@ -193,16 +197,50 @@ export function buildMealExecutionViewModel(context: CurrentContext): MealExecut
   };
 }
 
-export function mealPlanningErrorMessage(code: string): string {
+export function mealPlanningErrorMessage(
+  code: string,
+  conflicts: readonly WeeklyMealConflict[] = []
+): string {
   if (code === 'provider_unavailable') {
     return '营养数据暂时不可用，已有训练事实与餐单不会丢失。请稍后点击“重试餐单重算”。';
   }
   if (code === 'nutrition_constraints_infeasible') {
+    const conflict = conflicts[0];
+    if (conflict !== undefined) {
+      const prefix = `${conflict.businessDate}：`;
+      if (conflict.code === 'inventory_insufficient') {
+        const foodName = conflict.foodNameZh === undefined ? '食材' : `“${conflict.foodNameZh}”`;
+        const quantities = conflict.requiredGrams === undefined || conflict.availableGrams === undefined
+          ? ''
+          : `（需要 ${nutrientNumber(conflict.requiredGrams)} 克，可用 ${nutrientNumber(conflict.availableGrams)} 克）`;
+        return `${prefix}${foodName}库存不足${quantities}。请补充该日所需食材后重新生成。`;
+      }
+      if (conflict.code === 'allergen_detected') {
+        const foodName = conflict.foodNameZh === undefined ? '候选餐单' : `候选食材“${conflict.foodNameZh}”`;
+        return `${prefix}${foodName}命中过敏原。请调整库存或过敏原设置后重新生成；过敏原不会被放宽。`;
+      }
+      if (conflict.code === 'avoided_food') {
+        const foodName = conflict.foodNameZh === undefined ? '候选餐单' : `候选食材“${conflict.foodNameZh}”`;
+        return `${prefix}${foodName}包含忌口食材。请调整库存或忌口设置后重新生成。`;
+      }
+      if (conflict.code === 'source_chain_incomplete') {
+        const foodName = conflict.foodNameZh === undefined ? '' : `“${conflict.foodNameZh}”的`;
+        return `${prefix}${foodName}审核营养来源不完整。请刷新数据来源后重新生成，系统不会使用缺失来源的数据。`;
+      }
+      if (conflict.code === 'nutrition_out_of_range') {
+        return `${prefix}候选餐单的营养范围不符合目标。请调整可用食材后重新生成。`;
+      }
+      if (conflict.code === 'food_diversity_insufficient') {
+        return `${prefix}食物种类不足。请补充不同食物组的食材后重新生成。`;
+      }
+      return `${prefix}当前营养目标不可用于一周餐单。请先返回规划页复核身体档案和目标。`;
+    }
     return '现有食材无法满足营养与过敏原约束。请补充可用食材后重新生成；过敏原不会被放宽。';
   }
   if (code === 'version_conflict') return '内容已在其他位置更新，请刷新后再试。';
   if (code === 'recipe_not_selectable') return '备选菜品已更新，请刷新并重新选择。';
   if (code === 'past_fact_immutable') return '今天及过去日期的餐单事实不可修改，请选择未来日期。';
+  if (code === 'future_completion_forbidden') return '训练完成记录不能填写未来日期，请选择今天或过去的计划训练日期。';
   return '操作未完成，请检查输入后重试。';
 }
 
@@ -210,7 +248,10 @@ export function buildCompletionFeedback(response: PlanningApiResponse): Completi
   if (!response.success) {
     return {
       factMessage: '',
-      mealMessage: mealPlanningErrorMessage(response.error.code),
+      mealMessage: mealPlanningErrorMessage(
+        response.error.code,
+        response.error.code === 'nutrition_constraints_infeasible' ? response.error.conflicts : []
+      ),
       retryJobId: '',
       needsStatusRefresh: false
     };

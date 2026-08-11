@@ -244,8 +244,35 @@ describe('meal execution view model', () => {
 
   it('maps provider and infeasible failures to actionable recovery messages', () => {
     expect(mealPlanningErrorMessage('provider_unavailable')).toContain('稍后点击“重试餐单重算”');
-    expect(mealPlanningErrorMessage('nutrition_constraints_infeasible')).toContain('补充可用食材后重新生成');
-    expect(mealPlanningErrorMessage('nutrition_constraints_infeasible')).toContain('过敏原不会被放宽');
+    const inventoryMessage = (mealPlanningErrorMessage as (
+      code: string,
+      conflicts?: readonly unknown[]
+    ) => string)('nutrition_constraints_infeasible', [{
+      code: 'inventory_insufficient',
+      businessDate: '2026-08-17',
+      foodNameZh: '测试米饭',
+      requiredGrams: 120.5,
+      availableGrams: 100
+    }]);
+    expect(inventoryMessage).toContain('2026-08-17');
+    expect(inventoryMessage).toContain('测试米饭');
+    expect(inventoryMessage).toContain('库存不足');
+    expect(inventoryMessage).toContain('需要 120.5 克，可用 100 克');
+    const allergenMessage = (mealPlanningErrorMessage as (
+      code: string,
+      conflicts?: readonly unknown[]
+    ) => string)('nutrition_constraints_infeasible', [{
+      code: 'allergen_detected',
+      businessDate: '2026-08-18',
+      foodNameZh: '测试虾仁'
+    }]);
+    expect(allergenMessage).toContain('2026-08-18');
+    expect(allergenMessage).toContain('测试虾仁');
+    expect(allergenMessage).toContain('过敏原不会被放宽');
+    expect(mealPlanningErrorMessage('future_completion_forbidden')).toContain(
+      '请选择今天或过去的计划训练日期'
+    );
+    expect(mealPlanningErrorMessage('future_completion_forbidden')).not.toContain('请选择未来日期');
   });
 
   it('keeps persisted dish names and explains how to recover when recipes are unavailable', () => {

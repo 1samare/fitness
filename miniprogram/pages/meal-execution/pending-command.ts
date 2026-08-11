@@ -43,6 +43,7 @@ const deterministicFailureCodes = new Set([
   'invalid_calendar_date',
   'past_training_change_forbidden',
   'past_fact_immutable',
+  'future_completion_forbidden',
   'training_date_outside_goal_period',
   'recipe_not_selectable',
   'candidate_not_pending',

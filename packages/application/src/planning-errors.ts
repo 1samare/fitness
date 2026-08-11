@@ -6,3 +6,12 @@ export class PastFactImmutableError extends Error {
     this.name = 'PastFactImmutableError';
   }
 }
+
+export class FutureCompletionForbiddenError extends Error {
+  public readonly code = 'future_completion_forbidden' as const;
+
+  public constructor(public readonly businessDate: string) {
+    super(`Training completion cannot be recorded for a future business date: ${businessDate}`);
+    this.name = 'FutureCompletionForbiddenError';
+  }
+}

@@ -754,8 +754,7 @@ const successfulDataSchema = z.discriminatedUnion('kind', [
   currentContextSchema
 ]);
 
-const apiErrorSchema = z.object({
-  code: z.enum([
+const standardApiErrorCodeSchema = z.enum([
     'invalid_request',
     'unknown_action',
     'unknown_training_session',
@@ -768,17 +767,52 @@ const apiErrorSchema = z.object({
     'invalid_calendar_date',
     'past_training_change_forbidden',
     'past_fact_immutable',
+    'future_completion_forbidden',
     'training_date_outside_goal_period',
     'provider_unavailable',
     'recipe_not_selectable',
     'candidate_not_pending',
     'candidate_diff_unavailable',
-    'nutrition_constraints_infeasible',
     'internal_error'
-  ]),
+  ]);
+
+const weeklyMealConflictDateFields = { businessDate: businessDateSchema } as const;
+const weeklyMealConflictFoodFields = {
+  ...weeklyMealConflictDateFields,
+  foodNameZh: z.string().trim().min(1).max(120).optional()
+} as const;
+
+export const weeklyMealConflictSchema = z.discriminatedUnion('code', [
+  z.object({ code: z.literal('target_nutrition_infeasible'), ...weeklyMealConflictDateFields }).strict(),
+  z.object({ code: z.literal('source_chain_incomplete'), ...weeklyMealConflictFoodFields }).strict(),
+  z.object({ code: z.literal('allergen_detected'), ...weeklyMealConflictFoodFields }).strict(),
+  z.object({ code: z.literal('avoided_food'), ...weeklyMealConflictFoodFields }).strict(),
+  z.object({
+    code: z.literal('inventory_insufficient'),
+    ...weeklyMealConflictFoodFields,
+    requiredGrams: z.number().positive().optional(),
+    availableGrams: z.number().nonnegative().optional()
+  }).strict(),
+  z.object({ code: z.literal('nutrition_out_of_range'), ...weeklyMealConflictDateFields }).strict(),
+  z.object({ code: z.literal('food_diversity_insufficient'), ...weeklyMealConflictDateFields }).strict()
+]);
+
+const standardApiErrorSchema = z.object({
+  code: standardApiErrorCodeSchema,
   message: z.string().min(1),
   issues: z.array(z.object({ path: z.string(), message: z.string() }).strict()).optional()
 }).strict();
+
+const nutritionConstraintsInfeasibleApiErrorSchema = z.object({
+  code: z.literal('nutrition_constraints_infeasible'),
+  message: z.string().min(1),
+  conflicts: z.array(weeklyMealConflictSchema).min(1).max(49)
+}).strict();
+
+const apiErrorSchema = z.discriminatedUnion('code', [
+  standardApiErrorSchema,
+  nutritionConstraintsInfeasibleApiErrorSchema
+]);
 
 export const planningApiResponseSchema = z.discriminatedUnion('success', [
   z.object({ success: z.literal(true), data: successfulDataSchema }).strict(),
@@ -789,3 +823,4 @@ export type PlanningApiRequest = z.infer<typeof planningApiRequestSchema>;
 export type PreviewDailyEnergyRequest = Extract<PlanningApiRequest, { action: 'previewDailyEnergy' }>;
 export type PlanningSetupPayload = z.infer<typeof planningSetupPayloadSchema>;
 export type PlanningApiResponse = z.infer<typeof planningApiResponseSchema>;
+export type PublicWeeklyMealConflict = z.infer<typeof weeklyMealConflictSchema>;

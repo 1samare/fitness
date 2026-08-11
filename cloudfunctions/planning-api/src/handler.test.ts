@@ -635,13 +635,28 @@ describe('handlePlanningApi', () => {
       }
     }, { userId: 'trusted-user-a' });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       success: false,
       error: {
         code: 'nutrition_constraints_infeasible',
-        message: '当前食材与营养目标无法生成可行的一周餐单。'
+        message: '当前食材与营养目标无法生成可行的一周餐单。',
+        conflicts: [{
+          businessDate: '2026-08-17',
+          code: 'inventory_insufficient',
+          availableGrams: 0
+        }]
       }
     });
+    if (result.success || result.error.code !== 'nutrition_constraints_infeasible') {
+      throw new Error('Expected structured infeasibility');
+    }
+    const conflict = result.error.conflicts[0];
+    if (conflict?.code !== 'inventory_insufficient') {
+      throw new Error('Expected inventory conflict');
+    }
+    expect(typeof conflict.foodNameZh).toBe('string');
+    expect(typeof conflict.requiredGrams).toBe('number');
+    expect(JSON.stringify(result)).not.toContain('fixture-rice');
   });
 
   it('locks and edits only with trusted identity and returns public selectable recipes', async () => {
@@ -1100,8 +1115,13 @@ describe('handlePlanningApi', () => {
         payload: { businessDate: '2026-08-19', completedDurationMinutes: 30 }
       }
     }, { userId: 'trusted-user-a' });
-    expect(future.success).toBe(false);
-    if (!future.success) expect(future.error.code).toBe('past_fact_immutable');
+    expect(future).toEqual({
+      success: false,
+      error: {
+        code: 'future_completion_forbidden',
+        message: '训练完成记录不能填写未来日期。'
+      }
+    });
 
     const candidate = await harness.handler({
       action: 'decideMealPlanCandidate',

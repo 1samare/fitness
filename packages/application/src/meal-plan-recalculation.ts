@@ -21,9 +21,10 @@ import {
   generationPrerequisites,
   loadProviderSnapshot,
   providerSnapshotToken,
+  withReviewedFoodNames,
   type MealPlanGenerationServiceDependencies
 } from './meal-plan-generation';
-import { PastFactImmutableError, createMealPlanEditingService } from './meal-plan-editing';
+import { createMealPlanEditingService } from './meal-plan-editing';
 import { previewDailyEnergy } from './preview-daily-energy';
 import { affectedTrainingDates } from './training-plan-change';
 import {
@@ -31,9 +32,11 @@ import {
   InvalidTrainingPlanError,
   PlanningPrerequisiteError,
   VersionConflictError,
+  pendingMealPlanCandidateMatchesCurrentContext,
   recalculationJobHasCurrentProcessPrerequisites,
   type SavedTrainingPlan
 } from './versioned-planning';
+import { FutureCompletionForbiddenError } from './planning-errors';
 
 export type MealPlanRecalculationServiceDependencies = MealPlanGenerationServiceDependencies;
 
@@ -460,7 +463,9 @@ export function createMealPlanRecalculationService(
       fixedDays: analysis.fixedDays
     });
     if (generated.kind === 'infeasible') {
-      throw new NutritionConstraintsInfeasibleError(generated.conflicts);
+      throw new NutritionConstraintsInfeasibleError(
+        withReviewedFoodNames(generated.conflicts, providerSnapshot.snapshots)
+      );
     }
     const commitProviderSnapshot = await loadProviderSnapshot(dependencies.providers);
     const commitProviderSnapshotToken = providerSnapshotToken(commitProviderSnapshot);
@@ -621,7 +626,7 @@ export function createMealPlanRecalculationService(
       const occurredAt = now();
       const businessToday = businessDateAt(occurredAt, profile.payload.businessTimezone);
       if (envelope.payload.businessDate > businessToday) {
-        throw new PastFactImmutableError(envelope.payload.businessDate);
+        throw new FutureCompletionForbiddenError(envelope.payload.businessDate);
       }
       const event: TrainingCompletionEvent = {
         kind: 'training_completion_event',
@@ -883,11 +888,9 @@ export function createMealPlanRecalculationService(
         : findById(initialState.mealPlans, candidate.supersedesVersionId);
       if (
         candidate === null
-        || candidate.readiness !== 'pending_confirmation'
         || job === undefined
-        || job.status === 'completed'
         || previous === null
-        || initialState.activeMealPlanVersionId !== previous.id
+        || !pendingMealPlanCandidateMatchesCurrentContext(initialState, candidate)
         || initialState.mealPlanDecisions.some(
           (decision) => decision.candidateMealPlanVersionId === candidate.id
         )
@@ -915,7 +918,7 @@ export function createMealPlanRecalculationService(
           }
           if (
             state.mealPlanDecisions.length !== envelope.expectedVersion
-            || state.activeMealPlanVersionId !== previous.id
+            || !pendingMealPlanCandidateMatchesCurrentContext(state, candidate)
             || state.mealPlanDecisions.some(
               (decision) => decision.candidateMealPlanVersionId === candidate.id
             )
@@ -1004,7 +1007,9 @@ export function createMealPlanRecalculationService(
       });
       if (generated.kind === 'infeasible') {
         await markJobRetryable(userId, job.id, 'nutrition_constraints_infeasible');
-        throw new NutritionConstraintsInfeasibleError(generated.conflicts);
+        throw new NutritionConstraintsInfeasibleError(
+          withReviewedFoodNames(generated.conflicts, providerSnapshot.snapshots)
+        );
       }
       let commitProviderSnapshotToken: string;
       try {
@@ -1032,10 +1037,8 @@ export function createMealPlanRecalculationService(
           const currentCandidate = findById(state.mealPlans, candidate.id);
           if (
             currentJob === null
-            || currentJob.status === 'completed'
             || currentCandidate === null
-            || currentCandidate.readiness !== 'pending_confirmation'
-            || state.activeMealPlanVersionId !== previous.id
+            || !pendingMealPlanCandidateMatchesCurrentContext(state, currentCandidate)
           ) throw new CandidateNotPendingError(candidate.id);
           const current = prerequisitesForJob(state, currentJob, commitProviderSnapshotToken);
           if (!compareTokensEqual(initial.compareToken, current.compareToken)) {

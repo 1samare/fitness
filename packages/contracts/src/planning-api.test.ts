@@ -41,6 +41,66 @@ const supportedResponse = {
 } as const;
 
 describe('planning API contracts', () => {
+  it('accepts a distinct stable error for a forbidden future completion', () => {
+    const response = {
+      success: false,
+      error: {
+        code: 'future_completion_forbidden',
+        message: '训练完成记录不能填写未来日期。'
+      }
+    } as const;
+
+    expect(planningApiResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it('accepts only sanitized discriminated weekly-meal conflicts on infeasible errors', () => {
+    const response = {
+      success: false,
+      error: {
+        code: 'nutrition_constraints_infeasible',
+        message: '当前食材与营养目标无法生成可行的一周餐单。',
+        conflicts: [
+          {
+            code: 'inventory_insufficient',
+            businessDate: '2026-08-17',
+            foodNameZh: '测试米饭',
+            requiredGrams: 120.5,
+            availableGrams: 100
+          },
+          { code: 'allergen_detected', businessDate: '2026-08-18' }
+        ]
+      }
+    } as const;
+
+    expect(planningApiResponseSchema.parse(response)).toEqual(response);
+    expect(planningApiResponseSchema.safeParse({
+      ...response,
+      error: {
+        ...response.error,
+        conflicts: [{
+          code: 'allergen_detected',
+          businessDate: '2026-08-18',
+          foodId: 'internal-food-id'
+        }]
+      }
+    }).success).toBe(false);
+    expect(planningApiResponseSchema.safeParse({
+      ...response,
+      error: { ...response.error, conflicts: [{ code: 'unstable', businessDate: '2026-08-18' }] }
+    }).success).toBe(false);
+    expect(planningApiResponseSchema.safeParse({
+      ...response,
+      error: {
+        ...response.error,
+        conflicts: [{
+          code: 'allergen_detected',
+          businessDate: '2026-08-18',
+          requiredGrams: 120
+        }]
+      }
+    }).success).toBe(false);
+  });
+
   it('accepts a complete schema-v4 planning aggregate state', () => {
     const mealDates = [
       '2026-08-17',

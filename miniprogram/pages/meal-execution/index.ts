@@ -182,7 +182,10 @@ function currentContext(response: PlanningApiResponse): CurrentContext | undefin
 function responseError(response: PlanningApiResponse): string {
   return response.success
     ? '规划服务返回了不匹配的结果，请刷新后重试。'
-    : mealPlanningErrorMessage(response.error.code);
+    : mealPlanningErrorMessage(
+        response.error.code,
+        response.error.code === 'nutrition_constraints_infeasible' ? response.error.conflicts : []
+      );
 }
 
 async function callPendingWrite(
@@ -493,7 +496,10 @@ Page<PageData, PageActions>({
           ? '未找到审核食材，请换用更常见的标准名称后重新校验名称。'
           : response.error.code === 'provider_unavailable'
             ? '营养数据暂时不可用，请稍后重新校验名称。'
-            : `${mealPlanningErrorMessage(response.error.code)} 请重新校验名称。`;
+            : `${mealPlanningErrorMessage(
+                response.error.code,
+                response.error.code === 'nutrition_constraints_infeasible' ? response.error.conflicts : []
+              )} 请重新校验名称。`;
         this.setData({
           inventoryRows: this.data.inventoryRows.map((row) => (
             row.key === key && row.resolutionToken === requestToken

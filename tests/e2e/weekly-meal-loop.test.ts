@@ -52,6 +52,10 @@ const BALANCED_SNAPSHOTS_BY_ID = new Map(
 );
 
 type SuccessData = Extract<PlanningApiResponse, { readonly success: true }>['data'];
+type PublicConflictCode = Extract<
+  Extract<PlanningApiResponse, { readonly success: false }>['error'],
+  { readonly code: 'nutrition_constraints_infeasible' }
+>['conflicts'][number]['code'];
 
 interface Harness {
   readonly handler: ReturnType<typeof createPlanningApiHandler>;
@@ -60,6 +64,14 @@ interface Harness {
   readonly setProviders: (
     value: MealPlanRecalculationServiceDependencies['providers']
   ) => void;
+}
+
+interface PublicConflictScenario {
+  readonly name: string;
+  readonly expectedConflict: PublicConflictCode;
+  readonly foodNameExpectation: 'present' | 'absent';
+  readonly setup: ReturnType<typeof setupRequest>;
+  readonly mutate: (harness: Harness) => Promise<void>;
 }
 
 interface FlowSignature {
@@ -195,12 +207,13 @@ function setupRequest(input: {
 
 function inventoryRequest(
   idempotencyKey: string,
-  availableGrams: number
+  availableGrams: number,
+  expectedVersion = 0
 ) {
   return {
     action: 'saveInventory',
     payload: {
-      expectedVersion: 0,
+      expectedVersion,
       idempotencyKey,
       payload: {
         items: BALANCED_SNAPSHOTS.map((snapshot) => ({
@@ -212,11 +225,11 @@ function inventoryRequest(
   } as const;
 }
 
-function generateRequest(idempotencyKey: string) {
+function generateRequest(idempotencyKey: string, expectedVersion = 0) {
   return {
     action: 'generateWeeklyMealPlan',
     payload: {
-      expectedVersion: 0,
+      expectedVersion,
       idempotencyKey,
       payload: { weekStartDate: WEEK_START }
     }
@@ -696,6 +709,123 @@ describe('weekly meal loop end-to-end acceptance', () => {
     expect(first.persistedCounts.mealPlan).toBeGreaterThan(0);
     expect(second).toEqual(first);
   });
+
+  const publicConflictScenarios: readonly PublicConflictScenario[] = [
+    {
+      name: 'allergen',
+      expectedConflict: 'allergen_detected',
+      foodNameExpectation: 'present',
+      setup: setupRequest({ idempotencyKey: 'public-conflict-allergen-setup', allergens: ['甲壳类'] }),
+      mutate: (harness) => {
+        const snapshots = BALANCED_SNAPSHOTS.map((snapshot) => ({
+          ...snapshot,
+          allergens: ['甲壳类']
+        }));
+        harness.setProviders({
+          ...fixtureProviders(),
+          nutrition: new ReviewedNutritionCache({ mode: 'test', snapshots })
+        });
+        return Promise.resolve();
+      }
+    },
+    {
+      name: 'inventory',
+      expectedConflict: 'inventory_insufficient',
+      foodNameExpectation: 'present',
+      setup: setupRequest({ idempotencyKey: 'public-conflict-inventory-setup' }),
+      mutate: async (harness) => {
+        requireData(
+          await call(harness, inventoryRequest('public-conflict-low-inventory', 1, 1)),
+          'inventory_saved'
+        );
+      }
+    },
+    {
+      name: 'missing-source',
+      expectedConflict: 'source_chain_incomplete',
+      foodNameExpectation: 'absent',
+      setup: setupRequest({ idempotencyKey: 'public-conflict-source-setup' }),
+      mutate: (harness) => {
+        const snapshots = BALANCED_SNAPSHOTS.map((snapshot, index) => ({
+          ...snapshot,
+          foodId: `fixture-source-identity-missing-${String(index + 1)}`
+        }));
+        harness.setProviders({
+          ...fixtureProviders(),
+          nutrition: new ReviewedNutritionCache({ mode: 'test', snapshots })
+        });
+        return Promise.resolve();
+      }
+    },
+    {
+      name: 'nutrient',
+      expectedConflict: 'nutrition_out_of_range',
+      foodNameExpectation: 'absent',
+      setup: setupRequest({ idempotencyKey: 'public-conflict-nutrient-setup' }),
+      mutate: (harness) => {
+        const snapshots = BALANCED_SNAPSHOTS.map((snapshot) => ({
+          ...snapshot,
+          nutrientsPer100g: {
+            ...snapshot.nutrientsPer100g,
+            energyKcal: 1,
+            proteinG: 0
+          }
+        }));
+        harness.setProviders({
+          ...fixtureProviders(),
+          nutrition: new ReviewedNutritionCache({ mode: 'test', snapshots })
+        });
+        return Promise.resolve();
+      }
+    }
+  ];
+
+  test.each(publicConflictScenarios)(
+    'publishes sanitized $name conflict details and preserves the existing active plan',
+    async ({ name, expectedConflict, foodNameExpectation, setup, mutate }) => {
+      const harness = createHarness();
+      requireData(await call(harness, setup), 'planning_setup_completed');
+      await saveFullInventory(harness, `public-conflict-${name}-inventory`);
+      const active = requireData(
+        await call(harness, generateRequest(`public-conflict-${name}-initial`)),
+        'weekly_meal_plan_generated'
+      ).version;
+      await mutate(harness);
+      const before = await harness.repository.read(USER.userId);
+
+      const result = await call(
+        harness,
+        generateRequest(`public-conflict-${name}-failed`, 1)
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        error: {
+          code: 'nutrition_constraints_infeasible'
+        }
+      });
+      if (result.success || result.error.code !== 'nutrition_constraints_infeasible') {
+        throw new Error('Expected structured infeasibility');
+      }
+      const publicConflict = result.error.conflicts.find(
+        (conflict) => conflict.code === expectedConflict && conflict.businessDate === WEEK_START
+      );
+      expect(publicConflict).toMatchObject({ code: expectedConflict, businessDate: WEEK_START });
+      if (expectedConflict === 'inventory_insufficient') {
+        expect(typeof publicConflict?.requiredGrams).toBe('number');
+        expect(publicConflict?.availableGrams).toBe(1);
+      }
+      if (foodNameExpectation === 'present') {
+        expect(typeof publicConflict?.foodNameZh).toBe('string');
+      } else {
+        expect(publicConflict).not.toHaveProperty('foodNameZh');
+      }
+      expect(JSON.stringify(result)).not.toMatch(/foodId|sourceId|datasetVersion|snapshot-/);
+      const after = await harness.repository.read(USER.userId);
+      expect(after.activeMealPlanVersionId).toBe(active.id);
+      expect(after.mealPlans).toEqual(before.mealPlans);
+    }
+  );
 
   test('fails closed for allergens, inventory, source, provider, and infeasible targets', async () => {
     await assertGenerationFailsWithoutPartialPlan({
