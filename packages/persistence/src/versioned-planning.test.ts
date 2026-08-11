@@ -341,6 +341,8 @@ describe('versioned planning service', () => {
       pendingMealPlanCandidate: null,
       pendingMealPlanTargetDiffs: [],
       selectableRecipes: [],
+      selectableRecipesStatus: 'no_options',
+      retryableRecalculationJob: null,
       latestVersions: {
         bodyProfile: 0,
         goal: 0,
@@ -348,7 +350,8 @@ describe('versioned planning service', () => {
         inventory: 0,
         mealPlan: 0,
         mealPlanDecision: 0,
-        trainingCompletion: 0
+        trainingCompletion: 0,
+        recalculationJob: 0
       }
     });
   });
@@ -528,6 +531,8 @@ describe('versioned planning service', () => {
       pendingMealPlanCandidate: null,
       pendingMealPlanTargetDiffs: [],
       selectableRecipes: [],
+      selectableRecipesStatus: 'no_options',
+      retryableRecalculationJob: null,
       latestVersions: {
         bodyProfile: 2,
         goal: 1,
@@ -535,7 +540,8 @@ describe('versioned planning service', () => {
         inventory: 0,
         mealPlan: 0,
         mealPlanDecision: 0,
-        trainingCompletion: 0
+        trainingCompletion: 0,
+        recalculationJob: 0
       }
     });
   });
@@ -566,6 +572,8 @@ describe('versioned planning service', () => {
       pendingMealPlanCandidate: null,
       pendingMealPlanTargetDiffs: [],
       selectableRecipes: [],
+      selectableRecipesStatus: 'no_options',
+      retryableRecalculationJob: null,
       latestVersions: {
         bodyProfile: 1,
         goal: 2,
@@ -573,7 +581,8 @@ describe('versioned planning service', () => {
         inventory: 0,
         mealPlan: 0,
         mealPlanDecision: 0,
-        trainingCompletion: 0
+        trainingCompletion: 0,
+        recalculationJob: 0
       }
     });
   });

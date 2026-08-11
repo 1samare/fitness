@@ -371,7 +371,8 @@ describe('handlePlanningApi', () => {
         inventory: 0,
         mealPlan: 0,
         mealPlanDecision: 0,
-        trainingCompletion: 0
+        trainingCompletion: 0,
+        recalculationJob: 0
       });
       expect(current.data.dailyNutritionTargets).toHaveLength(7);
     }
@@ -479,6 +480,8 @@ describe('handlePlanningApi', () => {
         pendingMealPlanCandidate: null,
         pendingMealPlanTargetDiffs: [],
         selectableRecipes: [],
+        selectableRecipesStatus: 'no_options',
+        retryableRecalculationJob: null,
         latestVersions: {
           bodyProfile: 0,
           goal: 0,
@@ -486,7 +489,8 @@ describe('handlePlanningApi', () => {
           inventory: 0,
           mealPlan: 0,
           mealPlanDecision: 0,
-          trainingCompletion: 0
+          trainingCompletion: 0,
+          recalculationJob: 0
         }
       }
     });
@@ -777,6 +781,78 @@ describe('handlePlanningApi', () => {
     }, { userId: 'trusted-user-a' });
     expect(retry.success).toBe(false);
     if (!retry.success) expect(retry.error.code).toBe('provider_unavailable');
+  });
+
+  it('publishes the exact recalculation-job version and retries a failed job when meal-plan count differs', async () => {
+    const harness = createCompletionHarness();
+    await prepareCompletionPlan(harness);
+    await harness.handler({
+      action: 'setMealPlanDayLock',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'retry-version-lock-001',
+        payload: { businessDate: '2026-08-20', locked: true }
+      }
+    }, { userId: 'trusted-user-a' });
+    await harness.handler({
+      action: 'setMealPlanDayLock',
+      payload: {
+        expectedVersion: 2,
+        idempotencyKey: 'retry-version-unlock-001',
+        payload: { businessDate: '2026-08-20', locked: false }
+      }
+    }, { userId: 'trusted-user-a' });
+    harness.setNow('2026-08-19T04:00:00.000Z');
+    harness.setProviderAvailable(false);
+
+    const recorded = await harness.handler({
+      action: 'recordTrainingCompletion',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'completion-retry-version-001',
+        payload: { businessDate: '2026-08-19', completedDurationMinutes: 30 }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(recorded).toMatchObject({
+      success: true,
+      data: { kind: 'training_completion_recorded', recalculationStatus: 'failed_retryable' }
+    });
+    if (!recorded.success || recorded.data.kind !== 'training_completion_recorded') {
+      throw new Error('Expected retryable completion');
+    }
+
+    const context = await harness.handler(
+      { action: 'getCurrentContext' },
+      { userId: 'trusted-user-a' }
+    );
+    expect(context.success).toBe(true);
+    if (!context.success || context.data.kind !== 'current_context') {
+      throw new Error('Expected current context');
+    }
+    expect(context.data.latestVersions.mealPlan).toBe(3);
+    expect(context.data.latestVersions.recalculationJob).not.toBe(3);
+    expect(context.data.retryableRecalculationJob).toMatchObject({
+      id: recorded.data.recalculationJob?.id,
+      status: 'failed_retryable'
+    });
+
+    harness.setProviderAvailable(true);
+    const retried = await harness.handler({
+      action: 'retryPendingRecalculation',
+      payload: {
+        expectedVersion: context.data.latestVersions.recalculationJob,
+        idempotencyKey: 'retry-version-success-001',
+        payload: { recalculationJobId: recorded.data.recalculationJob?.id ?? '' }
+      }
+    }, { userId: 'trusted-user-a' });
+
+    expect(retried).toMatchObject({
+      success: true,
+      data: {
+        kind: 'meal_plan_recalculation_processed',
+        recalculationJob: { status: 'completed' }
+      }
+    });
   });
 
   it('maps future completion and a non-pending candidate to stable public errors', async () => {

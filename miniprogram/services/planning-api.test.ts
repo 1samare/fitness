@@ -234,6 +234,8 @@ describe('mini program planning API client', () => {
           pendingMealPlanCandidate: null,
           pendingMealPlanTargetDiffs: [],
           selectableRecipes: [],
+          selectableRecipesStatus: 'no_options',
+          retryableRecalculationJob: null,
           latestVersions: {
             bodyProfile: 0,
             goal: 0,
@@ -241,7 +243,8 @@ describe('mini program planning API client', () => {
             inventory: 0,
             mealPlan: 0,
             mealPlanDecision: 0,
-            trainingCompletion: 0
+            trainingCompletion: 0,
+            recalculationJob: 0
           }
         }
       }

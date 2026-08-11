@@ -17,6 +17,10 @@ export interface MealDisplay {
   readonly dishNameZh: string;
   readonly selectedRecipeIndex: number;
   readonly recipeLabels: readonly string[];
+  readonly ingredients: readonly {
+    readonly displayNameZh: string;
+    readonly gramsText: string;
+  }[];
 }
 
 export interface MealDayDisplay {
@@ -35,7 +39,11 @@ export interface MealExecutionViewModel {
   readonly pendingDiffs: readonly {
     readonly businessDate: string;
     readonly reasonText: string;
+    readonly targetChangeText: string;
+    readonly mealChangeText: string;
   }[];
+  readonly recipeSelectionAvailable: boolean;
+  readonly recipeAvailabilityMessage: string;
   readonly decisionOptions: readonly {
     readonly value: CandidateDecision;
     readonly label: string;
@@ -46,6 +54,7 @@ export interface CompletionFeedback {
   readonly factMessage: string;
   readonly mealMessage: string;
   readonly retryJobId: string;
+  readonly needsStatusRefresh: boolean;
 }
 
 function nutrientNumber(value: number): string {
@@ -57,6 +66,40 @@ function dayStatus(locked: boolean, manuallyModified: boolean): string {
   if (locked) return '已锁定';
   if (manuallyModified) return '已手动修改';
   return '可调整';
+}
+
+function signedDelta(previous: number, proposed: number): string {
+  const delta = proposed - previous;
+  return `${delta >= 0 ? '+' : ''}${nutrientNumber(delta)}`;
+}
+
+function targetChangeText(diff: CurrentContext['pendingMealPlanTargetDiffs'][number]): string {
+  const previous = diff.previousTarget;
+  const proposed = diff.proposedTarget;
+  return [
+    `估算目标：能量 ${nutrientNumber(previous.estimatedEnergyKcal)}→${nutrientNumber(proposed.estimatedEnergyKcal)} 千卡（${signedDelta(previous.estimatedEnergyKcal, proposed.estimatedEnergyKcal)}）`,
+    `蛋白质 ${nutrientNumber(previous.proteinG)}→${nutrientNumber(proposed.proteinG)} 克（${signedDelta(previous.proteinG, proposed.proteinG)}）`,
+    `脂肪 ${nutrientNumber(previous.fatG)}→${nutrientNumber(proposed.fatG)} 克（${signedDelta(previous.fatG, proposed.fatG)}）`,
+    `碳水 ${nutrientNumber(previous.carbohydrateG)}→${nutrientNumber(proposed.carbohydrateG)} 克（${signedDelta(previous.carbohydrateG, proposed.carbohydrateG)}）`,
+    `纤维 ${nutrientNumber(previous.fiberRangeG.minInclusive)}–${nutrientNumber(previous.fiberRangeG.maxInclusive)}→${nutrientNumber(proposed.fiberRangeG.minInclusive)}–${nutrientNumber(proposed.fiberRangeG.maxInclusive)} 克`
+  ].join('；');
+}
+
+function mealSnapshotText(meals: CurrentContext['pendingMealPlanTargetDiffs'][number]['previousMeals']): string {
+  return meals.map((meal) => {
+    const ingredients = meal.ingredients
+      .map((ingredient) => `${ingredient.displayNameZh} ${nutrientNumber(ingredient.grams)} 克`)
+      .join('、');
+    return `${MEAL_SLOT_LABELS[meal.slot]} ${meal.dishNameZh}（${ingredients}）`;
+  }).join('；');
+}
+
+function mealChangeText(diff: CurrentContext['pendingMealPlanTargetDiffs'][number]): string {
+  const previous = mealSnapshotText(diff.previousMeals);
+  const proposed = mealSnapshotText(diff.proposedMeals);
+  return previous === proposed
+    ? `菜品与克数保持不变：${previous}`
+    : `菜品与克数：${previous} → ${proposed}`;
 }
 
 export function buildMealExecutionViewModel(context: CurrentContext): MealExecutionViewModel {
@@ -81,9 +124,13 @@ export function buildMealExecutionViewModel(context: CurrentContext): MealExecut
           return {
             slot: meal.slot,
             slotLabel: MEAL_SLOT_LABELS[meal.slot],
-            dishNameZh: recipe?.dishNameZh ?? '当前菜品',
+            dishNameZh: meal.dishNameZh,
             selectedRecipeIndex: recipe?.index ?? 0,
-            recipeLabels
+            recipeLabels,
+            ingredients: meal.ingredients.map((ingredient) => ({
+              displayNameZh: ingredient.displayNameZh,
+              gramsText: `估算 ${nutrientNumber(ingredient.grams)} 克`
+            }))
           };
         }),
         ingredientSummaryText: `${String(day.ingredientAmounts.length)} 种食材 · 合计 ${nutrientNumber(totalGrams)} 克`,
@@ -106,9 +153,18 @@ export function buildMealExecutionViewModel(context: CurrentContext): MealExecut
     pendingDiffs: context.pendingMealPlanTargetDiffs
       .map((diff) => ({
         businessDate: diff.businessDate,
-        reasonText: '该日已锁定或手动修改，新餐单不会静默覆盖。'
+        reasonText: '该日已锁定或手动修改，新餐单不会静默覆盖。',
+        targetChangeText: targetChangeText(diff),
+        mealChangeText: mealChangeText(diff)
       }))
       .sort((left, right) => left.businessDate.localeCompare(right.businessDate)),
+    recipeSelectionAvailable: context.selectableRecipesStatus === 'available'
+      && context.selectableRecipes.length > 0,
+    recipeAvailabilityMessage: context.selectableRecipesStatus === 'provider_unavailable'
+      ? '备选菜品暂不可用。当前餐单仍可查看，请刷新备选菜品后重新选择。'
+      : context.selectableRecipesStatus === 'no_options'
+        ? '当前没有可替换的备选菜品。请刷新备选菜品或重新校验库存。'
+        : '',
     decisionOptions: hasCandidate
       ? [
           { value: 'keep_existing', label: '保留当前锁定餐单' },
@@ -136,24 +192,29 @@ export function buildCompletionFeedback(response: PlanningApiResponse): Completi
     return {
       factMessage: '',
       mealMessage: mealPlanningErrorMessage(response.error.code),
-      retryJobId: ''
+      retryJobId: '',
+      needsStatusRefresh: false
     };
   }
   if (response.data.kind !== 'training_completion_recorded') {
-    return { factMessage: '', mealMessage: '返回结果不匹配，请刷新后重试。', retryJobId: '' };
+    return { factMessage: '', mealMessage: '返回结果不匹配，请刷新后重试。', retryJobId: '', needsStatusRefresh: false };
   }
   if (response.data.recalculationStatus === 'failed_retryable') {
     return {
       factMessage: '训练完成情况已保存。',
-      mealMessage: '餐单重算暂未完成，训练事实不受影响。请稍后重试。',
-      retryJobId: response.data.recalculationJob?.id ?? ''
+      mealMessage: response.data.recalculationJob === null
+        ? '餐单重算暂未完成，训练事实不受影响。请刷新状态后重试。'
+        : '餐单重算暂未完成，训练事实不受影响。请稍后重试。',
+      retryJobId: response.data.recalculationJob?.id ?? '',
+      needsStatusRefresh: response.data.recalculationJob === null
     };
   }
   if (response.data.recalculationStatus === 'pending_confirmation') {
     return {
       factMessage: '训练完成情况已保存。',
       mealMessage: '餐单变化涉及锁定或手动修改内容，请选择保留或覆盖。',
-      retryJobId: ''
+      retryJobId: '',
+      needsStatusRefresh: false
     };
   }
   return {
@@ -161,6 +222,7 @@ export function buildCompletionFeedback(response: PlanningApiResponse): Completi
     mealMessage: response.data.recalculationStatus === 'completed'
       ? '后续餐单已按完成情况更新。'
       : '本次完成情况无需调整餐单。',
-    retryJobId: ''
+    retryJobId: '',
+    needsStatusRefresh: false
   };
 }

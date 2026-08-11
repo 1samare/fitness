@@ -213,6 +213,31 @@ export function analyzeMealPlanRecalculation(input: {
   };
 }
 
+function targetDisplaySnapshot(
+  state: PlanningAggregateState,
+  targetVersionId: string
+): MealPlanTargetDiff['previousTarget'] {
+  const target = state.dailyNutritionTargets.find((candidate) => candidate.id === targetVersionId);
+  if (target?.nutrition === null || target?.nutrition.kind !== 'feasible') {
+    throw new PlanningPrerequisiteError('daily_nutrition_targets');
+  }
+  return {
+    estimatedEnergyKcal: target.nutrition.targetEnergyKcal,
+    proteinG: target.nutrition.proteinG,
+    fatG: target.nutrition.fatG,
+    carbohydrateG: target.nutrition.carbohydrateG,
+    fiberRangeG: { ...target.nutrition.fiberRangeG }
+  };
+}
+
+function mealDisplaySnapshots(day: MealPlanDay): MealPlanTargetDiff['previousMeals'] {
+  return day.meals.map((meal) => ({
+    slot: meal.slot,
+    dishNameZh: meal.dishNameZh ?? '菜品名称暂不可用',
+    ingredients: (meal.ingredients ?? []).map((ingredient) => ({ ...ingredient }))
+  }));
+}
+
 function prerequisitesForJob(
   state: PlanningAggregateState,
   job: RecalculationJob,
@@ -471,12 +496,27 @@ export function createMealPlanRecalculationService(
         readiness: pendingConfirmation ? 'pending_confirmation' : 'complete',
         days: generated.days
       };
-      const diffs: MealPlanTargetDiff[] = analysis.targetDiffs.map((diff) => ({
-        id: nextId('meal-plan-target-diff'),
-        userId,
-        candidateMealPlanVersionId: mealPlan.id,
-        ...diff
-      }));
+      const diffs: MealPlanTargetDiff[] = analysis.targetDiffs.map((diff) => {
+        const previousDay = current.previousMealPlan.days.find(
+          (day) => day.businessDate === diff.businessDate
+        );
+        const proposedDay = generated.days.find(
+          (day) => day.businessDate === diff.businessDate
+        );
+        if (previousDay === undefined || proposedDay === undefined) {
+          throw new PlanningPrerequisiteError('daily_nutrition_targets');
+        }
+        return {
+          id: nextId('meal-plan-target-diff'),
+          userId,
+          candidateMealPlanVersionId: mealPlan.id,
+          ...diff,
+          previousTarget: targetDisplaySnapshot(state, diff.previousNutritionTargetVersionId),
+          proposedTarget: targetDisplaySnapshot(state, diff.proposedNutritionTargetVersionId),
+          previousMeals: mealDisplaySnapshots(previousDay),
+          proposedMeals: mealDisplaySnapshots(proposedDay)
+        };
+      });
       const completedJob: RecalculationJob = {
         ...job,
         status: pendingConfirmation ? 'pending' : 'completed',

@@ -1,10 +1,13 @@
 import { readFile } from 'node:fs/promises';
-import type { PlanningApiRequest } from '@fitness/contracts';
+import { planningApiResponseSchema, type PlanningApiRequest } from '@fitness/contracts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 interface PageOptions {
   readonly data: Record<string, unknown>;
   onLoad(): Promise<void> | void;
+  onInventoryNameInput(event: IndexedTextEvent): void;
+  onAddInventoryRow(): void;
+  onRemoveInventoryRow(event: IndexedEvent): void;
   onResolveInventoryRow(event: IndexedEvent): Promise<void>;
   onSaveInventoryAndGenerate(): Promise<void>;
   onLockChange(event: IndexedSwitchEvent): Promise<void>;
@@ -21,6 +24,10 @@ interface IndexedEvent {
 
 interface IndexedSwitchEvent extends IndexedEvent {
   readonly detail: { readonly value: boolean };
+}
+
+interface IndexedTextEvent extends IndexedEvent {
+  readonly detail: { readonly value: string };
 }
 
 interface RecipePickerEvent {
@@ -45,7 +52,9 @@ vi.mock('../../services/planning-api', () => ({
   planningApiClient: {
     call(request: PlanningApiRequest) {
       calls.push(request);
-      return Promise.resolve(responses.shift());
+      return Promise.resolve(responses.shift()).then((response) => (
+        planningApiResponseSchema.parse(response)
+      ));
     }
   }
 }));
@@ -66,6 +75,8 @@ function emptyContextResponse() {
       pendingMealPlanCandidate: null,
       pendingMealPlanTargetDiffs: [],
       selectableRecipes: [],
+      selectableRecipesStatus: 'no_options',
+      retryableRecalculationJob: null,
       latestVersions: {
         bodyProfile: 0,
         goal: 0,
@@ -73,7 +84,98 @@ function emptyContextResponse() {
         inventory: 0,
         mealPlan: 0,
         mealPlanDecision: 0,
-        trainingCompletion: 1
+        trainingCompletion: 1,
+        recalculationJob: 0
+      }
+    }
+  } as const;
+}
+
+const mealDates = [
+  '2026-08-17', '2026-08-18', '2026-08-19', '2026-08-20',
+  '2026-08-21', '2026-08-22', '2026-08-23'
+] as const;
+
+function publicMealPlanVersion() {
+  return {
+    kind: 'meal_plan_version',
+    id: 'meal-plan-1',
+    version: 1,
+    createdAt: '2026-08-10T00:00:00.000Z',
+    weekStartDate: '2026-08-17',
+    bodyProfileVersionId: 'profile-1',
+    goalVersionId: 'goal-1',
+    trainingPlanVersionId: 'training-1',
+    inventoryVersionId: 'inventory-1',
+    catalogVersionId: 'catalog-1',
+    generationPolicyVersion: 'weekly-meal-generation-v1',
+    supersedesVersionId: null,
+    readiness: 'complete',
+    days: mealDates.map((businessDate) => ({
+      businessDate,
+      dailyNutritionTargetVersionId: `target-${businessDate}`,
+      dailyMenuTemplateVersionId: `menu-${businessDate}`,
+      locked: false,
+      manuallyModified: false,
+      meals: [{
+        slot: 'breakfast',
+        recipeTemplateVersionId: 'recipe-1',
+        servingMultiplier: 1,
+        dishNameZh: '测试早餐',
+        ingredients: [{ displayNameZh: '测试米饭', grams: 100 }]
+      }],
+      ingredientAmounts: [{ foodId: 'food-rice', grams: 100 }],
+      nutritionTotals: {
+        energyKcal: 100,
+        proteinG: 10,
+        fatG: 2,
+        carbohydrateG: 20,
+        fiberG: 2,
+        saturatedFatG: 0,
+        addedSugarG: 0
+      },
+      nutritionSourceSnapshotIds: ['snapshot-rice']
+    }))
+  } as const;
+}
+
+function publicJob(status: 'failed_retryable' | 'completed' = 'failed_retryable') {
+  return {
+    kind: 'recalculation_job',
+    id: 'job-from-server',
+    triggerEventId: 'completion-1',
+    triggerType: 'training_completion',
+    affectedDates: ['2026-08-19'],
+    status,
+    createdAt: '2026-08-19T04:00:00.000Z',
+    completedAt: status === 'completed' ? '2026-08-19T04:01:00.000Z' : null,
+    candidateMealPlanVersionId: null,
+    activatedMealPlanVersionId: status === 'completed' ? 'meal-plan-1' : null,
+    failureCode: status === 'failed_retryable' ? 'provider_unavailable' : null
+  } as const;
+}
+
+function deferred<T>() {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => { resolvePromise = resolve; });
+  return {
+    promise,
+    resolve(value: T) {
+      if (resolvePromise === undefined) throw new Error('Deferred promise is unavailable');
+      resolvePromise(value);
+    }
+  };
+}
+
+function foodResolved(canonicalNameZh: string) {
+  return {
+    success: true,
+    data: {
+      kind: 'food_name_resolved',
+      resolution: {
+        foodId: `food-${canonicalNameZh}`,
+        canonicalNameZh,
+        nutritionSnapshotId: `snapshot-${canonicalNameZh}`
       }
     }
   } as const;
@@ -122,11 +224,32 @@ describe('meal execution page controller', () => {
       success: true,
       data: {
         kind: 'training_completion_recorded',
+        event: {
+          kind: 'training_completion_event',
+          id: 'completion-1',
+          version: 1,
+          trainingPlanVersionId: 'training-1',
+          businessDate: '2026-08-19',
+          completedDurationMinutes: 30,
+          occurredAt: '2026-08-19T04:00:00.000Z'
+        },
+        dailyEnergyTargets: [],
+        dailyNutritionTargets: [],
         recalculationStatus: 'failed_retryable',
-        recalculationJob: { id: 'job-from-server', failureCode: 'provider_unavailable' }
+        recalculationJob: publicJob(),
+        candidateMealPlan: null,
+        targetDiffs: []
       }
     });
-    responses.push(emptyContextResponse());
+    const retryableContext = emptyContextResponse();
+    responses.push({
+      ...retryableContext,
+      data: {
+        ...retryableContext.data,
+        retryableRecalculationJob: publicJob(),
+        latestVersions: { ...retryableContext.data.latestVersions, recalculationJob: 1 }
+      }
+    });
     const page = pageInstance();
     page.setData({
       businessToday: '2026-08-19',
@@ -139,7 +262,8 @@ describe('meal execution page controller', () => {
         inventory: 0,
         mealPlan: 0,
         mealPlanDecision: 0,
-        trainingCompletion: 0
+        trainingCompletion: 0,
+        recalculationJob: 0
       }
     });
 
@@ -166,31 +290,93 @@ describe('meal execution page controller', () => {
     expect(calls).toEqual([]);
   });
 
+  it('retries the discoverable failed job with the server recalculation-job version', async () => {
+    responses.push({
+      success: true,
+      data: {
+        kind: 'meal_plan_recalculation_processed',
+        recalculationJob: publicJob('completed'),
+        candidateMealPlan: null,
+        activatedMealPlan: publicMealPlanVersion(),
+        targetDiffs: []
+      }
+    });
+    responses.push(emptyContextResponse());
+    const page = pageInstance();
+    page.setData({
+      retryJobId: 'job-from-server',
+      latestVersions: {
+        bodyProfile: 1,
+        goal: 1,
+        trainingPlan: 1,
+        inventory: 1,
+        mealPlan: 9,
+        mealPlanDecision: 0,
+        trainingCompletion: 1,
+        recalculationJob: 4
+      }
+    });
+
+    await page.onRetryRecalculation.call(page);
+
+    expect(calls[0]).toMatchObject({
+      action: 'retryPendingRecalculation',
+      payload: {
+        expectedVersion: 4,
+        payload: { recalculationJobId: 'job-from-server' }
+      }
+    });
+    expect(calls.map((request) => request.action)).toEqual([
+      'retryPendingRecalculation',
+      'getCurrentContext'
+    ]);
+  });
+
   it('requires every inventory row to resolve, then saves before generating and refreshes context', async () => {
+    responses.push(foodResolved('测试米饭'));
+    responses.push(foodResolved('测试鸡胸肉'));
     responses.push({
       success: true,
       data: {
-        kind: 'food_name_resolved',
-        resolution: { canonicalNameZh: '测试米饭' }
+        kind: 'inventory_saved',
+        version: {
+          kind: 'inventory_version',
+          id: 'inventory-1',
+          version: 1,
+          createdAt: '2026-08-10T00:00:00.000Z',
+          items: [
+            { foodId: 'food-rice', nutritionSnapshotId: 'snapshot-rice', availableGrams: 5000 },
+            { foodId: 'food-chicken', nutritionSnapshotId: 'snapshot-chicken', availableGrams: 3000 }
+          ]
+        }
       }
     });
     responses.push({
       success: true,
-      data: {
-        kind: 'food_name_resolved',
-        resolution: { canonicalNameZh: '测试鸡胸肉' }
-      }
+      data: { kind: 'weekly_meal_plan_generated', version: publicMealPlanVersion() }
     });
-    responses.push({ success: true, data: { kind: 'inventory_saved' } });
-    responses.push({ success: true, data: { kind: 'weekly_meal_plan_generated' } });
     responses.push(emptyContextResponse());
     const page = pageInstance();
     page.setData({
       businessToday: '2026-08-10',
       generationWeekStart: '2026-08-17',
       inventoryRows: [
-        { name: '测试米饭', availableGrams: '5000', resolutionStatus: 'idle', resolutionMessage: '' },
-        { name: '测试鸡胸肉', availableGrams: '3000', resolutionStatus: 'idle', resolutionMessage: '' }
+        {
+          key: 'row-rice',
+          resolutionToken: 0,
+          name: '测试米饭',
+          availableGrams: '5000',
+          resolutionStatus: 'idle',
+          resolutionMessage: ''
+        },
+        {
+          key: 'row-chicken',
+          resolutionToken: 0,
+          name: '测试鸡胸肉',
+          availableGrams: '3000',
+          resolutionStatus: 'idle',
+          resolutionMessage: ''
+        }
       ],
       latestVersions: {
         bodyProfile: 1,
@@ -199,7 +385,8 @@ describe('meal execution page controller', () => {
         inventory: 0,
         mealPlan: 0,
         mealPlanDecision: 0,
-        trainingCompletion: 0
+        trainingCompletion: 0,
+        recalculationJob: 0
       }
     });
 
@@ -229,12 +416,177 @@ describe('meal execution page controller', () => {
     });
   });
 
+  it('merges concurrent row resolutions by stable key when responses finish in reverse order', async () => {
+    const first = deferred<ReturnType<typeof foodResolved>>();
+    const second = deferred<ReturnType<typeof foodResolved>>();
+    responses.push(first.promise, second.promise);
+    const page = pageInstance();
+    page.setData({
+      inventoryRows: [
+        {
+          key: 'row-rice',
+          resolutionToken: 0,
+          name: '米饭',
+          availableGrams: '500',
+          resolutionStatus: 'idle',
+          resolutionMessage: ''
+        },
+        {
+          key: 'row-chicken',
+          resolutionToken: 0,
+          name: '鸡胸肉',
+          availableGrams: '300',
+          resolutionStatus: 'idle',
+          resolutionMessage: ''
+        }
+      ]
+    });
+
+    const resolvingRice = page.onResolveInventoryRow.call(page, {
+      currentTarget: { dataset: { index: 0 } }
+    });
+    const resolvingChicken = page.onResolveInventoryRow.call(page, {
+      currentTarget: { dataset: { index: 1 } }
+    });
+    second.resolve(foodResolved('测试鸡胸肉'));
+    await resolvingChicken;
+    first.resolve(foodResolved('测试米饭'));
+    await resolvingRice;
+
+    expect(page.data.inventoryRows).toMatchObject([
+      { key: 'row-rice', name: '测试米饭', resolutionStatus: 'resolved' },
+      { key: 'row-chicken', name: '测试鸡胸肉', resolutionStatus: 'resolved' }
+    ]);
+  });
+
+  it('does not resurrect a resolving row after it is removed while another row is added', async () => {
+    const pending = deferred<ReturnType<typeof foodResolved>>();
+    responses.push(pending.promise);
+    const page = pageInstance();
+    page.setData({
+      inventoryRows: [
+        {
+          key: 'row-old',
+          resolutionToken: 0,
+          name: '旧食材',
+          availableGrams: '100',
+          resolutionStatus: 'idle',
+          resolutionMessage: ''
+        },
+        {
+          key: 'row-keep',
+          resolutionToken: 0,
+          name: '保留食材',
+          availableGrams: '200',
+          resolutionStatus: 'idle',
+          resolutionMessage: ''
+        }
+      ]
+    });
+
+    const resolving = page.onResolveInventoryRow.call(page, {
+      currentTarget: { dataset: { index: 0 } }
+    });
+    page.onAddInventoryRow.call(page);
+    page.onRemoveInventoryRow.call(page, { currentTarget: { dataset: { index: 0 } } });
+    pending.resolve(foodResolved('不应复活'));
+    await resolving;
+
+    expect(page.data.inventoryRows).toMatchObject([
+      { key: 'row-keep', name: '保留食材' },
+      { name: '', resolutionStatus: 'idle' }
+    ]);
+    expect(JSON.stringify(page.data.inventoryRows)).not.toContain('不应复活');
+    expect(JSON.stringify(page.data.inventoryRows)).not.toContain('row-old');
+  });
+
+  it('invalidates a pending resolution when the same row name is edited', async () => {
+    const pending = deferred<ReturnType<typeof foodResolved>>();
+    responses.push(pending.promise);
+    const page = pageInstance();
+    page.setData({
+      inventoryRows: [{
+        key: 'row-edit',
+        resolutionToken: 0,
+        name: '旧名称',
+        availableGrams: '100',
+        resolutionStatus: 'idle',
+        resolutionMessage: ''
+      }]
+    });
+
+    const resolving = page.onResolveInventoryRow.call(page, {
+      currentTarget: { dataset: { index: 0 } }
+    });
+    page.onInventoryNameInput.call(page, {
+      detail: { value: '新名称' },
+      currentTarget: { dataset: { index: 0 } }
+    });
+    pending.resolve(foodResolved('旧名称的解析结果'));
+    await resolving;
+
+    expect(page.data.inventoryRows).toMatchObject([{
+      key: 'row-edit',
+      name: '新名称',
+      resolutionStatus: 'idle'
+    }]);
+  });
+
+  it('shows provider row failures as a row re-resolution action', async () => {
+    responses.push({
+      success: false,
+      error: {
+        code: 'provider_unavailable',
+        message: 'provider unavailable'
+      }
+    });
+    const page = pageInstance();
+    page.setData({
+      inventoryRows: [{
+        key: 'row-provider',
+        resolutionToken: 0,
+        name: '测试食材',
+        availableGrams: '100',
+        resolutionStatus: 'idle',
+        resolutionMessage: ''
+      }]
+    });
+
+    await page.onResolveInventoryRow.call(page, {
+      currentTarget: { dataset: { index: 0 } }
+    });
+
+    expect(page.data.inventoryRows).toMatchObject([{
+      key: 'row-provider',
+      resolutionStatus: 'error'
+    }]);
+    expect(JSON.stringify(page.data.inventoryRows)).toContain('重新校验名称');
+    expect(JSON.stringify(page.data.inventoryRows)).not.toContain('重试餐单重算');
+  });
+
   it('uses day/slot metadata plus a server recipe picker and refreshes after lock, edit, and decision', async () => {
-    responses.push({ success: true, data: { kind: 'meal_plan_updated' } });
+    responses.push({ success: true, data: { kind: 'meal_plan_updated', version: publicMealPlanVersion() } });
     responses.push(emptyContextResponse());
-    responses.push({ success: true, data: { kind: 'meal_plan_updated' } });
+    responses.push({ success: true, data: { kind: 'meal_plan_updated', version: publicMealPlanVersion() } });
     responses.push(emptyContextResponse());
-    responses.push({ success: true, data: { kind: 'meal_plan_candidate_decided' } });
+    responses.push({
+      success: true,
+      data: {
+        kind: 'meal_plan_candidate_decided',
+        decision: {
+          kind: 'meal_plan_decision',
+          id: 'decision-1',
+          version: 1,
+          candidateMealPlanVersionId: 'candidate-from-context',
+          previousActiveMealPlanVersionId: 'meal-plan-1',
+          decision: 'overwrite_locked',
+          decidedAt: '2026-08-10T01:00:00.000Z',
+          activatedMealPlanVersionId: 'candidate-from-context'
+        },
+        recalculationJob: publicJob('completed'),
+        activatedMealPlan: publicMealPlanVersion()
+      }
+    });
     responses.push(emptyContextResponse());
     const page = pageInstance();
     page.setData({
@@ -247,6 +599,7 @@ describe('meal execution page controller', () => {
         { recipeTemplateVersionId: 'recipe-server-1', dishNameZh: '番茄鸡蛋' },
         { recipeTemplateVersionId: 'recipe-server-2', dishNameZh: '香菇鸡肉' }
       ],
+      recipeSelectionAvailable: true,
       pendingCandidateId: 'candidate-from-context',
       selectedDecision: 'keep_existing',
       latestVersions: {
@@ -256,7 +609,8 @@ describe('meal execution page controller', () => {
         inventory: 1,
         mealPlan: 2,
         mealPlanDecision: 0,
-        trainingCompletion: 0
+        trainingCompletion: 0,
+        recalculationJob: 0
       }
     });
 
@@ -273,6 +627,7 @@ describe('meal execution page controller', () => {
         { recipeTemplateVersionId: 'recipe-server-1', dishNameZh: '番茄鸡蛋' },
         { recipeTemplateVersionId: 'recipe-server-2', dishNameZh: '香菇鸡肉' }
       ],
+      recipeSelectionAvailable: true,
       pendingCandidateId: 'candidate-from-context',
       selectedDecision: 'keep_existing',
       latestVersions: {
@@ -282,7 +637,8 @@ describe('meal execution page controller', () => {
         inventory: 1,
         mealPlan: 2,
         mealPlanDecision: 0,
-        trainingCompletion: 0
+        trainingCompletion: 0,
+        recalculationJob: 0
       }
     });
     await page.onRecipeChange.call(page, {
@@ -299,7 +655,8 @@ describe('meal execution page controller', () => {
         inventory: 1,
         mealPlan: 2,
         mealPlanDecision: 0,
-        trainingCompletion: 0
+        trainingCompletion: 0,
+        recalculationJob: 0
       }
     });
     page.onCandidateDecisionChange.call(page, { detail: { value: 'overwrite_locked' } });
@@ -332,5 +689,14 @@ describe('meal execution page controller', () => {
     expect(visibleControls).toContain('bindchange="onCompletionDateChange"');
     expect(visibleControls).toContain('bindinput="onCompletionMinutesInput"');
     expect(visibleControls).not.toMatch(/(?:food|recipe|version|candidate|job|user)[-_ ]?id/i);
+    expect(markup).toContain('{{ingredient.displayNameZh}}');
+    expect(markup).toContain('{{ingredient.gramsText}}');
+    expect(markup).toContain('{{item.targetChangeText}}');
+    expect(markup).toContain('{{item.mealChangeText}}');
+    expect(markup).toContain('wx:if="{{recipeAvailabilityMessage}}"');
+    expect(markup).toContain('disabled="{{!day.editable || updatingMeal || !recipeSelectionAvailable}}"');
+    expect(markup).toContain('刷新备选菜品');
+    expect(markup).toContain('wx:if="{{needsRecalculationStatusRefresh}}"');
+    expect(markup).toContain('刷新重算状态');
   });
 });

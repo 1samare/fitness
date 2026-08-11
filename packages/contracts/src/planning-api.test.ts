@@ -361,6 +361,32 @@ describe('planning API contracts', () => {
     })).toThrow();
   });
 
+  it('requires a retryable completion response to publish its failed job', () => {
+    const retryableWithoutJob = {
+      success: true,
+      data: {
+        kind: 'training_completion_recorded',
+        event: {
+          kind: 'training_completion_event',
+          id: 'training-completion-2',
+          version: 2,
+          trainingPlanVersionId: 'training-plan-1',
+          businessDate: '2026-08-19',
+          completedDurationMinutes: 30,
+          occurredAt: '2026-08-19T04:00:00.000Z'
+        },
+        dailyEnergyTargets: [],
+        dailyNutritionTargets: [],
+        recalculationJob: null,
+        candidateMealPlan: null,
+        targetDiffs: [],
+        recalculationStatus: 'failed_retryable'
+      }
+    } as const;
+
+    expect(planningApiResponseSchema.safeParse(retryableWithoutJob).success).toBe(false);
+  });
+
   it('parses public inventory responses and rejects stored user identity', () => {
     const response = {
       success: true,

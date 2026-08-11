@@ -204,7 +204,11 @@ function publicMealPlan(version: MealPlanVersion) {
     readiness: version.readiness,
     days: version.days.map((day) => ({
       ...day,
-      meals: day.meals.map((meal) => ({ ...meal })),
+      meals: day.meals.map((meal) => ({
+        ...meal,
+        dishNameZh: meal.dishNameZh ?? '菜品名称暂不可用',
+        ingredients: (meal.ingredients ?? []).map((ingredient) => ({ ...ingredient }))
+      })),
       ingredientAmounts: day.ingredientAmounts.map((item) => ({ ...item })),
       nutritionTotals: { ...day.nutritionTotals },
       nutritionSourceSnapshotIds: [...day.nutritionSourceSnapshotIds]
@@ -213,13 +217,31 @@ function publicMealPlan(version: MealPlanVersion) {
 }
 
 function publicMealPlanTargetDiff(diff: MealPlanTargetDiff) {
+  if (
+    diff.previousTarget === undefined
+    || diff.proposedTarget === undefined
+    || diff.previousMeals === undefined
+    || diff.proposedMeals === undefined
+  ) {
+    throw new Error('Stored meal-plan target diff is missing display snapshots');
+  }
   return {
     id: diff.id,
     candidateMealPlanVersionId: diff.candidateMealPlanVersionId,
     businessDate: diff.businessDate,
     previousNutritionTargetVersionId: diff.previousNutritionTargetVersionId,
     proposedNutritionTargetVersionId: diff.proposedNutritionTargetVersionId,
-    reason: diff.reason
+    reason: diff.reason,
+    previousTarget: { ...diff.previousTarget, fiberRangeG: { ...diff.previousTarget.fiberRangeG } },
+    proposedTarget: { ...diff.proposedTarget, fiberRangeG: { ...diff.proposedTarget.fiberRangeG } },
+    previousMeals: diff.previousMeals.map((meal) => ({
+      ...meal,
+      ingredients: meal.ingredients.map((ingredient) => ({ ...ingredient }))
+    })),
+    proposedMeals: diff.proposedMeals.map((meal) => ({
+      ...meal,
+      ingredients: meal.ingredients.map((ingredient) => ({ ...ingredient }))
+    }))
   };
 }
 
@@ -280,6 +302,10 @@ function currentContextResponse(context: CurrentPlanningContext) {
       : publicMealPlan(context.pendingMealPlanCandidate),
     pendingMealPlanTargetDiffs: context.pendingMealPlanTargetDiffs.map(publicMealPlanTargetDiff),
     selectableRecipes: context.selectableRecipes.map((recipe) => ({ ...recipe })),
+    selectableRecipesStatus: context.selectableRecipesStatus,
+    retryableRecalculationJob: context.retryableRecalculationJob === null
+      ? null
+      : publicRecalculationJob(context.retryableRecalculationJob),
     latestVersions: context.latestVersions
   };
 }

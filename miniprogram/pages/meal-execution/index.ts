@@ -25,6 +25,8 @@ type SuccessData = Extract<PlanningApiResponse, { success: true }>['data'];
 type LatestVersions = CurrentContext['latestVersions'];
 
 interface InventoryRow extends InventoryRowInput {
+  readonly key: string;
+  readonly resolutionToken: number;
   readonly resolutionStatus: 'idle' | 'resolving' | 'resolved' | 'error';
   readonly resolutionMessage: string;
 }
@@ -39,12 +41,15 @@ interface PageData {
   generationWeekStart: string;
   mealDays: MealDayPageDisplay[];
   selectableRecipes: SelectableRecipeInput[];
+  recipeSelectionAvailable: boolean;
+  recipeAvailabilityMessage: string;
   staleBanner: string;
-  pendingDiffs: readonly { readonly businessDate: string; readonly reasonText: string }[];
+  pendingDiffs: ReturnType<typeof buildMealExecutionViewModel>['pendingDiffs'];
   decisionOptions: readonly { readonly value: CandidateDecision; readonly label: string }[];
   selectedDecision: CandidateDecision;
   pendingCandidateId: string;
   retryJobId: string;
+  needsRecalculationStatusRefresh: boolean;
   completionDate: string;
   completedDurationMinutes: string;
   businessToday: string;
@@ -62,6 +67,7 @@ interface PageData {
   formError: string;
   factMessage: string;
   mealMessage: string;
+  generationMessage: string;
 }
 
 interface TextValueEvent { readonly detail: { readonly value: string } }
@@ -102,8 +108,16 @@ const emptyVersions: LatestVersions = {
   inventory: 0,
   mealPlan: 0,
   mealPlanDecision: 0,
-  trainingCompletion: 0
+  trainingCompletion: 0,
+  recalculationJob: 0
 };
+
+let inventoryRowSequence = 0;
+
+function nextInventoryRowKey(): string {
+  inventoryRowSequence += 1;
+  return `inventory-row-${String(inventoryRowSequence)}`;
+}
 
 function shanghaiBusinessDate(now = new Date()): string {
   const utcEight = new Date(now.getTime() + 8 * 60 * 60 * 1000);
@@ -156,6 +170,8 @@ function successKind<TKind extends SuccessData['kind']>(
 Page<PageData, PageActions>({
   data: {
     inventoryRows: [{
+      key: nextInventoryRowKey(),
+      resolutionToken: 0,
       name: '',
       availableGrams: '',
       resolutionStatus: 'idle',
@@ -165,12 +181,15 @@ Page<PageData, PageActions>({
     generationWeekStart: '',
     mealDays: [],
     selectableRecipes: [],
+    recipeSelectionAvailable: false,
+    recipeAvailabilityMessage: '',
     staleBanner: '',
     pendingDiffs: [],
     decisionOptions: [],
     selectedDecision: 'keep_existing',
     pendingCandidateId: '',
     retryJobId: '',
+    needsRecalculationStatusRefresh: false,
     completionDate: shanghaiBusinessDate(),
     completedDurationMinutes: '',
     businessToday: shanghaiBusinessDate(),
@@ -187,7 +206,8 @@ Page<PageData, PageActions>({
     actionMessage: '',
     formError: '',
     factMessage: '',
-    mealMessage: ''
+    mealMessage: '',
+    generationMessage: ''
   },
 
   async onLoad() {
@@ -216,10 +236,16 @@ Page<PageData, PageActions>({
           editable: day.businessDate > this.data.businessToday
         })),
         selectableRecipes: context.selectableRecipes.map((recipe) => ({ ...recipe })),
+        recipeSelectionAvailable: viewModel.recipeSelectionAvailable,
+        recipeAvailabilityMessage: viewModel.recipeAvailabilityMessage,
         staleBanner: viewModel.staleBanner,
         pendingDiffs: viewModel.pendingDiffs,
         decisionOptions: viewModel.decisionOptions,
-        pendingCandidateId: context.pendingMealPlanCandidate?.id ?? ''
+        pendingCandidateId: context.pendingMealPlanCandidate?.id ?? '',
+        retryJobId: context.retryableRecalculationJob?.id ?? '',
+        needsRecalculationStatusRefresh: context.retryableRecalculationJob === null
+          ? this.data.needsRecalculationStatusRefresh
+          : false
       });
     } catch (error: unknown) {
       this.setData({
@@ -238,6 +264,7 @@ Page<PageData, PageActions>({
     const inventoryRows = replaceRow(this.data.inventoryRows, index, (row) => ({
       ...row,
       name: event.detail.value,
+      resolutionToken: row.resolutionToken + 1,
       resolutionStatus: 'idle',
       resolutionMessage: '名称变化后需要重新校验。'
     }));
@@ -262,6 +289,8 @@ Page<PageData, PageActions>({
     }
     this.setData({
       inventoryRows: [...this.data.inventoryRows, {
+        key: nextInventoryRowKey(),
+        resolutionToken: 0,
         name: '',
         availableGrams: '',
         resolutionStatus: 'idle',
@@ -284,8 +313,12 @@ Page<PageData, PageActions>({
     if (index === undefined) return;
     const selected = this.data.inventoryRows[index];
     if (selected === undefined || selected.resolutionStatus === 'resolving') return;
-    let rows = replaceRow(this.data.inventoryRows, index, (row) => ({
+    const key = selected.key;
+    const requestToken = selected.resolutionToken + 1;
+    const rows = replaceRow(this.data.inventoryRows, index, (row) => ({
       ...row,
+      key,
+      resolutionToken: requestToken,
       resolutionStatus: 'resolving',
       resolutionMessage: '正在校验食材名称…'
     }));
@@ -293,31 +326,49 @@ Page<PageData, PageActions>({
     try {
       const response = await planningApiClient.call(buildResolveFoodNameRequest(selected.name));
       if (!successKind(response, 'food_name_resolved') || response.data.resolution === null) {
-        rows = replaceRow(rows, index, (row) => ({
-          ...row,
-          resolutionStatus: 'error',
-          resolutionMessage: response.success
-            ? '未找到审核食材，请换用更常见的标准名称。'
-            : mealPlanningErrorMessage(response.error.code)
-        }));
+        const resolutionMessage = response.success
+          ? '未找到审核食材，请换用更常见的标准名称后重新校验名称。'
+          : response.error.code === 'provider_unavailable'
+            ? '营养数据暂时不可用，请稍后重新校验名称。'
+            : `${mealPlanningErrorMessage(response.error.code)} 请重新校验名称。`;
+        this.setData({
+          inventoryRows: this.data.inventoryRows.map((row) => (
+            row.key === key && row.resolutionToken === requestToken
+              ? { ...row, resolutionStatus: 'error', resolutionMessage }
+              : row
+          ))
+        });
       } else {
-        rows = replaceRow(rows, index, (row) => ({
-          ...row,
-          name: response.data.resolution?.canonicalNameZh ?? row.name,
-          resolutionStatus: 'resolved',
-          resolutionMessage: `已识别为“${response.data.resolution?.canonicalNameZh ?? row.name}”。`
-        }));
+        const canonicalNameZh = response.data.resolution.canonicalNameZh;
+        this.setData({
+          inventoryRows: this.data.inventoryRows.map((row) => (
+            row.key === key && row.resolutionToken === requestToken
+              ? {
+                  ...row,
+                  name: canonicalNameZh,
+                  resolutionStatus: 'resolved',
+                  resolutionMessage: `已识别为“${canonicalNameZh}”。`
+                }
+              : row
+          ))
+        });
       }
     } catch (error: unknown) {
-      rows = replaceRow(rows, index, (row) => ({
-        ...row,
-        resolutionStatus: 'error',
-        resolutionMessage: error instanceof Error
-          ? `${error.message} 请稍后重试名称校验。`
-          : '名称校验失败，请稍后重试。'
-      }));
+      this.setData({
+        inventoryRows: this.data.inventoryRows.map((row) => (
+          row.key === key && row.resolutionToken === requestToken
+            ? {
+                ...row,
+                resolutionStatus: 'error',
+                resolutionMessage: error instanceof Error
+                  ? `${error.message} 请稍后重新校验名称。`
+                  : '名称校验失败，请稍后重新校验名称。'
+              }
+            : row
+        ))
+      });
     }
-    this.setData({ inventoryRows: rows, canSaveInventory: rowsResolved(rows) });
+    this.setData({ canSaveInventory: rowsResolved(this.data.inventoryRows) });
   },
 
   onGenerationWeekChange(event) {
@@ -334,7 +385,7 @@ Page<PageData, PageActions>({
     this.setData({
       savingInventory: true,
       actionMessage: '',
-      mealMessage: '',
+      generationMessage: '',
       formError: ''
     });
     try {
@@ -360,15 +411,15 @@ Page<PageData, PageActions>({
         idempotencyKey: idempotencyKey('meal-generate-ui')
       }));
       if (!successKind(mealResponse, 'weekly_meal_plan_generated')) {
-        this.setData({ mealMessage: responseError(mealResponse) });
+        this.setData({ generationMessage: `库存已保存，但餐单生成未完成。${responseError(mealResponse)}` });
         return;
       }
-      this.setData({ mealMessage: '一周餐单已生成，所有营养数值均为估算。' });
+      this.setData({ generationMessage: '一周餐单已生成，所有营养数值均为估算。' });
     } catch (error: unknown) {
       this.setData({
-        mealMessage: error instanceof Error
-          ? `${error.message} 已保存的内容不会丢失，请稍后重试。`
-          : '操作未完成，已保存的内容不会丢失，请稍后重试。'
+        generationMessage: inventorySaved
+          ? `库存已保存，但餐单生成未完成。${error instanceof Error ? error.message : '请稍后重试。'}`
+          : `库存未保存。${error instanceof Error ? error.message : '请检查网络后重试。'}`
       });
     } finally {
       this.setData({ savingInventory: false, generatingMeal: false });
@@ -404,7 +455,7 @@ Page<PageData, PageActions>({
   },
 
   async onRecipeChange(event) {
-    if (this.data.updatingMeal) return;
+    if (this.data.updatingMeal || !this.data.recipeSelectionAvailable) return;
     const dayIndex = eventIndex(event.currentTarget.dataset.dayIndex, this.data.mealDays.length);
     const day = dayIndex === undefined ? undefined : this.data.mealDays[dayIndex];
     const mealIndex = day === undefined
@@ -501,7 +552,8 @@ Page<PageData, PageActions>({
       this.setData({
         factMessage: feedback.factMessage,
         mealMessage: feedback.mealMessage,
-        retryJobId: feedback.retryJobId
+        retryJobId: feedback.retryJobId,
+        needsRecalculationStatusRefresh: feedback.needsStatusRefresh
       });
       if (successKind(response, 'training_completion_recorded')) await this.refreshContext();
     } catch (error: unknown) {
@@ -521,14 +573,14 @@ Page<PageData, PageActions>({
     try {
       const response = await planningApiClient.call(buildRetryRequest({
         recalculationJobId: this.data.retryJobId,
-        expectedVersion: this.data.latestVersions.mealPlan,
+        expectedVersion: this.data.latestVersions.recalculationJob,
         idempotencyKey: idempotencyKey('meal-retry-ui')
       }));
       if (!successKind(response, 'meal_plan_recalculation_processed')) {
         this.setData({ mealMessage: responseError(response) });
         return;
       }
-      this.setData({ retryJobId: '', mealMessage: response.data.targetDiffs.length > 0
+      this.setData({ retryJobId: '', needsRecalculationStatusRefresh: false, mealMessage: response.data.targetDiffs.length > 0
         ? '餐单重算已完成，请处理锁定日差异。'
         : '餐单重算已完成。' });
       await this.refreshContext();

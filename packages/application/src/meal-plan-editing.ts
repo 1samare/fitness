@@ -15,6 +15,7 @@ import {
 } from '@fitness/calculation';
 import type {
   BodyProfileVersion,
+  CurrentPlanningContext,
   DailyMenuCatalogVersion,
   DailyMenuTemplateVersion,
   DailyNutritionTargetVersion,
@@ -551,7 +552,22 @@ export function selectManualMealReplacement(
       dailyNutritionTargetVersionId: input.target.id,
       locked: true,
       manuallyModified: true,
-      meals,
+      meals: meals.map((meal) => {
+        const recipe = recipesById.get(meal.recipeTemplateVersionId);
+        if (recipe === undefined) throw new Error('Validated recipe is missing');
+        return {
+          ...meal,
+          dishNameZh: recipe.dishNameZh,
+          ingredients: recipe.ingredients.map((ingredient) => {
+            const snapshot = snapshotsById.get(ingredient.nutritionSnapshotId);
+            if (snapshot === undefined) throw new Error('Validated nutrition snapshot is missing');
+            return {
+              displayNameZh: snapshot.canonicalNameZh,
+              grams: roundHalfUp(ingredient.grams * meal.servingMultiplier, 1)
+            };
+          })
+        };
+      }),
       ingredientAmounts,
       nutritionTotals: evaluation.totals,
       nutritionSourceSnapshotIds: [...evaluation.sourceSnapshotIds].sort()
@@ -735,15 +751,18 @@ export function createMealPlanEditingService(
     async getCurrentContext(userId: string) {
       const context = await base.getCurrentContext(userId);
       let selectableRecipes: readonly SelectableRecipeOption[] = [];
+      let selectableRecipesStatus: CurrentPlanningContext['selectableRecipesStatus'] = 'no_options';
       try {
         selectableRecipes = (await loadProviderSnapshot({
           providers,
           currentPlan: context.mealPlan
         })).selectableRecipes;
+        selectableRecipesStatus = selectableRecipes.length > 0 ? 'available' : 'no_options';
       } catch {
         selectableRecipes = [];
+        selectableRecipesStatus = 'provider_unavailable';
       }
-      return { ...context, selectableRecipes };
+      return { ...context, selectableRecipes, selectableRecipesStatus };
     },
 
     async setMealPlanDayLock(

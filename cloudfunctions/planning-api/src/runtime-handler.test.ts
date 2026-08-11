@@ -133,7 +133,8 @@ describe('runtime planning handler', () => {
         inventory: 0,
         mealPlan: 0,
         mealPlanDecision: 0,
-        trainingCompletion: 0
+        trainingCompletion: 0,
+        recalculationJob: 0
       });
       expect(current.data.dailyEnergyTargets).toHaveLength(7);
     }

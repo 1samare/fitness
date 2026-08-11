@@ -30,10 +30,43 @@ function contextFixture(): CurrentContext {
       locked: index === 1,
       manuallyModified: index === 2,
       meals: [
-        { slot: 'breakfast' as const, recipeTemplateVersionId: 'recipe-breakfast', servingMultiplier: 1 },
-        { slot: 'lunch' as const, recipeTemplateVersionId: 'recipe-lunch', servingMultiplier: 1 },
-        { slot: 'dinner' as const, recipeTemplateVersionId: 'recipe-dinner', servingMultiplier: 1 },
-        { slot: 'snack' as const, recipeTemplateVersionId: 'recipe-snack', servingMultiplier: 1 }
+        {
+          slot: 'breakfast' as const,
+          recipeTemplateVersionId: 'recipe-breakfast',
+          servingMultiplier: 1,
+          dishNameZh: '测试早餐',
+          ingredients: [
+            { displayNameZh: '测试米饭', grams: 100 },
+            { displayNameZh: '测试鸡蛋', grams: 50 }
+          ]
+        },
+        {
+          slot: 'lunch' as const,
+          recipeTemplateVersionId: 'recipe-lunch',
+          servingMultiplier: 1,
+          dishNameZh: '测试午餐',
+          ingredients: [
+            { displayNameZh: '测试鸡胸肉', grams: 120 },
+            { displayNameZh: '测试蔬菜', grams: 180 }
+          ]
+        },
+        {
+          slot: 'dinner' as const,
+          recipeTemplateVersionId: 'recipe-dinner',
+          servingMultiplier: 1,
+          dishNameZh: '测试晚餐',
+          ingredients: [
+            { displayNameZh: '测试米饭', grams: 100 },
+            { displayNameZh: '测试鸡胸肉', grams: 100 }
+          ]
+        },
+        {
+          slot: 'snack' as const,
+          recipeTemplateVersionId: 'recipe-snack',
+          servingMultiplier: 1,
+          dishNameZh: '测试加餐',
+          ingredients: [{ displayNameZh: '测试水果', grams: 60 }]
+        }
       ],
       ingredientAmounts: [
         { foodId: 'internal-rice', grams: 200 },
@@ -100,9 +133,41 @@ function contextFixture(): CurrentContext {
       businessDate: '2026-08-18',
       previousNutritionTargetVersionId: 'target-old',
       proposedNutritionTargetVersionId: 'target-new',
-      reason: 'locked_or_manually_modified'
+      reason: 'locked_or_manually_modified',
+      previousTarget: {
+        estimatedEnergyKcal: 1800,
+        proteinG: 90,
+        fatG: 50,
+        carbohydrateG: 240,
+        fiberRangeG: { minInclusive: 25, maxInclusive: 30 }
+      },
+      proposedTarget: {
+        estimatedEnergyKcal: 1900,
+        proteinG: 95,
+        fatG: 52,
+        carbohydrateG: 250,
+        fiberRangeG: { minInclusive: 25, maxInclusive: 30 }
+      },
+      previousMeals: [{
+        slot: 'breakfast' as const,
+        dishNameZh: '测试早餐',
+        ingredients: [
+          { displayNameZh: '测试米饭', grams: 100 },
+          { displayNameZh: '测试鸡蛋', grams: 50 }
+        ]
+      }],
+      proposedMeals: [{
+        slot: 'breakfast' as const,
+        dishNameZh: '测试早餐',
+        ingredients: [
+          { displayNameZh: '测试米饭', grams: 100 },
+          { displayNameZh: '测试鸡蛋', grams: 50 }
+        ]
+      }]
     }],
     selectableRecipes: [...recipes],
+    selectableRecipesStatus: 'available',
+    retryableRecalculationJob: null,
     latestVersions: {
       bodyProfile: 1,
       goal: 1,
@@ -110,7 +175,8 @@ function contextFixture(): CurrentContext {
       inventory: 1,
       mealPlan: 4,
       mealPlanDecision: 0,
-      trainingCompletion: 0
+      trainingCompletion: 0,
+      recalculationJob: 0
     }
   };
 }
@@ -126,8 +192,24 @@ describe('meal execution view model', () => {
       ingredientSummaryText: '4 种食材 · 合计 560 克',
       estimatedNutritionText: '估算 1800 千卡 · 蛋白质 90 克 · 脂肪 50 克 · 碳水 240 克',
       meals: [
-        { slot: 'breakfast', slotLabel: '早餐', dishNameZh: '测试早餐' },
-        { slot: 'lunch', slotLabel: '午餐', dishNameZh: '测试午餐' },
+        {
+          slot: 'breakfast',
+          slotLabel: '早餐',
+          dishNameZh: '测试早餐',
+          ingredients: [
+            { displayNameZh: '测试米饭', gramsText: '估算 100 克' },
+            { displayNameZh: '测试鸡蛋', gramsText: '估算 50 克' }
+          ]
+        },
+        {
+          slot: 'lunch',
+          slotLabel: '午餐',
+          dishNameZh: '测试午餐',
+          ingredients: [
+            { displayNameZh: '测试鸡胸肉', gramsText: '估算 120 克' },
+            { displayNameZh: '测试蔬菜', gramsText: '估算 180 克' }
+          ]
+        },
         { slot: 'dinner', slotLabel: '晚餐', dishNameZh: '测试晚餐' },
         { slot: 'snack', slotLabel: '加餐', dishNameZh: '测试加餐' }
       ]
@@ -143,7 +225,9 @@ describe('meal execution view model', () => {
     expect(viewModel.staleBanner).toContain('训练或营养目标已变化');
     expect(viewModel.pendingDiffs).toEqual([{
       businessDate: '2026-08-18',
-      reasonText: '该日已锁定或手动修改，新餐单不会静默覆盖。'
+      reasonText: '该日已锁定或手动修改，新餐单不会静默覆盖。',
+      targetChangeText: '估算目标：能量 1800→1900 千卡（+100）；蛋白质 90→95 克（+5）；脂肪 50→52 克（+2）；碳水 240→250 克（+10）；纤维 25–30→25–30 克',
+      mealChangeText: '菜品与克数保持不变：早餐 测试早餐（测试米饭 100 克、测试鸡蛋 50 克）'
     }]);
     expect(viewModel.decisionOptions).toEqual([
       { value: 'keep_existing', label: '保留当前锁定餐单' },
@@ -156,6 +240,20 @@ describe('meal execution view model', () => {
     expect(mealPlanningErrorMessage('provider_unavailable')).toContain('稍后点击“重试餐单重算”');
     expect(mealPlanningErrorMessage('nutrition_constraints_infeasible')).toContain('补充可用食材后重新生成');
     expect(mealPlanningErrorMessage('nutrition_constraints_infeasible')).toContain('过敏原不会被放宽');
+  });
+
+  it('keeps persisted dish names and explains how to recover when recipes are unavailable', () => {
+    const context = contextFixture();
+    const viewModel = buildMealExecutionViewModel({
+      ...context,
+      selectableRecipes: [],
+      selectableRecipesStatus: 'provider_unavailable'
+    });
+
+    expect(viewModel.days[0]?.meals[0]?.dishNameZh).toBe('测试早餐');
+    expect(viewModel.recipeSelectionAvailable).toBe(false);
+    expect(viewModel.recipeAvailabilityMessage).toContain('备选菜品暂不可用');
+    expect(viewModel.recipeAvailabilityMessage).toContain('刷新');
   });
 
   it('keeps fact success separate when meal recalculation can be retried', () => {
@@ -196,7 +294,39 @@ describe('meal execution view model', () => {
     expect(feedback).toEqual({
       factMessage: '训练完成情况已保存。',
       mealMessage: '餐单重算暂未完成，训练事实不受影响。请稍后重试。',
-      retryJobId: 'retry-job-private'
+      retryJobId: 'retry-job-private',
+      needsStatusRefresh: false
+    });
+  });
+
+  it('offers a refresh-status recovery when a retryable response has no job identifier', () => {
+    const feedback = buildCompletionFeedback({
+      success: true,
+      data: {
+        kind: 'training_completion_recorded',
+        event: {
+          kind: 'training_completion_event',
+          id: 'completion-2',
+          version: 2,
+          trainingPlanVersionId: 'training-1',
+          businessDate: '2026-08-20',
+          completedDurationMinutes: 20,
+          occurredAt: '2026-08-20T04:00:00.000Z'
+        },
+        dailyEnergyTargets: [],
+        dailyNutritionTargets: [],
+        recalculationJob: null,
+        candidateMealPlan: null,
+        targetDiffs: [],
+        recalculationStatus: 'failed_retryable'
+      }
+    });
+
+    expect(feedback).toEqual({
+      factMessage: '训练完成情况已保存。',
+      mealMessage: '餐单重算暂未完成，训练事实不受影响。请刷新状态后重试。',
+      retryJobId: '',
+      needsStatusRefresh: true
     });
   });
 });

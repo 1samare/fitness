@@ -45,6 +45,28 @@ export interface MealAssignment {
   readonly slot: MealSlot;
   readonly recipeTemplateVersionId: string;
   readonly servingMultiplier: number;
+  /** Reviewed display snapshot persisted with the plan; never derived from an internal id. */
+  readonly dishNameZh?: string | undefined;
+  readonly ingredients?: readonly MealIngredientDisplay[] | undefined;
+}
+
+export interface MealIngredientDisplay {
+  readonly displayNameZh: string;
+  readonly grams: number;
+}
+
+export interface MealDisplaySnapshot {
+  readonly slot: MealSlot;
+  readonly dishNameZh: string;
+  readonly ingredients: readonly MealIngredientDisplay[];
+}
+
+export interface MealTargetDisplaySnapshot {
+  readonly estimatedEnergyKcal: number;
+  readonly proteinG: number;
+  readonly fatG: number;
+  readonly carbohydrateG: number;
+  readonly fiberRangeG: { readonly minInclusive: number; readonly maxInclusive: number };
 }
 
 export interface MealPlanDay {
@@ -85,6 +107,10 @@ export interface MealPlanTargetDiff {
   readonly previousNutritionTargetVersionId: string;
   readonly proposedNutritionTargetVersionId: string;
   readonly reason: 'locked_or_manually_modified';
+  readonly previousTarget?: MealTargetDisplaySnapshot | undefined;
+  readonly proposedTarget?: MealTargetDisplaySnapshot | undefined;
+  readonly previousMeals?: readonly MealDisplaySnapshot[] | undefined;
+  readonly proposedMeals?: readonly MealDisplaySnapshot[] | undefined;
 }
 
 export interface MealPlanDecision {

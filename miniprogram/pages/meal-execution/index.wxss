@@ -90,6 +90,8 @@ page {
 .meal-row__label { display: flex; min-width: 0; flex-direction: column; gap: 6rpx; }
 .meal-row__slot { color: var(--color-primary); font-size: 23rpx; font-weight: 700; }
 .meal-row__dish { color: var(--color-text); font-size: 27rpx; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.meal-row__ingredients { display: flex; min-width: 0; flex-direction: column; gap: 4rpx; }
+.meal-row__ingredient { color: var(--color-text-muted); font-size: 24rpx; line-height: 1.5; overflow-wrap: anywhere; }
 
 .diff-row { display: flex; flex-direction: column; gap: 6rpx; margin-bottom: 16rpx; padding: 20rpx; border-radius: 16rpx; color: var(--color-warning); background: var(--color-warning-surface); font-size: 24rpx; line-height: 1.5; }
 .diff-row__date { font-weight: 700; font-variant-numeric: tabular-nums; }

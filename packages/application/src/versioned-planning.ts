@@ -809,6 +809,9 @@ export function createVersionedPlanningService(
         || mealPlanTargetIds.length !== currentTargetIds.length
         || mealPlanTargetIds.some((id, index) => id !== currentTargetIds[index])
       );
+      const retryableRecalculationJob = [...state.recalculationJobs]
+        .reverse()
+        .find((job) => job.status === 'failed_retryable') ?? null;
       return {
         bodyProfile,
         goal,
@@ -825,6 +828,8 @@ export function createVersionedPlanningService(
               diff.candidateMealPlanVersionId === pendingMealPlanCandidate.id
             )),
         selectableRecipes: [],
+        selectableRecipesStatus: 'no_options',
+        retryableRecalculationJob,
         latestVersions: {
           bodyProfile: state.bodyProfiles.length,
           goal: state.goals.length,
@@ -832,7 +837,8 @@ export function createVersionedPlanningService(
           inventory: state.inventories.length,
           mealPlan: state.mealPlans.length,
           mealPlanDecision: state.mealPlanDecisions.length,
-          trainingCompletion: state.trainingCompletionEvents.length
+          trainingCompletion: state.trainingCompletionEvents.length,
+          recalculationJob: state.recalculationJobs.length
         }
       };
     }

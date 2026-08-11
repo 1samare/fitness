@@ -129,7 +129,8 @@ const latestPlanningVersionsSchema = setupPlanningVersionsSchema.extend({
   inventory: z.number().int().nonnegative(),
   mealPlan: z.number().int().nonnegative(),
   mealPlanDecision: z.number().int().nonnegative(),
-  trainingCompletion: z.number().int().nonnegative()
+  trainingCompletion: z.number().int().nonnegative(),
+  recalculationJob: z.number().int().nonnegative()
 }).strict();
 
 export const planningApiRequestSchema = z.discriminatedUnion('action', [
@@ -355,10 +356,22 @@ const storedInventoryVersionSchema = versionMetadataSchema.extend({
   }).strict())
 }).strict();
 
+const mealIngredientDisplaySchema = z.object({
+  displayNameZh: z.string().trim().min(1).max(120),
+  grams: z.number().positive()
+}).strict();
+
 const mealAssignmentSchema = z.object({
   slot: z.enum(['breakfast', 'lunch', 'dinner', 'snack']),
   recipeTemplateVersionId: z.string().min(1),
-  servingMultiplier: z.number().min(0.5).max(1.5)
+  servingMultiplier: z.number().min(0.5).max(1.5),
+  dishNameZh: z.string().trim().min(1).max(200).optional(),
+  ingredients: z.array(mealIngredientDisplaySchema).min(1).optional()
+}).strict();
+
+const publicMealAssignmentSchema = mealAssignmentSchema.extend({
+  dishNameZh: z.string().trim().min(1).max(200),
+  ingredients: z.array(mealIngredientDisplaySchema).min(1)
 }).strict();
 
 const mealPlanDaySchema = z.object({
@@ -391,6 +404,27 @@ const storedMealPlanVersionSchema = versionMetadataSchema.extend({
   days: z.array(mealPlanDaySchema).length(7)
 }).strict();
 
+const publicMealPlanDaySchema = mealPlanDaySchema.extend({
+  meals: z.array(publicMealAssignmentSchema).min(1).max(4)
+}).strict();
+
+const mealTargetDisplaySnapshotSchema = z.object({
+  estimatedEnergyKcal: z.number().positive(),
+  proteinG: z.number().positive(),
+  fatG: z.number().positive(),
+  carbohydrateG: z.number().positive(),
+  fiberRangeG: z.object({
+    minInclusive: z.number().nonnegative(),
+    maxInclusive: z.number().positive()
+  }).strict()
+}).strict();
+
+const mealDisplaySnapshotSchema = z.object({
+  slot: z.enum(['breakfast', 'lunch', 'dinner', 'snack']),
+  dishNameZh: z.string().trim().min(1).max(200),
+  ingredients: z.array(mealIngredientDisplaySchema).min(1)
+}).strict();
+
 const storedMealPlanTargetDiffSchema = z.object({
   id: z.string().min(1),
   userId: z.string().min(1),
@@ -398,12 +432,29 @@ const storedMealPlanTargetDiffSchema = z.object({
   businessDate: businessDateSchema,
   previousNutritionTargetVersionId: z.string().min(1),
   proposedNutritionTargetVersionId: z.string().min(1),
-  reason: z.literal('locked_or_manually_modified')
+  reason: z.literal('locked_or_manually_modified'),
+  previousTarget: mealTargetDisplaySnapshotSchema.optional(),
+  proposedTarget: mealTargetDisplaySnapshotSchema.optional(),
+  previousMeals: z.array(mealDisplaySnapshotSchema).min(1).max(4).optional(),
+  proposedMeals: z.array(mealDisplaySnapshotSchema).min(1).max(4).optional()
 }).strict();
 
 const inventoryVersionSchema = storedInventoryVersionSchema.omit({ userId: true }).strict();
-const mealPlanVersionSchema = storedMealPlanVersionSchema.omit({ userId: true }).strict();
-const mealPlanTargetDiffSchema = storedMealPlanTargetDiffSchema.omit({ userId: true }).strict();
+const mealPlanVersionSchema = storedMealPlanVersionSchema.omit({ userId: true, days: true }).extend({
+  days: z.array(publicMealPlanDaySchema).length(7)
+}).strict();
+const mealPlanTargetDiffSchema = storedMealPlanTargetDiffSchema.omit({
+  userId: true,
+  previousTarget: true,
+  proposedTarget: true,
+  previousMeals: true,
+  proposedMeals: true
+}).extend({
+  previousTarget: mealTargetDisplaySnapshotSchema,
+  proposedTarget: mealTargetDisplaySnapshotSchema,
+  previousMeals: z.array(mealDisplaySnapshotSchema).min(1).max(4),
+  proposedMeals: z.array(mealDisplaySnapshotSchema).min(1).max(4)
+}).strict();
 
 const foodResolutionSchema = z.object({
   foodId: z.string().min(1),
@@ -436,6 +487,22 @@ const selectableRecipeOptionSchema = z.object({
   dishNameZh: z.string().trim().min(1).max(200)
 }).strict();
 
+const currentContextRecalculationJobSchema = z.object({
+  kind: z.literal('recalculation_job'),
+  id: z.string().min(1),
+  triggerEventId: z.string().min(1),
+  triggerType: z.enum(['training_plan_changed', 'training_completion']),
+  affectedDates: z.array(businessDateSchema).max(7),
+  status: z.enum(['pending', 'completed', 'failed_retryable']),
+  createdAt: z.iso.datetime(),
+  completedAt: z.iso.datetime().nullable(),
+  candidateMealPlanVersionId: z.string().min(1).nullable(),
+  activatedMealPlanVersionId: z.string().min(1).nullable(),
+  failureCode: z.enum(['provider_unavailable', 'nutrition_constraints_infeasible']).nullable()
+}).strict().refine((job) => job.status === 'failed_retryable' && job.failureCode !== null, {
+  message: 'context retryable job must be failed_retryable'
+});
+
 const currentContextSchema = z.object({
   kind: z.literal('current_context'),
   bodyProfile: bodyProfileVersionSchema.nullable(),
@@ -449,6 +516,8 @@ const currentContextSchema = z.object({
   pendingMealPlanCandidate: mealPlanVersionSchema.nullable(),
   pendingMealPlanTargetDiffs: z.array(mealPlanTargetDiffSchema),
   selectableRecipes: z.array(selectableRecipeOptionSchema),
+  selectableRecipesStatus: z.enum(['available', 'no_options', 'provider_unavailable']),
+  retryableRecalculationJob: currentContextRecalculationJobSchema.nullable(),
   latestVersions: latestPlanningVersionsSchema
 }).strict();
 
@@ -509,7 +578,18 @@ const trainingCompletionRecordedSchema = z.object({
     'pending_confirmation',
     'failed_retryable'
   ])
-}).strict();
+}).strict().superRefine((value, context) => {
+  if (
+    value.recalculationStatus === 'failed_retryable'
+    && (value.recalculationJob === null || value.recalculationJob.status !== 'failed_retryable')
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['recalculationJob'],
+      message: 'failed_retryable requires a failed recalculation job'
+    });
+  }
+});
 
 const mealPlanCandidateDecidedSchema = z.object({
   kind: z.literal('meal_plan_candidate_decided'),

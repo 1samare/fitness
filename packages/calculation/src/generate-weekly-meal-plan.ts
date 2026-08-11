@@ -400,11 +400,24 @@ function expandCandidate(input: {
         dailyMenuTemplateVersionId: input.menu.id,
         locked: false,
         manuallyModified: false,
-        meals: orderedMeals.map((meal) => ({
-          slot: meal.slot,
-          recipeTemplateVersionId: meal.recipeTemplateVersionId,
-          servingMultiplier: input.multiplier
-        })),
+        meals: orderedMeals.map((meal) => {
+          const recipe = input.recipesById.get(meal.recipeTemplateVersionId);
+          if (recipe === undefined) throw new Error('Validated recipe is missing');
+          return {
+            slot: meal.slot,
+            recipeTemplateVersionId: meal.recipeTemplateVersionId,
+            servingMultiplier: input.multiplier,
+            dishNameZh: recipe.dishNameZh,
+            ingredients: recipe.ingredients.map((ingredient) => {
+              const snapshot = input.snapshotsById.get(ingredient.nutritionSnapshotId);
+              if (snapshot === undefined) throw new Error('Validated nutrition snapshot is missing');
+              return {
+                displayNameZh: snapshot.canonicalNameZh,
+                grams: roundHalfUp(ingredient.grams * input.multiplier, 1)
+              };
+            })
+          };
+        }),
         ingredientAmounts,
         nutritionTotals: evaluation.totals,
         nutritionSourceSnapshotIds: [...evaluation.sourceSnapshotIds].sort()

@@ -105,6 +105,7 @@ export interface LatestPlanningVersions {
   readonly mealPlan: number;
   readonly mealPlanDecision: number;
   readonly trainingCompletion: number;
+  readonly recalculationJob: number;
 }
 
 export interface CompletePlanningSetupCommand {
@@ -211,6 +212,8 @@ export interface CurrentPlanningContext {
     readonly recipeTemplateVersionId: string;
     readonly dishNameZh: string;
   }[];
+  readonly selectableRecipesStatus: 'available' | 'no_options' | 'provider_unavailable';
+  readonly retryableRecalculationJob: RecalculationJob | null;
   readonly latestVersions: LatestPlanningVersions;
 }
 

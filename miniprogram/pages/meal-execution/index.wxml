@@ -8,13 +8,13 @@
   <view wx:if="{{loadingContext}}" class="notice notice--neutral" aria-live="polite">正在读取当前规划…</view>
   <view wx:if="{{contextMessage}}" class="notice notice--error" aria-role="alert" aria-live="assertive">
     <text>{{contextMessage}}</text>
-    <button class="button button--secondary" disabled="{{loadingContext}}" bindtap="refreshContext">重新读取</button>
+    <button class="button button--secondary" loading="{{loadingContext}}" disabled="{{loadingContext}}" bindtap="refreshContext">重新读取</button>
   </view>
 
   <view class="card">
     <text class="section-title">1. 现有食材库存</text>
     <text class="section-help">每行食材名称须先通过审核数据校验。克数由你确认，系统不会从名称或图片猜测重量。</text>
-    <view wx:for="{{inventoryRows}}" wx:key="index" wx:for-item="row" wx:for-index="rowIndex" class="inventory-row">
+    <view wx:for="{{inventoryRows}}" wx:key="key" wx:for-item="row" wx:for-index="rowIndex" class="inventory-row">
       <label class="field">
         <text class="field__label">第 {{rowIndex + 1}} 行食材名称</text>
         <input
@@ -74,6 +74,7 @@
       disabled="{{!canSaveInventory || savingInventory || generatingMeal}}"
       bindtap="onSaveInventoryAndGenerate"
     >{{savingInventory ? '正在保存库存…' : generatingMeal ? '正在生成餐单…' : '保存库存并生成一周餐单'}}</button>
+    <view wx:if="{{generationMessage}}" class="notice notice--neutral" aria-live="polite">{{generationMessage}}</view>
   </view>
 
   <view wx:if="{{staleBanner}}" class="notice notice--warning" aria-role="status" aria-live="polite">
@@ -84,6 +85,10 @@
   <view class="card">
     <text class="section-title">2. 七日餐单</text>
     <text class="section-help">热量与营养为确定性代码复算后的估算值。今天及过去日期作为事实不可修改。</text>
+    <view wx:if="{{recipeAvailabilityMessage}}" class="notice notice--warning" aria-live="polite">
+      <text>{{recipeAvailabilityMessage}}</text>
+      <button class="button button--secondary" loading="{{loadingContext}}" disabled="{{loadingContext}}" bindtap="refreshContext">刷新备选菜品</button>
+    </view>
     <view wx:if="{{mealDays.length === 0}}" class="empty-state">尚无餐单。请先完成规划、校验库存并生成一周餐单。</view>
     <view wx:for="{{mealDays}}" wx:key="businessDate" wx:for-item="day" wx:for-index="dayIndex" class="meal-day">
       <view class="meal-day__header">
@@ -108,16 +113,21 @@
         <view class="meal-row__label">
           <text class="meal-row__slot">{{meal.slotLabel}}</text>
           <text class="meal-row__dish">{{meal.dishNameZh}}</text>
+          <view class="meal-row__ingredients">
+            <text wx:for="{{meal.ingredients}}" wx:key="index" wx:for-item="ingredient" class="meal-row__ingredient">
+              {{ingredient.displayNameZh}} · {{ingredient.gramsText}}
+            </text>
+          </view>
         </view>
         <picker
           range="{{meal.recipeLabels}}"
           value="{{meal.selectedRecipeIndex}}"
-          disabled="{{!day.editable || updatingMeal || meal.recipeLabels.length === 0}}"
+          disabled="{{!day.editable || updatingMeal || !recipeSelectionAvailable}}"
           data-day-index="{{dayIndex}}"
           data-meal-index="{{mealIndex}}"
           bindchange="onRecipeChange"
         >
-          <view class="picker picker--compact {{!day.editable ? 'control--disabled' : ''}}">选择替换菜品</view>
+          <view class="picker picker--compact {{!day.editable || !recipeSelectionAvailable ? 'control--disabled' : ''}}">选择替换菜品</view>
         </picker>
       </view>
     </view>
@@ -128,6 +138,8 @@
     <view wx:for="{{pendingDiffs}}" wx:key="businessDate" class="diff-row">
       <text class="diff-row__date">{{item.businessDate}}</text>
       <text>{{item.reasonText}}</text>
+      <text>{{item.targetChangeText}}</text>
+      <text>{{item.mealChangeText}}</text>
     </view>
     <radio-group class="decision-options" bindchange="onCandidateDecisionChange" aria-label="选择餐单差异处理方式">
       <label wx:for="{{decisionOptions}}" wx:key="value" class="decision-option">
@@ -174,6 +186,13 @@
       disabled="{{recalculatingMeal}}"
       bindtap="onRetryRecalculation"
     >{{recalculatingMeal ? '正在重试餐单重算…' : '重试餐单重算'}}</button>
+    <button
+      wx:if="{{needsRecalculationStatusRefresh}}"
+      class="button button--secondary button--wide"
+      loading="{{loadingContext}}"
+      disabled="{{loadingContext}}"
+      bindtap="refreshContext"
+    >刷新重算状态</button>
   </view>
 
   <view wx:if="{{actionMessage}}" class="notice notice--success" aria-live="polite">{{actionMessage}}</view>
