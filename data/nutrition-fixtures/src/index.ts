@@ -96,6 +96,20 @@ export const TEST_NUTRITION_SNAPSHOTS = Object.freeze(TEST_FOOD_KEYS.map((key): 
   };
 }) satisfies readonly NutritionDataSnapshot[]);
 
+/**
+ * Deliberately synthetic, nutritionally balanced snapshots for exercising the
+ * deterministic whole-week solver in local/test runtime mode. These records
+ * remain `test_fixture` data and must never be admitted by production mode.
+ */
+export const TEST_MEAL_PLANNING_NUTRITION_SNAPSHOTS = Object.freeze(
+  TEST_NUTRITION_SNAPSHOTS.map((snapshot): NutritionDataSnapshot => ({
+    ...snapshot,
+    sourceRecordId: `${snapshot.sourceRecordId}-balanced-meal-planning`,
+    datasetVersion: 'fixture-balanced-meal-planning-2026-08-10',
+    nutrientsPer100g: nutrients(160, 6.7, 4.5, 24, 2.2, 0.4)
+  }))
+);
+
 const TEST_MENU_FOOD_KEY_SETS = [
   ['rice', 'oats', 'sweet-potato', 'corn', 'broccoli', 'spinach', 'apple', 'banana', 'chicken', 'beef', 'tofu', 'milk'],
   ['rice', 'corn', 'carrot', 'tomato', 'orange', 'blueberry', 'egg', 'fish', 'soybean', 'peanut', 'yogurt', 'canola-oil'],

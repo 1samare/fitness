@@ -35,9 +35,15 @@ pnpm.cmd dev:api
 
 当前实现用一个原子命令保存身体档案、目标、一周训练计划、受影响日期的能量目标与营养目标、幂等结果和 `TrainingPlanChanged` outbox 事件；请求在响应丢失后会复用同一幂等键安全重试。独立编辑会使旧的下游活动指针失效，当前上下文只返回一致的活动版本链，同时返回各实体的历史版本计数。
 
-同周训练变更只为发生新增、移动、取消或时长变化的未来日期追加能量与营养目标版本；过去事实不改写。每个营养目标精确引用对应的每日能量目标以及 `calculation-policy-v2`、`nutrition-policy-v1`。CloudBase 聚合当前写入 schema v3；读取既有 schema v2 时只补充空的营养目标版本集合，不推断或伪造历史营养值。
+同周训练变更只为发生新增、移动、取消或时长变化的未来日期追加能量与营养目标版本；过去事实不改写。每个营养目标精确引用对应的每日能量目标以及 `calculation-policy-v2`、`nutrition-policy-v1`。CloudBase 聚合当前写入 schema v4；读取既有 schema v2/v3 时只做结构性迁移，不推断或伪造历史营养、库存、餐单或完成度事实。
 
-`nutrition-policy-v1` 由确定性 TypeScript 代码计算蛋白质、脂肪、碳水、纤维、饱和脂肪和添加糖边界，并在约束交集为空时返回结构化 `nutrition_constraints_infeasible`。食谱候选校验会从每 100 克审核快照和实际克数复算营养汇总，并把过敏原、忌口、库存、食物多样性和来源完整性作为约束。当前仓库只带显式 `test_fixture` 数据；生产模式会拒绝这些 fixture，不访问实时付费营养 API。食材库存、正式餐单生成与训练变更后的餐单重算属于下一阶段。
+`nutrition-policy-v1` 由确定性 TypeScript 代码计算蛋白质、脂肪、碳水、纤维、饱和脂肪和添加糖边界，并在约束交集为空时返回结构化 `nutrition_constraints_infeasible`。食谱候选校验会从每 100 克审核快照和实际克数复算营养汇总，并把过敏原、忌口、库存、食物多样性和来源完整性作为硬约束。
+
+当前已实现手动食材库存快照和确定性七天餐单：用户输入普通中文食材名与可用克数，服务端解析到固定营养快照，使用 `weekly-meal-generation-v1` 生成完整七天、每日四餐的餐单版本。页面展示菜名、实际食材克数和从每 100 克数据复算的估算营养汇总；任一天的来源、库存、过敏原、忌口、多样性或营养约束失败时，不会激活部分餐单。
+
+从小程序规划建档页的“一周餐单与执行”入口可进入 `pages/meal-execution/index`。该页支持按天锁定、从服务端备选列表结构化换菜和录入实际训练分钟。手动换菜成功后自动锁定当天。训练变更或当天完成度变化时，未受保护日可在完整生成成功后原子激活新版本；锁定或手改日只生成 stale 提示、待确认候选和结构化差异，由用户选择保留或覆盖，后台不静默覆盖。完成度事实先独立保存；Provider 失败时旧活动餐单继续可用，重算任务可显式重试，幂等重放不增长版本计数。
+
+planning API 已提供 `resolveFoodName`、`saveInventory`、`generateWeeklyMealPlan`、`setMealPlanDayLock`、`updateMealPlanDay`、`recordTrainingCompletion`、`decideMealPlanCandidate`、`retryPendingRecalculation` 和扩展后的 `getCurrentContext`。本地运行只使用显式标记的合成 `test_fixture` 餐单/营养数据；生产模式拒绝 fixture，且当前没有可用的生产餐单 Provider。阶段四并未完成生产审核餐单数据及授权、阶段四能力的 CloudBase 部署、微信 IDE/真机渲染与交互验收、食材图像识别，或 LLM 有限对话；生产上线前仍须复核正式 `CN-DRI-2023` 表格。因此当前不宣称 production ready。
 
 ## 项目简介
 

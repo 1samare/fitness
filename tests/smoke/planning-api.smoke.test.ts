@@ -3,6 +3,7 @@ import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { TEST_NUTRITION_SNAPSHOTS } from '../../data/nutrition-fixtures/src/index';
 import { addBusinessDays } from '../../packages/contracts/src/business-date';
 import { planningApiResponseSchema } from '../../packages/contracts/src/planning-api';
 
@@ -223,7 +224,7 @@ describe('local planning API process', () => {
           ageYears: 30,
           sexCode: 0,
           heightCm: 175,
-          weightKg: 70,
+          weightKg: 60,
           healthScopeConfirmed: true,
           nonTrainingActivity: 'light',
           allergens: [],
@@ -241,7 +242,7 @@ describe('local planning API process', () => {
         expectedVersion: 0,
         idempotencyKey: 'smoke-goal-001',
         payload: {
-          goal: 'maintain',
+          goal: 'muscle_gain',
           effectiveDate: futureWeekStart,
           targetDate: futureTargetDate
         }
@@ -275,5 +276,65 @@ describe('local planning API process', () => {
       expect(context.data.trainingPlan?.version).toBe(1);
       expect(context.data.dailyEnergyTargets).toHaveLength(7);
     }
+
+    expect(TEST_NUTRITION_SNAPSHOTS).toHaveLength(28);
+    const inventory = planningApiResponseSchema.parse(await call({
+      action: 'saveInventory',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'smoke-inventory-001',
+        payload: {
+          items: TEST_NUTRITION_SNAPSHOTS.map((snapshot) => ({
+            name: snapshot.canonicalNameZh,
+            availableGrams: 50_000
+          }))
+        }
+      }
+    }));
+    expect(inventory.success && inventory.data.kind === 'inventory_saved').toBe(true);
+    if (inventory.success && inventory.data.kind === 'inventory_saved') {
+      expect(inventory.data.version.items).toHaveLength(28);
+      expect(new Set(inventory.data.version.items.map((item) => item.foodId)).size).toBe(28);
+    }
+
+    const generated = planningApiResponseSchema.parse(await call({
+      action: 'generateWeeklyMealPlan',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'smoke-meal-plan-001',
+        payload: { weekStartDate: futureWeekStart }
+      }
+    }));
+    if (!generated.success) {
+      throw new Error(`meal generation failed: ${JSON.stringify(generated.error)}`);
+    }
+    expect(generated).toMatchObject({
+      success: true,
+      data: { kind: 'weekly_meal_plan_generated' }
+    });
+    if (generated.data.kind === 'weekly_meal_plan_generated') {
+      expect(generated.data.version.days).toHaveLength(7);
+      expect(new Set(generated.data.version.days.map((day) => day.businessDate)).size).toBe(7);
+    }
+
+    const mealContext = planningApiResponseSchema.parse(
+      await call({ action: 'getCurrentContext' })
+    );
+    expect(mealContext.success && mealContext.data.kind === 'current_context').toBe(true);
+    if (mealContext.success && mealContext.data.kind === 'current_context') {
+      expect(mealContext.data.inventory?.items).toHaveLength(28);
+      expect(mealContext.data.mealPlan?.days).toHaveLength(7);
+    }
+    const authenticatedResponses = {
+      profile,
+      goal,
+      training,
+      context,
+      inventory,
+      generated,
+      mealContext
+    };
+    expect(JSON.stringify(authenticatedResponses)).not.toContain('userId');
+    expect(JSON.stringify(authenticatedResponses)).not.toContain('smoke-test-user');
   });
 });

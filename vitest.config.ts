@@ -7,7 +7,8 @@ export default defineConfig({
       'packages/**/*.test.ts',
       'data/**/*.test.ts',
       'cloudfunctions/**/*.test.ts',
-      'miniprogram/**/*.test.ts'
+      'miniprogram/**/*.test.ts',
+      'tests/e2e/**/*.test.ts'
     ],
     exclude: ['**/node_modules/**', 'tests/smoke/**'],
     passWithNoTests: false,

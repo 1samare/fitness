@@ -67,7 +67,7 @@ function loadLocalProviders(): Promise<MealPlanningProviders> {
   localProviders ??= import('@fitness/nutrition-fixtures').then((fixtures) => ({
     nutrition: new ReviewedNutritionCache({
       mode: 'test',
-      snapshots: fixtures.TEST_NUTRITION_SNAPSHOTS
+      snapshots: fixtures.TEST_MEAL_PLANNING_NUTRITION_SNAPSHOTS
     }),
     recipes: new StaticRecipeTemplateProvider({
       mode: 'test',
