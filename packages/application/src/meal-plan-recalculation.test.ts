@@ -17,7 +17,10 @@ import type {
   NutritionDataSnapshot,
   TrainingSessionPayload
 } from '@fitness/domain';
-import { InMemoryPlanningRepository } from '@fitness/persistence';
+import {
+  InMemoryPlanningRepository,
+  assertPlanningAggregateInvariants
+} from '@fitness/persistence';
 import { PastFactImmutableError } from './meal-plan-editing';
 import { FutureCompletionForbiddenError } from './planning-errors';
 import {
@@ -111,7 +114,7 @@ function createHarness(options: {
 
 function createControlledRepository() {
   const inner = new InMemoryPlanningRepository();
-  let shouldBlockNextRead = false;
+  let readsBeforeBlock: number | null = null;
   let blockedReadObserved: Promise<void> = Promise.resolve();
   let observeBlockedRead: (() => void) | undefined;
   let releaseBlockedRead: (() => void) | undefined;
@@ -121,8 +124,12 @@ function createControlledRepository() {
   const repository: PlanningRepository = {
     async read(userId) {
       const state = await inner.read(userId);
-      if (!shouldBlockNextRead) return state;
-      shouldBlockNextRead = false;
+      if (readsBeforeBlock === null) return state;
+      if (readsBeforeBlock > 0) {
+        readsBeforeBlock -= 1;
+        return state;
+      }
+      readsBeforeBlock = null;
       observeBlockedRead?.();
       await blockedReadGate;
       return state;
@@ -144,7 +151,16 @@ function createControlledRepository() {
     inner,
     repository,
     blockNextRead() {
-      shouldBlockNextRead = true;
+      readsBeforeBlock = 0;
+      blockedReadObserved = new Promise<void>((resolve) => {
+        observeBlockedRead = resolve;
+      });
+      blockedReadGate = new Promise<void>((resolve) => {
+        releaseBlockedRead = resolve;
+      });
+    },
+    blockReadAfter(readsToSkip: number) {
+      readsBeforeBlock = readsToSkip;
       blockedReadObserved = new Promise<void>((resolve) => {
         observeBlockedRead = resolve;
       });
@@ -227,6 +243,55 @@ async function replaceWithInsufficientInventory(
       }))
     }
   });
+}
+
+async function prepareFailedCompletionWithRestoredInventory(
+  harness: ReturnType<typeof createHarness>
+) {
+  await prepareGeneratedPlan(harness, [{
+    businessDate: '2026-08-19',
+    sessionCode: '02054',
+    durationMinutes: 60
+  }]);
+  await replaceWithInsufficientInventory(harness);
+  harness.setNow(NOW_ON_WEDNESDAY);
+  const first = await harness.service.recordTrainingCompletion('user-a', {
+    expectedVersion: 0,
+    idempotencyKey: 'completion-failed-before-newer-success',
+    payload: { businessDate: '2026-08-19', completedDurationMinutes: 30 }
+  });
+  await harness.service.saveInventory('user-a', {
+    expectedVersion: 2,
+    idempotencyKey: 'inventory-restore-before-newer-success',
+    payload: {
+      items: BALANCED_SNAPSHOTS.map((snapshot) => ({
+        name: snapshot.canonicalNameZh,
+        availableGrams: 50_000
+      }))
+    }
+  });
+  const state = await harness.repository.read('user-a');
+  assertPlanningAggregateInvariants(state, 'user-a');
+  if (first.recalculationJob?.status !== 'failed_retryable') {
+    throw new Error('Expected the first completion job to remain retryable');
+  }
+  return { firstJob: first.recalculationJob };
+}
+
+async function recordNewerSuccessfulCompletion(
+  harness: ReturnType<typeof createHarness>
+) {
+  const second = await harness.service.recordTrainingCompletion('user-a', {
+    expectedVersion: 1,
+    idempotencyKey: 'completion-newer-success',
+    payload: { businessDate: '2026-08-19', completedDurationMinutes: 20 }
+  });
+  const state = await harness.repository.read('user-a');
+  assertPlanningAggregateInvariants(state, 'user-a');
+  if (second.recalculationJob?.status !== 'completed' || second.activatedMealPlan === null) {
+    throw new Error('Expected the newer completion job to activate a complete meal plan');
+  }
+  return { secondJob: second.recalculationJob, state };
 }
 
 async function prepareConsecutivePendingCandidates(
@@ -1914,6 +1979,73 @@ describe('training completion facts', () => {
     expect(state.activeMealPlanVersionId).toBe(previous.id);
     expect(JSON.stringify(recorded.recalculationJob)).not.toContain('fixture-');
     expect(JSON.stringify(recorded.recalculationJob)).not.toContain('snapshot-');
+  });
+
+  test('hides an older failed completion job after a newer completion activates the current plan', async () => {
+    const harness = createHarness();
+    const { firstJob } = await prepareFailedCompletionWithRestoredInventory(harness);
+    const { secondJob, state } = await recordNewerSuccessfulCompletion(harness);
+    const context = await harness.service.getCurrentContext('user-a');
+
+    expect(context.retryableRecalculationJob).toBeNull();
+    expect(state.recalculationJobs.map((job) => job.id)).toEqual([
+      firstJob.id,
+      secondJob.id
+    ]);
+    expect(state.recalculationJobs[0]?.status).toBe('failed_retryable');
+    expect(state.recalculationJobs[1]?.status).toBe('completed');
+  });
+
+  test('rejects an older failed completion retry before any provider call without changing state', async () => {
+    const baseProviders = fixtureProviders();
+    const harness = createHarness({ providers: baseProviders });
+    const { firstJob } = await prepareFailedCompletionWithRestoredInventory(harness);
+    const { state } = await recordNewerSuccessfulCompletion(harness);
+    let providerCalls = 0;
+    harness.setProviders({
+      ...baseProviders,
+      menus: {
+        getActiveCatalog: () => {
+          providerCalls += 1;
+          return Promise.reject(new Error('obsolete retry must not call providers'));
+        },
+        getMenuByVersionId: (id) => baseProviders.menus.getMenuByVersionId(id)
+      }
+    });
+
+    await expect(harness.service.retryPendingRecalculation('user-a', {
+      expectedVersion: state.recalculationJobs.length,
+      idempotencyKey: 'retry-obsolete-completion-initial',
+      payload: { recalculationJobId: firstJob.id }
+    })).rejects.toBeInstanceOf(CandidateNotPendingError);
+
+    expect(providerCalls).toBe(0);
+    expect(await harness.repository.read('user-a')).toEqual(state);
+  });
+
+  test('rechecks an older failed completion retry when a newer completion commits after its read', async () => {
+    const controlled = createControlledRepository();
+    const harness = createHarness({ repository: controlled.repository });
+    const { firstJob } = await prepareFailedCompletionWithRestoredInventory(harness);
+    const retryCommand = {
+      expectedVersion: 1,
+      idempotencyKey: 'retry-obsolete-completion-race',
+      payload: { recalculationJobId: firstJob.id }
+    } as const;
+    controlled.blockReadAfter(1);
+    const retry = harness.service.retryPendingRecalculation('user-a', retryCommand);
+    await controlled.waitForBlockedRead();
+    const { secondJob, state } = await recordNewerSuccessfulCompletion(harness);
+    controlled.releaseBlockedRead();
+
+    await expect(retry).rejects.toBeInstanceOf(CandidateNotPendingError);
+    const after = await controlled.inner.read('user-a');
+    assertPlanningAggregateInvariants(after, 'user-a');
+    expect(after).toEqual(state);
+    expect(after.recalculationJobs.map((job) => job.id)).toEqual([
+      firstJob.id,
+      secondJob.id
+    ]);
   });
 
   test('creates a protected completion candidate, exact diff, and idempotently replays the fact', async () => {

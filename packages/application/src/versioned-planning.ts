@@ -570,11 +570,22 @@ export function recalculationJobMatchesActiveTrainingChain(
     && job.affectedDates.every((businessDate) => weekDates.has(businessDate));
 }
 
+function latestRecalculationJobForActiveTrainingChain(
+  state: PlanningAggregateState
+): RecalculationJob | null {
+  const matchingJobs = state.recalculationJobs.filter((job) => (
+    recalculationJobMatchesActiveTrainingChain(state, job)
+  ));
+  return matchingJobs[matchingJobs.length - 1] ?? null;
+}
+
 export function recalculationJobHasCurrentProcessPrerequisites(
   state: PlanningAggregateState,
   job: RecalculationJob
 ): boolean {
-  if (!recalculationJobMatchesActiveTrainingChain(state, job)) return false;
+  const matchingJobs = state.recalculationJobs.filter((candidate) => candidate.id === job.id);
+  const latestActiveChainJob = latestRecalculationJobForActiveTrainingChain(state);
+  if (matchingJobs.length !== 1 || latestActiveChainJob?.id !== job.id) return false;
   const bodyProfile = findById(state.bodyProfiles, state.activeBodyProfileVersionId);
   const goal = findById(state.goals, state.activeGoalVersionId);
   const trainingPlan = findById(state.trainingPlans, state.activeTrainingPlanVersionId);
@@ -602,7 +613,8 @@ export function recalculationJobCanRetryForCurrentContext(
   state: PlanningAggregateState,
   job: RecalculationJob
 ): boolean {
-  return job.candidateMealPlanVersionId === null
+  return job.status === 'failed_retryable'
+    && job.candidateMealPlanVersionId === null
     && recalculationJobHasCurrentProcessPrerequisites(state, job);
 }
 
@@ -619,10 +631,7 @@ export function pendingMealPlanCandidateMatchesCurrentContext(
   const trainingPlan = findById(state.trainingPlans, state.activeTrainingPlanVersionId);
   const inventory = findById(state.inventories, state.activeInventoryVersionId);
   const activeMealPlan = findById(state.mealPlans, state.activeMealPlanVersionId);
-  const activeChainJobs = state.recalculationJobs.filter((candidateJob) => (
-    recalculationJobMatchesActiveTrainingChain(state, candidateJob)
-  ));
-  const latestActiveChainJob = activeChainJobs[activeChainJobs.length - 1];
+  const latestActiveChainJob = latestRecalculationJobForActiveTrainingChain(state);
   if (
     matchingJobs.length !== 1
     || job === undefined

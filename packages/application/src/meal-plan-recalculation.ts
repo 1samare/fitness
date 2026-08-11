@@ -33,6 +33,7 @@ import {
   PlanningPrerequisiteError,
   VersionConflictError,
   pendingMealPlanCandidateMatchesCurrentContext,
+  recalculationJobCanRetryForCurrentContext,
   recalculationJobHasCurrentProcessPrerequisites,
   type SavedTrainingPlan
 } from './versioned-planning';
@@ -259,7 +260,7 @@ function prerequisitesForJob(
   const trainingPlan = findById(state.trainingPlans, state.activeTrainingPlanVersionId);
   if (trainingPlan === null) throw new PlanningPrerequisiteError('training_plan');
   if (!recalculationJobHasCurrentProcessPrerequisites(state, job)) {
-    throw new VersionConflictError(state.trainingPlans.length, state.trainingPlans.length);
+    throw new CandidateNotPendingError(job.id);
   }
   const prerequisites = generationPrerequisites(state, trainingPlan.payload.weekStartDate);
   const previousMealPlan = findById(state.mealPlans, state.activeMealPlanVersionId);
@@ -440,6 +441,9 @@ export function createMealPlanRecalculationService(
     }
     if (initialJob.affectedDates.length === 0 || initialState.activeMealPlanVersionId === null) {
       return completeEmptyJob(userId, initialJob.id, retryCommit);
+    }
+    if (!recalculationJobHasCurrentProcessPrerequisites(initialState, initialJob)) {
+      throw new CandidateNotPendingError(initialJob.id);
     }
 
     const providerSnapshot = await loadProviderSnapshot(dependencies.providers);
@@ -1163,8 +1167,7 @@ export function createMealPlanRecalculationService(
       const job = findById(initialState.recalculationJobs, envelope.payload.recalculationJobId);
       const hasExistingResult = job !== null && hasReplayableJobResult(job);
       const canStartRetry = job !== null
-        && job.status === 'failed_retryable'
-        && job.candidateMealPlanVersionId === null;
+        && recalculationJobCanRetryForCurrentContext(initialState, job);
       if (job === null || (!hasExistingResult && !canStartRetry)) {
         throw new CandidateNotPendingError(envelope.payload.recalculationJobId);
       }

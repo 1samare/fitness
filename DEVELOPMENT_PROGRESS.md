@@ -142,6 +142,7 @@
 - 任务 1–7 实现及加固提交：`3fe7261`、`0eb1a29`、`963280a`、`ecd5316`、`ba3611c`、`268eff9`、`fbbc0ca`、`797ace0`、`2b979fc`、`8a0c780`、`8338249`、`bea9130`、`b4fff46`、`dbf44df`、`1ee23ef`、`b718cf0`、`4c3e2af`、`da66233`、`25c98c6`、`7d35c1f`、`9668f3f`、`8090b51`、`4caebf0`、`1e7dc3c`；端到端验收、本地可行 fixture、进程烟雾与文档提交为 `ff06b2a`（`test: complete weekly meal loop acceptance`），随后以 `fix: version balanced meal fixtures` 将均衡营养快照、食谱、每日菜单和目录迁移到完全独立且闭合的稳定身份/来源版本图。
 - 最终全阶段审查修复：库存幂等在 Provider 离线时使用规范化名称/合并行/精确克数的 provider-independent 指纹提前重放；公开无解冲突采用严格 discriminated schema，由 application 只映射审核中文名并在 handler 脱敏；连续训练变更只暴露和接受唯一匹配当前训练链且直接 supersede 活动餐单的候选；完整 Provider 图 canonical digest 覆盖菜单引用、食谱克数、过敏原和营养值，并在生成、手改、重算三路径事务外二次 load；未来训练完成使用独立 `future_completion_forbidden` 公共错误和正确恢复文案。
 - 最终审查 Round 2 修复：同一训练计划的连续完成事实只允许最新 trigger job 对应、受影响日期引用 authoritative latest target 的候选进入 context/keep/overwrite；`RecalculationJob` 以严格脱敏 conflict snapshot 持久化确定性无解详情，CloudBase schema v5 将旧 v4 缺字段作 `legacy_unavailable` 迁移，training-plan/completion/context/retry 和小程序恢复均保留可操作原因；库存 raw canonical 指纹升级为 v3，并对旧 resolved/raw v2 仅在 Provider 可用时验证重放，离线安全失败。
+- 最终审查 Round 3 修复：同一 active training/date 的 completion A 失败后，即使通过合法 `saveInventory` 恢复库存并由 completion B 成功激活新餐单，历史 failed job A 也不会重新出现在 context 或被重试；context、retry 初读、Provider 后事务重检与 pending candidate 共用唯一且最新的 active-training-chain job 选择，旧 A 返回稳定 `candidate_not_pending`、不调用 Provider 且不产生部分写，completed 自身 job 的 response-loss 幂等重放保持可用。
 - 验收项 1 由 `packages/application/src/meal-plan-generation.test.ts`、`packages/calculation/src/generate-weekly-meal-plan.test.ts`、`tests/e2e/weekly-meal-loop.test.ts` 以及当前 schema-v5 库存/餐单版本实现证明；E2E 对七天的每个显示营养汇总都从每 100 克快照和实际克数独立复算。
 - 验收项 2 由 `packages/application/src/meal-plan-editing.test.ts`、`packages/application/src/meal-plan-recalculation.test.ts`、`miniprogram/pages/meal-execution/*.test.ts` 及 E2E 的主动锁定、手改自动锁定、stale/候选/差异、保留/覆盖证明。
 - 验收项 3 由 `packages/application/src/meal-plan-recalculation.test.ts`、`cloudfunctions/planning-api/src/handler.test.ts` 及 E2E 的 `TrainingPlanChanged` 消费、当天完成度事实和精确 event-linked 目标证明。
@@ -150,6 +151,7 @@
 - 2026-08-11 Round 1 修复后文档前 fresh 验收：`pnpm.cmd lint` 退出 0；`pnpm.cmd typecheck` 完成 10/11 个工作区项目及小程序严格检查；`pnpm.cmd test` 通过 43 个测试文件、492 项测试（其中阶段四 E2E 2/2，0 跳过）；`pnpm.cmd build` 生成 planning-api、CloudBase 部署制品和云模式小程序构建；`pnpm.cmd dry-run:api` 成功加载函数；`pnpm.cmd smoke:api` 通过 1/1 个真实本地函数进程烟雾。独立 E2E 连续两次均为 1 个测试文件、2/2 项通过；fixture 身份图测试 4/4，cloud fixture 隔离测试确认 `allowTestFixtures=false` 且构造/调用不加载 fixture 模块。
 - 2026-08-11 最终审查修复后 fresh 验收：`pnpm.cmd lint` 退出 0；`pnpm.cmd typecheck` 完成 10/11 个带脚本工作区项目及小程序严格检查；`pnpm.cmd test` 通过 43/43 个测试文件、505/505 项测试（阶段四 E2E 6/6，含 allergen/inventory/missing-source/nutrient 四类结构化冲突）；`pnpm.cmd build` 生成 3.15 MB planning-api bundle（map 5.33 MB）、CloudBase 部署制品和云模式小程序制品；`pnpm.cmd dry-run:api` 成功加载 `main`；`pnpm.cmd smoke:api` 通过 1/1 个真实本地函数进程烟雾。Provider 调用均在 repository transaction 外完成，race 失败不产生部分餐单写入。
 - 2026-08-11 最终审查 Round 2 后 fresh 验收：`pnpm.cmd test` 通过 43/43 个测试文件、523/523 项测试；`pnpm.cmd typecheck`、`pnpm.cmd lint` 均退出 0；`pnpm.cmd build` 生成 3.16 MB planning-api bundle（map 5.35 MB）、CloudBase 部署制品和云模式小程序制品；`pnpm.cmd dry-run:api` 成功加载 `main`；`pnpm.cmd smoke:api` 通过 1/1 个真实本地函数进程烟雾。A 的三项 obsolete completion candidate 竞态测试、B 的 contracts/application/persistence/handler/VM/controller 跨层快照测试及 C 的六项 v2/v3 兼容测试均包含真实 RED→GREEN 证据。
+- 2026-08-11 最终审查 Round 3 后 fresh 验收：`pnpm.cmd test` 通过 43/43 个测试文件、527/527 项测试；`pnpm.cmd typecheck`、`pnpm.cmd lint` 均退出 0；`pnpm.cmd build` 生成 3.16 MB planning-api bundle（map 5.35 MB）、CloudBase 部署制品和云模式小程序制品；`pnpm.cmd dry-run:api` 成功加载 `main`；`pnpm.cmd smoke:api` 通过 1/1 个真实本地函数进程烟雾。真实 service/InMemory 测试以合法 v1→v2→v3 库存版本链和 aggregate invariant sanity gate 复现 3/3 RED，再以共享 latest-active-chain 门禁达到 3/3 GREEN；公共 handler 时间线另以 1/1 证明不会退化为 `internal_error`，独立只读复审为 CLEAN。
 
 ### 剩余工作
 
@@ -248,6 +250,7 @@
 
 | 日期 | 分支/基线 | 更新 |
 |---|---|---|
+| 2026-08-11 | `feat/v1.0` / `32810af` 后最终审查 Round 3 | 关闭同 active training/date 旧 failed completion job 重现与误重试：合法库存版本链、初始零 Provider 调用、事务竞态回滚和公共 `candidate_not_pending`；fresh 六门禁为 43 文件、527 测试及 smoke 1/1，独立复审 CLEAN |
 | 2026-08-11 | `feat/v1.0` / `55aa739` 后最终审查 Round 2 | 关闭 2 Important + 2 Minor：completion candidate authoritative eligibility、持久化脱敏无解快照与 v4→v5 兼容、库存 v3 指纹及旧 v2 fail-closed 重放、fresh 文档计数；六门禁为 43 文件、523 测试及 smoke 1/1 |
 | 2026-08-11 | `feat/v1.0` / `898b649` 后最终审查修复 | 关闭最终审查 4 Important + 1 Minor：离线库存幂等重放、公开结构化无解冲突与可信中文名、obsolete candidate 生命周期、完整 Provider 图 digest/三路径二次 CAS、未来完成独立错误；fresh 六门禁为 43 文件、505 测试及 smoke 1/1 |
 | 2026-08-11 | `feat/v1.0` / `fix: version balanced meal fixtures` | 修复阶段四验收 fixture 的身份冲突：均衡营养快照、食谱、菜单和目录使用独立闭合版本图；本地/E2E/smoke 使用该图，cloud 构造和调用不加载 fixture；阶段四完成状态经 43 文件、492 测试及六门禁复验后继续成立 |

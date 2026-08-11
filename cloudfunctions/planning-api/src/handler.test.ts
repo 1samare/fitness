@@ -827,6 +827,91 @@ describe('handlePlanningApi', () => {
     if (!retry.success) expect(retry.error.code).toBe('provider_unavailable');
   });
 
+  it('publishes candidate_not_pending when a newer completion supersedes a failed retry job', async () => {
+    const harness = createCompletionHarness();
+    await prepareCompletionPlan(harness);
+    await harness.handler({
+      action: 'saveInventory',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'inventory-completion-obsolete-low',
+        payload: {
+          items: TEST_NUTRITION_SNAPSHOTS.map((snapshot) => ({
+            name: snapshot.canonicalNameZh,
+            availableGrams: 1
+          }))
+        }
+      }
+    }, { userId: 'trusted-user-a' });
+    harness.setNow('2026-08-19T04:00:00.000Z');
+    const first = await harness.handler({
+      action: 'recordTrainingCompletion',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'completion-api-obsolete-first',
+        payload: { businessDate: '2026-08-19', completedDurationMinutes: 30 }
+      }
+    }, { userId: 'trusted-user-a' });
+    if (
+      !first.success
+      || first.data.kind !== 'training_completion_recorded'
+      || first.data.recalculationJob === null
+    ) throw new Error('Expected the first completion to retain a failed job');
+    expect(first.data.recalculationStatus).toBe('failed_retryable');
+    await harness.handler({
+      action: 'saveInventory',
+      payload: {
+        expectedVersion: 2,
+        idempotencyKey: 'inventory-completion-obsolete-restored',
+        payload: {
+          items: TEST_NUTRITION_SNAPSHOTS.map((snapshot) => ({
+            name: snapshot.canonicalNameZh,
+            availableGrams: 50_000
+          }))
+        }
+      }
+    }, { userId: 'trusted-user-a' });
+    const second = await harness.handler({
+      action: 'recordTrainingCompletion',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'completion-api-obsolete-second',
+        payload: { businessDate: '2026-08-19', completedDurationMinutes: 20 }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(second).toMatchObject({
+      success: true,
+      data: { kind: 'training_completion_recorded', recalculationStatus: 'completed' }
+    });
+    const context = await harness.handler(
+      { action: 'getCurrentContext' },
+      { userId: 'trusted-user-a' }
+    );
+    expect(context).toMatchObject({
+      success: true,
+      data: { kind: 'current_context', retryableRecalculationJob: null }
+    });
+    const beforeRetry = await harness.repository.read('trusted-user-a');
+
+    const retry = await harness.handler({
+      action: 'retryPendingRecalculation',
+      payload: {
+        expectedVersion: 2,
+        idempotencyKey: 'retry-api-obsolete-first',
+        payload: { recalculationJobId: first.data.recalculationJob.id }
+      }
+    }, { userId: 'trusted-user-a' });
+
+    expect(retry).toEqual({
+      success: false,
+      error: {
+        code: 'candidate_not_pending',
+        message: '餐单候选已处理或不再等待确认。'
+      }
+    });
+    expect(await harness.repository.read('trusted-user-a')).toEqual(beforeRetry);
+  });
+
   it('publishes persisted sanitized conflicts from saveTrainingPlan and subsequent context', async () => {
     const harness = createCompletionHarness();
     await prepareCompletionPlan(harness);
