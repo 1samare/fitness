@@ -31,6 +31,7 @@ import {
   InvalidTrainingPlanError,
   PlanningPrerequisiteError,
   VersionConflictError,
+  recalculationJobCanRetryForCurrentContext,
   type SavedTrainingPlan
 } from './versioned-planning';
 
@@ -243,12 +244,9 @@ function prerequisitesForJob(
   job: RecalculationJob,
   activeProviderSnapshotToken: string
 ): RecalculationPrerequisites {
-  const triggerPlanId = job.triggerType === 'training_plan_changed'
-    ? state.outboxEvents.find((event) => event.eventId === job.triggerEventId)?.trainingPlanVersionId
-    : state.trainingCompletionEvents.find((event) => event.id === job.triggerEventId)?.trainingPlanVersionId;
-  if (triggerPlanId === undefined) throw new PlanningPrerequisiteError('training_plan');
   const trainingPlan = findById(state.trainingPlans, state.activeTrainingPlanVersionId);
-  if (trainingPlan === null || trainingPlan.id !== triggerPlanId) {
+  if (trainingPlan === null) throw new PlanningPrerequisiteError('training_plan');
+  if (!recalculationJobCanRetryForCurrentContext(state, job)) {
     throw new VersionConflictError(state.trainingPlans.length, state.trainingPlans.length);
   }
   const prerequisites = generationPrerequisites(state, trainingPlan.payload.weekStartDate);

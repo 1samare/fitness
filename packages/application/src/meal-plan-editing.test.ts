@@ -872,4 +872,48 @@ describe('manual meal edit transaction', () => {
       Object.keys(recipe).sort().join(',') === 'dishNameZh,recipeTemplateVersionId'
     ))).toBe(true);
   });
+
+  test('reads a legacy meal plan without provider backfill or state mutation', async () => {
+    const prepared = createHarness();
+    await prepareGeneratedPlan(prepared);
+    await prepared.repository.transact('user-a', (state) => ({
+      nextState: {
+        ...state,
+        mealPlans: state.mealPlans.map((plan) => ({
+          ...plan,
+          days: plan.days.map((day) => ({
+            ...day,
+            meals: day.meals.map((meal) => ({
+              slot: meal.slot,
+              recipeTemplateVersionId: meal.recipeTemplateVersionId,
+              servingMultiplier: meal.servingMultiplier
+            }))
+          }))
+        }))
+      },
+      result: undefined
+    }));
+    const before = await prepared.repository.read('user-a');
+    let providerCalls = 0;
+    const unavailable = (): Promise<never> => {
+      providerCalls += 1;
+      return Promise.reject(new Error('provider must not be called for legacy display'));
+    };
+    const legacyReader = createHarness({
+      repository: prepared.repository,
+      providers: {
+        nutrition: { getSnapshot: unavailable, resolveCanonicalName: unavailable },
+        recipes: { getByVersionId: unavailable },
+        menus: { getActiveCatalog: unavailable, getMenuByVersionId: unavailable },
+        allowTestFixtures: false
+      }
+    });
+
+    const context = await legacyReader.service.getCurrentContext('user-a');
+
+    expect(context.mealPlan).not.toBeNull();
+    expect(context.selectableRecipesStatus).toBe('no_options');
+    expect(providerCalls).toBe(0);
+    expect(await prepared.repository.read('user-a')).toEqual(before);
+  });
 });

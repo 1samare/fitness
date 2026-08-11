@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 interface PageOptions {
   readonly data: Record<string, unknown>;
   onLoad(): Promise<void> | void;
+  refreshContext(): Promise<void>;
   onInventoryNameInput(event: IndexedTextEvent): void;
   onAddInventoryRow(): void;
   onRemoveInventoryRow(event: IndexedEvent): void;
@@ -46,6 +47,7 @@ interface PageInstance extends PageOptions {
 
 const calls: PlanningApiRequest[] = [];
 const responses: unknown[] = [];
+const storage = new Map<string, unknown>();
 let registeredPage: PageOptions | undefined;
 
 vi.mock('../../services/planning-api', () => ({
@@ -121,6 +123,7 @@ function publicMealPlanVersion() {
         slot: 'breakfast',
         recipeTemplateVersionId: 'recipe-1',
         servingMultiplier: 1,
+        displayStatus: 'complete',
         dishNameZh: '测试早餐',
         ingredients: [{ displayNameZh: '测试米饭', grams: 100 }]
       }],
@@ -193,13 +196,14 @@ function pageInstance(): PageInstance {
 beforeEach(async () => {
   calls.length = 0;
   responses.length = 0;
+  storage.clear();
   registeredPage = undefined;
   vi.resetModules();
   vi.stubGlobal('Page', (options: PageOptions) => { registeredPage = options; });
   vi.stubGlobal('wx', {
-    getStorageSync: () => undefined,
-    setStorageSync: () => undefined,
-    removeStorageSync: () => undefined
+    getStorageSync: (key: string) => storage.get(key),
+    setStorageSync: (key: string, value: unknown) => { storage.set(key, value); },
+    removeStorageSync: (key: string) => { storage.delete(key); }
   });
   await import('./index');
 });
@@ -280,6 +284,23 @@ describe('meal execution page controller', () => {
     expect(page.data.retryJobId).toBe('job-from-server');
   });
 
+  it('turns a disappeared retry job into an explicit refresh state', async () => {
+    responses.push(emptyContextResponse());
+    const page = pageInstance();
+    page.setData({
+      retryJobId: 'job-from-old-training-plan',
+      needsRecalculationStatusRefresh: false,
+      mealMessage: '旧训练计划的餐单重算失败。'
+    });
+
+    await page.refreshContext.call(page); // retry job no longer belongs to the active plan
+
+    expect(page.data.retryJobId).toBe('');
+    expect(page.data.needsRecalculationStatusRefresh).toBe(true);
+    expect(page.data.mealMessage).toContain('当前训练计划');
+    expect(page.data.mealMessage).toContain('刷新');
+  });
+
   it('blocks duplicate fact and recalculation submissions independently', async () => {
     const page = pageInstance();
     page.setData({ savingFact: true, recalculatingMeal: true, retryJobId: 'job-from-server' });
@@ -288,6 +309,125 @@ describe('meal execution page controller', () => {
     await page.onRetryRecalculation.call(page);
 
     expect(calls).toEqual([]);
+  });
+
+  it('reuses the exact completion envelope after response loss and clears it only after confirmation', async () => {
+    responses.push(Promise.reject(new Error('response lost after commit')));
+    const firstPage = pageInstance();
+    firstPage.setData({
+      businessToday: '2026-08-19',
+      completionDate: '2026-08-19',
+      completedDurationMinutes: '30',
+      latestVersions: {
+        bodyProfile: 1,
+        goal: 1,
+        trainingPlan: 1,
+        inventory: 1,
+        mealPlan: 2,
+        mealPlanDecision: 0,
+        trainingCompletion: 4,
+        recalculationJob: 2
+      }
+    });
+
+    await firstPage.onRecordCompletion.call(firstPage);
+    const lostRequest = calls[0];
+    expect(lostRequest?.action).toBe('recordTrainingCompletion');
+    expect(storage.size).toBe(1);
+
+    responses.push({
+      success: true,
+      data: {
+        kind: 'training_completion_recorded',
+        event: {
+          kind: 'training_completion_event',
+          id: 'completion-replayed',
+          version: 5,
+          trainingPlanVersionId: 'training-1',
+          businessDate: '2026-08-19',
+          completedDurationMinutes: 30,
+          occurredAt: '2026-08-19T04:00:00.000Z'
+        },
+        dailyEnergyTargets: [],
+        dailyNutritionTargets: [],
+        recalculationJob: null,
+        candidateMealPlan: null,
+        targetDiffs: [],
+        recalculationStatus: 'not_required'
+      }
+    }, emptyContextResponse());
+    const reenteredPage = pageInstance();
+    reenteredPage.setData({
+      businessToday: '2026-08-19',
+      completionDate: '2026-08-19',
+      completedDurationMinutes: '30',
+      latestVersions: {
+        bodyProfile: 1,
+        goal: 1,
+        trainingPlan: 1,
+        inventory: 1,
+        mealPlan: 2,
+        mealPlanDecision: 0,
+        trainingCompletion: 9,
+        recalculationJob: 2
+      }
+    });
+
+    await reenteredPage.onRecordCompletion.call(reenteredPage);
+
+    expect(calls[1]).toEqual(lostRequest);
+    expect(storage.size).toBe(0);
+
+    responses.push({
+      success: true,
+      data: {
+        kind: 'training_completion_recorded',
+        event: {
+          kind: 'training_completion_event',
+          id: 'completion-new',
+          version: 10,
+          trainingPlanVersionId: 'training-1',
+          businessDate: '2026-08-19',
+          completedDurationMinutes: 30,
+          occurredAt: '2026-08-19T04:05:00.000Z'
+        },
+        dailyEnergyTargets: [],
+        dailyNutritionTargets: [],
+        recalculationJob: null,
+        candidateMealPlan: null,
+        targetDiffs: [],
+        recalculationStatus: 'not_required'
+      }
+    }, emptyContextResponse());
+    const nextPage = pageInstance();
+    nextPage.setData({
+      businessToday: '2026-08-19',
+      completionDate: '2026-08-19',
+      completedDurationMinutes: '30',
+      latestVersions: {
+        bodyProfile: 1,
+        goal: 1,
+        trainingPlan: 1,
+        inventory: 1,
+        mealPlan: 2,
+        mealPlanDecision: 0,
+        trainingCompletion: 10,
+        recalculationJob: 2
+      }
+    });
+    await nextPage.onRecordCompletion.call(nextPage);
+
+    expect(calls[3]).toMatchObject({
+      action: 'recordTrainingCompletion',
+      payload: { expectedVersion: 10 }
+    });
+    if (
+      lostRequest?.action !== 'recordTrainingCompletion'
+      || calls[3]?.action !== 'recordTrainingCompletion'
+    ) {
+      throw new Error('Expected completion requests');
+    }
+    expect(calls[3].payload.idempotencyKey).not.toBe(lostRequest.payload.idempotencyKey);
   });
 
   it('retries the discoverable failed job with the server recalculation-job version', async () => {

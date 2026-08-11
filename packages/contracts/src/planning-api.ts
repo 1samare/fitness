@@ -369,10 +369,26 @@ const mealAssignmentSchema = z.object({
   ingredients: z.array(mealIngredientDisplaySchema).min(1).optional()
 }).strict();
 
-const publicMealAssignmentSchema = mealAssignmentSchema.extend({
+const completePublicMealAssignmentSchema = mealAssignmentSchema.extend({
+  displayStatus: z.literal('complete'),
   dishNameZh: z.string().trim().min(1).max(200),
   ingredients: z.array(mealIngredientDisplaySchema).min(1)
 }).strict();
+
+const legacyPublicMealAssignmentSchema = mealAssignmentSchema.omit({
+  dishNameZh: true,
+  ingredients: true
+}).extend({
+  displayStatus: z.literal('legacy_unavailable'),
+  dishNameZh: z.literal('历史餐单菜名暂不可用'),
+  ingredients: z.array(mealIngredientDisplaySchema).length(0),
+  displayMessage: z.literal('历史餐单缺少展示快照，数值记录仍保留，可重新生成补齐。')
+}).strict();
+
+const publicMealAssignmentSchema = z.discriminatedUnion('displayStatus', [
+  completePublicMealAssignmentSchema,
+  legacyPublicMealAssignmentSchema
+]);
 
 const mealPlanDaySchema = z.object({
   businessDate: businessDateSchema,
@@ -443,18 +459,36 @@ const inventoryVersionSchema = storedInventoryVersionSchema.omit({ userId: true 
 const mealPlanVersionSchema = storedMealPlanVersionSchema.omit({ userId: true, days: true }).extend({
   days: z.array(publicMealPlanDaySchema).length(7)
 }).strict();
-const mealPlanTargetDiffSchema = storedMealPlanTargetDiffSchema.omit({
+const publicMealPlanTargetDiffBaseSchema = storedMealPlanTargetDiffSchema.omit({
   userId: true,
   previousTarget: true,
   proposedTarget: true,
   previousMeals: true,
   proposedMeals: true
-}).extend({
+});
+
+const completeMealPlanTargetDiffSchema = publicMealPlanTargetDiffBaseSchema.extend({
+  displayStatus: z.literal('complete'),
   previousTarget: mealTargetDisplaySnapshotSchema,
   proposedTarget: mealTargetDisplaySnapshotSchema,
   previousMeals: z.array(mealDisplaySnapshotSchema).min(1).max(4),
   proposedMeals: z.array(mealDisplaySnapshotSchema).min(1).max(4)
 }).strict();
+
+const legacyMealPlanTargetDiffSchema = publicMealPlanTargetDiffBaseSchema.omit({
+  previousNutritionTargetVersionId: true,
+  proposedNutritionTargetVersionId: true
+}).extend({
+  displayStatus: z.literal('legacy_unavailable'),
+  displayMessage: z.literal(
+    '历史餐单差异缺少展示快照，数值记录仍保留；可保留当前餐单，或重新生成后再确认覆盖。'
+  )
+}).strict();
+
+const mealPlanTargetDiffSchema = z.discriminatedUnion('displayStatus', [
+  completeMealPlanTargetDiffSchema,
+  legacyMealPlanTargetDiffSchema
+]);
 
 const foodResolutionSchema = z.object({
   foodId: z.string().min(1),
@@ -499,7 +533,12 @@ const currentContextRecalculationJobSchema = z.object({
   candidateMealPlanVersionId: z.string().min(1).nullable(),
   activatedMealPlanVersionId: z.string().min(1).nullable(),
   failureCode: z.enum(['provider_unavailable', 'nutrition_constraints_infeasible']).nullable()
-}).strict().refine((job) => job.status === 'failed_retryable' && job.failureCode !== null, {
+}).strict().refine((job) => (
+  job.status === 'failed_retryable'
+  && job.failureCode !== null
+  && job.completedAt === null
+  && job.activatedMealPlanVersionId === null
+), {
   message: 'context retryable job must be failed_retryable'
 });
 
@@ -581,7 +620,13 @@ const trainingCompletionRecordedSchema = z.object({
 }).strict().superRefine((value, context) => {
   if (
     value.recalculationStatus === 'failed_retryable'
-    && (value.recalculationJob === null || value.recalculationJob.status !== 'failed_retryable')
+    && (
+      value.recalculationJob === null
+      || value.recalculationJob.status !== 'failed_retryable'
+      || value.recalculationJob.failureCode === null
+      || value.recalculationJob.completedAt !== null
+      || value.recalculationJob.activatedMealPlanVersionId !== null
+    )
   ) {
     context.addIssue({
       code: 'custom',

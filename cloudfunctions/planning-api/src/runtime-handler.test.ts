@@ -4,6 +4,7 @@ import type {
   CloudBaseDocumentReference,
   CloudBaseTransaction
 } from '@fitness/persistence';
+import { CloudBasePlanningRepository } from '@fitness/persistence';
 import { createRuntimePlanningHandler } from './runtime-handler';
 
 class FakeDocumentReference implements CloudBaseDocumentReference {
@@ -23,6 +24,12 @@ class FakeDocumentReference implements CloudBaseDocumentReference {
 
 class FakeDatabase implements CloudBaseDatabase, CloudBaseTransaction {
   private readonly documents = new Map<string, unknown>();
+  public seed(key: string, value: unknown): void {
+    this.documents.set(key, structuredClone(value));
+  }
+  public readSeed(key: string): unknown {
+    return structuredClone(this.documents.get(key));
+  }
   public collection(name: string) {
     return {
       doc: (id: string) => new FakeDocumentReference(this.documents, `${name}/${id}`)
@@ -167,6 +174,47 @@ describe('runtime planning handler', () => {
       }
     });
   });
+
+  test.each([2, 3] as const)(
+    'reads schema-v%s through the public handler without provider backfill or storage mutation',
+    async (schemaVersion) => {
+      const database = new FakeDatabase();
+      const userId = `wx-openid-schema-v${String(schemaVersion)}`;
+      const repository = new CloudBasePlanningRepository(database);
+      const documentKey = `planning_user_states/${repository.documentIdForUser(userId)}`;
+      const stored = {
+        schemaVersion,
+        state: {
+          bodyProfiles: [],
+          goals: [],
+          trainingPlans: [],
+          dailyEnergyTargets: [],
+          ...(schemaVersion === 3 ? { dailyNutritionTargets: [] } : {}),
+          outboxEvents: [],
+          idempotencyRecords: [],
+          activeBodyProfileVersionId: null,
+          activeGoalVersionId: null,
+          activeTrainingPlanVersionId: null
+        }
+      };
+      database.seed(documentKey, stored);
+      const handler = createRuntimePlanningHandler({ runtimeMode: 'cloud', database });
+
+      const response = await handler({ action: 'getCurrentContext' }, { userId });
+
+      expect(response).toMatchObject({
+        success: true,
+        data: {
+          kind: 'current_context',
+          mealPlan: null,
+          pendingMealPlanCandidate: null,
+          selectableRecipes: [],
+          selectableRecipesStatus: 'no_options'
+        }
+      });
+      expect(database.readSeed(documentKey)).toEqual(stored);
+    }
+  );
 
   test('records a past completion fact through the CloudBase runtime without requiring providers', async () => {
     const database = new FakeDatabase();

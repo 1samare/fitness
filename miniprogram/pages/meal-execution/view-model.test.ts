@@ -34,6 +34,7 @@ function contextFixture(): CurrentContext {
           slot: 'breakfast' as const,
           recipeTemplateVersionId: 'recipe-breakfast',
           servingMultiplier: 1,
+          displayStatus: 'complete' as const,
           dishNameZh: '测试早餐',
           ingredients: [
             { displayNameZh: '测试米饭', grams: 100 },
@@ -44,6 +45,7 @@ function contextFixture(): CurrentContext {
           slot: 'lunch' as const,
           recipeTemplateVersionId: 'recipe-lunch',
           servingMultiplier: 1,
+          displayStatus: 'complete' as const,
           dishNameZh: '测试午餐',
           ingredients: [
             { displayNameZh: '测试鸡胸肉', grams: 120 },
@@ -54,6 +56,7 @@ function contextFixture(): CurrentContext {
           slot: 'dinner' as const,
           recipeTemplateVersionId: 'recipe-dinner',
           servingMultiplier: 1,
+          displayStatus: 'complete' as const,
           dishNameZh: '测试晚餐',
           ingredients: [
             { displayNameZh: '测试米饭', grams: 100 },
@@ -64,6 +67,7 @@ function contextFixture(): CurrentContext {
           slot: 'snack' as const,
           recipeTemplateVersionId: 'recipe-snack',
           servingMultiplier: 1,
+          displayStatus: 'complete' as const,
           dishNameZh: '测试加餐',
           ingredients: [{ displayNameZh: '测试水果', grams: 60 }]
         }
@@ -134,6 +138,7 @@ function contextFixture(): CurrentContext {
       previousNutritionTargetVersionId: 'target-old',
       proposedNutritionTargetVersionId: 'target-new',
       reason: 'locked_or_manually_modified',
+      displayStatus: 'complete',
       previousTarget: {
         estimatedEnergyKcal: 1800,
         proteinG: 90,
@@ -254,6 +259,51 @@ describe('meal execution view model', () => {
     expect(viewModel.recipeSelectionAvailable).toBe(false);
     expect(viewModel.recipeAvailabilityMessage).toContain('备选菜品暂不可用');
     expect(viewModel.recipeAvailabilityMessage).toContain('刷新');
+  });
+
+  it('renders legacy meal and diff snapshots as safe actionable text without exposing internal ids', () => {
+    const context = contextFixture();
+    const legacyContext: CurrentContext = {
+      ...context,
+      mealPlan: context.mealPlan === null ? null : {
+        ...context.mealPlan,
+        days: context.mealPlan.days.map((day) => ({
+          ...day,
+          meals: day.meals.map((meal) => ({
+            slot: meal.slot,
+            recipeTemplateVersionId: meal.recipeTemplateVersionId,
+            servingMultiplier: meal.servingMultiplier,
+            displayStatus: 'legacy_unavailable',
+            dishNameZh: '历史餐单菜名暂不可用',
+            ingredients: [],
+            displayMessage: '历史餐单缺少展示快照，数值记录仍保留，可重新生成补齐。'
+          }))
+        }))
+      },
+      pendingMealPlanTargetDiffs: context.pendingMealPlanTargetDiffs.map((diff) => ({
+        id: diff.id,
+        candidateMealPlanVersionId: diff.candidateMealPlanVersionId,
+        businessDate: diff.businessDate,
+        reason: diff.reason,
+        displayStatus: 'legacy_unavailable',
+        displayMessage: '历史餐单差异缺少展示快照，数值记录仍保留；可保留当前餐单，或重新生成后再确认覆盖。'
+      }))
+    };
+
+    const viewModel = buildMealExecutionViewModel(legacyContext);
+
+    expect(viewModel.days[0]?.meals[0]).toMatchObject({
+      dishNameZh: '历史餐单菜名暂不可用',
+      ingredients: [],
+      displayMessage: '历史餐单缺少展示快照，数值记录仍保留，可重新生成补齐。'
+    });
+    expect(viewModel.pendingDiffs[0]).toMatchObject({
+      targetChangeText: '历史餐单差异缺少展示快照，数值记录仍保留；可保留当前餐单，或重新生成后再确认覆盖。',
+      mealChangeText: ''
+    });
+    expect(JSON.stringify(viewModel)).not.toMatch(
+      /recipe-breakfast|internal-rice|diff-internal|target-old|target-new/
+    );
   });
 
   it('keeps fact success separate when meal recalculation can be retried', () => {

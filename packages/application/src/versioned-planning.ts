@@ -532,6 +532,71 @@ function latestTargetsForActivePlan(
   });
 }
 
+function recalculationTriggerTrainingPlanVersionId(
+  state: PlanningAggregateState,
+  job: RecalculationJob
+): string | undefined {
+  return job.triggerType === 'training_plan_changed'
+    ? state.outboxEvents.find((event) => event.eventId === job.triggerEventId)?.trainingPlanVersionId
+    : state.trainingCompletionEvents.find((event) => event.id === job.triggerEventId)
+      ?.trainingPlanVersionId;
+}
+
+export function recalculationJobMatchesActiveTrainingChain(
+  state: PlanningAggregateState,
+  job: RecalculationJob
+): boolean {
+  const trainingPlan = findById(state.trainingPlans, state.activeTrainingPlanVersionId);
+  const bodyProfile = findById(state.bodyProfiles, state.activeBodyProfileVersionId);
+  const goal = findById(state.goals, state.activeGoalVersionId);
+  if (
+    trainingPlan === null
+    || bodyProfile === null
+    || goal === null
+    || trainingPlan.bodyProfileVersionId !== bodyProfile.id
+    || trainingPlan.goalVersionId !== goal.id
+    || goal.bodyProfileVersionId !== bodyProfile.id
+    || recalculationTriggerTrainingPlanVersionId(state, job) !== trainingPlan.id
+  ) {
+    return false;
+  }
+  const weekDates = new Set(
+    Array.from({ length: 7 }, (_unused, index) => (
+      addBusinessDays(trainingPlan.payload.weekStartDate, index)
+    ))
+  );
+  return job.affectedDates.length > 0
+    && job.affectedDates.every((businessDate) => weekDates.has(businessDate));
+}
+
+export function recalculationJobCanRetryForCurrentContext(
+  state: PlanningAggregateState,
+  job: RecalculationJob
+): boolean {
+  if (!recalculationJobMatchesActiveTrainingChain(state, job)) return false;
+  const bodyProfile = findById(state.bodyProfiles, state.activeBodyProfileVersionId);
+  const goal = findById(state.goals, state.activeGoalVersionId);
+  const trainingPlan = findById(state.trainingPlans, state.activeTrainingPlanVersionId);
+  const inventory = findById(state.inventories, state.activeInventoryVersionId);
+  const mealPlan = findById(state.mealPlans, state.activeMealPlanVersionId);
+  if (
+    bodyProfile === null
+    || goal === null
+    || trainingPlan === null
+    || inventory === null
+    || mealPlan === null
+    || mealPlan.readiness !== 'complete'
+  ) return false;
+  const energyTargets = latestTargetsForActivePlan(state, bodyProfile, goal, trainingPlan);
+  const nutritionTargets = nutritionTargetsForEnergyTargets(state, energyTargets);
+  return energyTargets.length === 7
+    && energyTargets.every((target) => target.energy.kind === 'supported')
+    && nutritionTargets.length === 7
+    && nutritionTargets.every((target) => (
+      target.nutrition !== null && target.nutrition.kind === 'feasible'
+    ));
+}
+
 function nutritionTargetsForEnergyTargets(
   state: PlanningAggregateState,
   energyTargets: readonly DailyEnergyTargetVersion[]
@@ -811,7 +876,10 @@ export function createVersionedPlanningService(
       );
       const retryableRecalculationJob = [...state.recalculationJobs]
         .reverse()
-        .find((job) => job.status === 'failed_retryable') ?? null;
+        .find((job) => (
+          job.status === 'failed_retryable'
+          && recalculationJobCanRetryForCurrentContext(state, job)
+        )) ?? null;
       return {
         bodyProfile,
         goal,

@@ -20,6 +20,12 @@ import {
   type CurrentContext,
   type MealDayDisplay
 } from './view-model';
+import {
+  parsePendingMealCommand,
+  pendingMealCommandStorageKey,
+  selectPendingMealCommand,
+  type MealWriteRequest
+} from './pending-command';
 
 type SuccessData = Extract<PlanningApiResponse, { success: true }>['data'];
 type LatestVersions = CurrentContext['latestVersions'];
@@ -158,13 +164,18 @@ function responseError(response: PlanningApiResponse): string {
     : mealPlanningErrorMessage(response.error.code);
 }
 
-function successKind<TKind extends SuccessData['kind']>(
-  response: PlanningApiResponse,
-  kind: TKind
-): response is Extract<PlanningApiResponse, { success: true }> & {
-  readonly data: Extract<SuccessData, { kind: TKind }>;
-} {
-  return response.success && response.data.kind === kind;
+async function callPendingWrite(
+  request: MealWriteRequest,
+  confirmedKind: SuccessData['kind'],
+  nextKey: () => string
+): Promise<PlanningApiResponse> {
+  const storageKey = pendingMealCommandStorageKey(request.action);
+  const stored = parsePendingMealCommand(wx.getStorageSync(storageKey));
+  const selected = selectPendingMealCommand({ request, pending: stored, nextKey });
+  if (!selected.reused) wx.setStorageSync(storageKey, selected.pending);
+  const response = await planningApiClient.call(selected.pending.request);
+  if (response.success && response.data.kind === confirmedKind) wx.removeStorageSync(storageKey);
+  return response;
 }
 
 Page<PageData, PageActions>({
@@ -216,6 +227,7 @@ Page<PageData, PageActions>({
 
   async refreshContext() {
     if (this.data.loadingContext) return;
+    const hadRetryableJob = this.data.retryJobId.length > 0;
     this.setData({ loadingContext: true, contextMessage: '' });
     try {
       const response = await planningApiClient.call({ action: 'getCurrentContext' });
@@ -244,8 +256,11 @@ Page<PageData, PageActions>({
         pendingCandidateId: context.pendingMealPlanCandidate?.id ?? '',
         retryJobId: context.retryableRecalculationJob?.id ?? '',
         needsRecalculationStatusRefresh: context.retryableRecalculationJob === null
-          ? this.data.needsRecalculationStatusRefresh
-          : false
+          ? this.data.needsRecalculationStatusRefresh || hadRetryableJob
+          : false,
+        mealMessage: context.retryableRecalculationJob === null && hadRetryableJob
+          ? '未发现当前训练计划可重试的餐单重算任务；旧任务可能已不再适用或已由后台处理，请刷新确认最新餐单。'
+          : this.data.mealMessage
       });
     } catch (error: unknown) {
       this.setData({
@@ -325,7 +340,7 @@ Page<PageData, PageActions>({
     this.setData({ inventoryRows: rows, canSaveInventory: false, formError: '' });
     try {
       const response = await planningApiClient.call(buildResolveFoodNameRequest(selected.name));
-      if (!successKind(response, 'food_name_resolved') || response.data.resolution === null) {
+      if (!response.success || response.data.kind !== 'food_name_resolved' || response.data.resolution === null) {
         const resolutionMessage = response.success
           ? '未找到审核食材，请换用更常见的标准名称后重新校验名称。'
           : response.error.code === 'provider_unavailable'
@@ -389,12 +404,12 @@ Page<PageData, PageActions>({
       formError: ''
     });
     try {
-      const inventoryResponse = await planningApiClient.call(buildInventoryRequest({
+      const inventoryResponse = await callPendingWrite(buildInventoryRequest({
         rows: this.data.inventoryRows,
         expectedVersion: this.data.latestVersions.inventory,
-        idempotencyKey: idempotencyKey('inventory-ui')
-      }));
-      if (!successKind(inventoryResponse, 'inventory_saved')) {
+        idempotencyKey: 'inventory-ui-pending-placeholder'
+      }), 'inventory_saved', () => idempotencyKey('inventory-ui'));
+      if (!inventoryResponse.success || inventoryResponse.data.kind !== 'inventory_saved') {
         this.setData({ formError: responseError(inventoryResponse) });
         return;
       }
@@ -404,13 +419,13 @@ Page<PageData, PageActions>({
         generatingMeal: true,
         actionMessage: '食材库存已保存。'
       });
-      const mealResponse = await planningApiClient.call(buildGenerateMealPlanRequest({
+      const mealResponse = await callPendingWrite(buildGenerateMealPlanRequest({
         weekStartDate: this.data.generationWeekStart,
         businessToday: this.data.businessToday,
         expectedVersion: this.data.latestVersions.mealPlan,
-        idempotencyKey: idempotencyKey('meal-generate-ui')
-      }));
-      if (!successKind(mealResponse, 'weekly_meal_plan_generated')) {
+        idempotencyKey: 'meal-generate-ui-pending-placeholder'
+      }), 'weekly_meal_plan_generated', () => idempotencyKey('meal-generate-ui'));
+      if (!mealResponse.success || mealResponse.data.kind !== 'weekly_meal_plan_generated') {
         this.setData({ generationMessage: `库存已保存，但餐单生成未完成。${responseError(mealResponse)}` });
         return;
       }
@@ -434,14 +449,14 @@ Page<PageData, PageActions>({
     if (day === undefined) return;
     this.setData({ updatingMeal: true, formError: '', actionMessage: '' });
     try {
-      const response = await planningApiClient.call(buildLockRequest({
+      const response = await callPendingWrite(buildLockRequest({
         businessDate: day.businessDate,
         businessToday: this.data.businessToday,
         locked: event.detail.value,
         expectedVersion: this.data.latestVersions.mealPlan,
-        idempotencyKey: idempotencyKey('meal-lock-ui')
-      }));
-      if (!successKind(response, 'meal_plan_updated')) {
+        idempotencyKey: 'meal-lock-ui-pending-placeholder'
+      }), 'meal_plan_updated', () => idempotencyKey('meal-lock-ui'));
+      if (!response.success || response.data.kind !== 'meal_plan_updated') {
         this.setData({ formError: responseError(response) });
         return;
       }
@@ -470,16 +485,16 @@ Page<PageData, PageActions>({
     }
     this.setData({ updatingMeal: true, formError: '', actionMessage: '' });
     try {
-      const response = await planningApiClient.call(buildRecipeEditRequest({
+      const response = await callPendingWrite(buildRecipeEditRequest({
         businessDate: day.businessDate,
         businessToday: this.data.businessToday,
         slot: meal.slot,
         selectedRecipeIndex,
         recipeOptions: this.data.selectableRecipes,
         expectedVersion: this.data.latestVersions.mealPlan,
-        idempotencyKey: idempotencyKey('meal-edit-ui')
-      }));
-      if (!successKind(response, 'meal_plan_updated')) {
+        idempotencyKey: 'meal-edit-ui-pending-placeholder'
+      }), 'meal_plan_updated', () => idempotencyKey('meal-edit-ui'));
+      if (!response.success || response.data.kind !== 'meal_plan_updated') {
         this.setData({ formError: responseError(response) });
         return;
       }
@@ -502,13 +517,13 @@ Page<PageData, PageActions>({
     if (this.data.decidingCandidate || this.data.pendingCandidateId.length === 0) return;
     this.setData({ decidingCandidate: true, formError: '', actionMessage: '' });
     try {
-      const response = await planningApiClient.call(buildCandidateDecisionRequest({
+      const response = await callPendingWrite(buildCandidateDecisionRequest({
         candidateMealPlanVersionId: this.data.pendingCandidateId,
         decision: this.data.selectedDecision,
         expectedVersion: this.data.latestVersions.mealPlanDecision,
-        idempotencyKey: idempotencyKey('meal-decision-ui')
-      }));
-      if (!successKind(response, 'meal_plan_candidate_decided')) {
+        idempotencyKey: 'meal-decision-ui-pending-placeholder'
+      }), 'meal_plan_candidate_decided', () => idempotencyKey('meal-decision-ui'));
+      if (!response.success || response.data.kind !== 'meal_plan_candidate_decided') {
         this.setData({ formError: responseError(response) });
         return;
       }
@@ -541,13 +556,13 @@ Page<PageData, PageActions>({
       formError: ''
     });
     try {
-      const response = await planningApiClient.call(buildCompletionRequest({
+      const response = await callPendingWrite(buildCompletionRequest({
         businessDate: this.data.completionDate,
         businessToday: this.data.businessToday,
         completedDurationMinutes: this.data.completedDurationMinutes,
         expectedVersion: this.data.latestVersions.trainingCompletion,
-        idempotencyKey: idempotencyKey('training-completion-ui')
-      }));
+        idempotencyKey: 'training-completion-ui-pending-placeholder'
+      }), 'training_completion_recorded', () => idempotencyKey('training-completion-ui'));
       const feedback = buildCompletionFeedback(response);
       this.setData({
         factMessage: feedback.factMessage,
@@ -555,7 +570,9 @@ Page<PageData, PageActions>({
         retryJobId: feedback.retryJobId,
         needsRecalculationStatusRefresh: feedback.needsStatusRefresh
       });
-      if (successKind(response, 'training_completion_recorded')) await this.refreshContext();
+      if (response.success && response.data.kind === 'training_completion_recorded') {
+        await this.refreshContext();
+      }
     } catch (error: unknown) {
       this.setData({
         formError: error instanceof Error
@@ -571,12 +588,12 @@ Page<PageData, PageActions>({
     if (this.data.recalculatingMeal || this.data.retryJobId.length === 0) return;
     this.setData({ recalculatingMeal: true, mealMessage: '', formError: '' });
     try {
-      const response = await planningApiClient.call(buildRetryRequest({
+      const response = await callPendingWrite(buildRetryRequest({
         recalculationJobId: this.data.retryJobId,
         expectedVersion: this.data.latestVersions.recalculationJob,
-        idempotencyKey: idempotencyKey('meal-retry-ui')
-      }));
-      if (!successKind(response, 'meal_plan_recalculation_processed')) {
+        idempotencyKey: 'meal-retry-ui-pending-placeholder'
+      }), 'meal_plan_recalculation_processed', () => idempotencyKey('meal-retry-ui'));
+      if (!response.success || response.data.kind !== 'meal_plan_recalculation_processed') {
         this.setData({ mealMessage: responseError(response) });
         return;
       }

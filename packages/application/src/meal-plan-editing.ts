@@ -65,6 +65,15 @@ export interface SelectableRecipeOption {
   readonly dishNameZh: string;
 }
 
+function hasCompleteMealDisplaySnapshot(plan: MealPlanVersion): boolean {
+  return plan.days.every((day) => day.meals.every((meal) => (
+    meal.dishNameZh !== undefined
+    && meal.dishNameZh.trim().length > 0
+    && meal.ingredients !== undefined
+    && meal.ingredients.length > 0
+  )));
+}
+
 export type MealPlanEditingServiceDependencies = MealPlanGenerationServiceDependencies;
 
 export class RecipeNotSelectableError extends Error {
@@ -752,6 +761,9 @@ export function createMealPlanEditingService(
       const context = await base.getCurrentContext(userId);
       let selectableRecipes: readonly SelectableRecipeOption[] = [];
       let selectableRecipesStatus: CurrentPlanningContext['selectableRecipesStatus'] = 'no_options';
+      if (context.mealPlan === null || !hasCompleteMealDisplaySnapshot(context.mealPlan)) {
+        return { ...context, selectableRecipes, selectableRecipesStatus };
+      }
       try {
         selectableRecipes = (await loadProviderSnapshot({
           providers,

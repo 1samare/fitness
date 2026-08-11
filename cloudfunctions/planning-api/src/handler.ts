@@ -204,11 +204,28 @@ function publicMealPlan(version: MealPlanVersion) {
     readiness: version.readiness,
     days: version.days.map((day) => ({
       ...day,
-      meals: day.meals.map((meal) => ({
-        ...meal,
-        dishNameZh: meal.dishNameZh ?? '菜品名称暂不可用',
-        ingredients: (meal.ingredients ?? []).map((ingredient) => ({ ...ingredient }))
-      })),
+      meals: day.meals.map((meal) => (
+        meal.dishNameZh !== undefined
+        && meal.ingredients !== undefined
+        && meal.ingredients.length > 0
+          ? {
+              slot: meal.slot,
+              recipeTemplateVersionId: meal.recipeTemplateVersionId,
+              servingMultiplier: meal.servingMultiplier,
+              displayStatus: 'complete' as const,
+              dishNameZh: meal.dishNameZh,
+              ingredients: meal.ingredients.map((ingredient) => ({ ...ingredient }))
+            }
+          : {
+              slot: meal.slot,
+              recipeTemplateVersionId: meal.recipeTemplateVersionId,
+              servingMultiplier: meal.servingMultiplier,
+              displayStatus: 'legacy_unavailable' as const,
+              dishNameZh: '历史餐单菜名暂不可用' as const,
+              ingredients: [],
+              displayMessage: '历史餐单缺少展示快照，数值记录仍保留，可重新生成补齐。' as const
+            }
+      )),
       ingredientAmounts: day.ingredientAmounts.map((item) => ({ ...item })),
       nutritionTotals: { ...day.nutritionTotals },
       nutritionSourceSnapshotIds: [...day.nutritionSourceSnapshotIds]
@@ -217,21 +234,29 @@ function publicMealPlan(version: MealPlanVersion) {
 }
 
 function publicMealPlanTargetDiff(diff: MealPlanTargetDiff) {
+  const common = {
+    id: diff.id,
+    candidateMealPlanVersionId: diff.candidateMealPlanVersionId,
+    businessDate: diff.businessDate,
+    reason: diff.reason
+  };
   if (
     diff.previousTarget === undefined
     || diff.proposedTarget === undefined
     || diff.previousMeals === undefined
     || diff.proposedMeals === undefined
   ) {
-    throw new Error('Stored meal-plan target diff is missing display snapshots');
+    return {
+      ...common,
+      displayStatus: 'legacy_unavailable' as const,
+      displayMessage: '历史餐单差异缺少展示快照，数值记录仍保留；可保留当前餐单，或重新生成后再确认覆盖。' as const
+    };
   }
   return {
-    id: diff.id,
-    candidateMealPlanVersionId: diff.candidateMealPlanVersionId,
-    businessDate: diff.businessDate,
+    ...common,
+    displayStatus: 'complete' as const,
     previousNutritionTargetVersionId: diff.previousNutritionTargetVersionId,
     proposedNutritionTargetVersionId: diff.proposedNutritionTargetVersionId,
-    reason: diff.reason,
     previousTarget: { ...diff.previousTarget, fiberRangeG: { ...diff.previousTarget.fiberRangeG } },
     proposedTarget: { ...diff.proposedTarget, fiberRangeG: { ...diff.proposedTarget.fiberRangeG } },
     previousMeals: diff.previousMeals.map((meal) => ({

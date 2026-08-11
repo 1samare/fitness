@@ -113,6 +113,7 @@
         <view class="meal-row__label">
           <text class="meal-row__slot">{{meal.slotLabel}}</text>
           <text class="meal-row__dish">{{meal.dishNameZh}}</text>
+          <text wx:if="{{meal.displayMessage}}" class="meal-row__legacy">{{meal.displayMessage}}</text>
           <view class="meal-row__ingredients">
             <text wx:for="{{meal.ingredients}}" wx:key="index" wx:for-item="ingredient" class="meal-row__ingredient">
               {{ingredient.displayNameZh}} · {{ingredient.gramsText}}
@@ -127,7 +128,7 @@
           data-meal-index="{{mealIndex}}"
           bindchange="onRecipeChange"
         >
-          <view class="picker picker--compact {{!day.editable || !recipeSelectionAvailable ? 'control--disabled' : ''}}">选择替换菜品</view>
+          <view class="picker picker--compact {{!day.editable || updatingMeal || !recipeSelectionAvailable ? 'control--disabled' : ''}}">选择替换菜品</view>
         </picker>
       </view>
     </view>
@@ -138,8 +139,8 @@
     <view wx:for="{{pendingDiffs}}" wx:key="businessDate" class="diff-row">
       <text class="diff-row__date">{{item.businessDate}}</text>
       <text>{{item.reasonText}}</text>
-      <text>{{item.targetChangeText}}</text>
-      <text>{{item.mealChangeText}}</text>
+      <text wx:if="{{item.targetChangeText}}">{{item.targetChangeText}}</text>
+      <text wx:if="{{item.mealChangeText}}">{{item.mealChangeText}}</text>
     </view>
     <radio-group class="decision-options" bindchange="onCandidateDecisionChange" aria-label="选择餐单差异处理方式">
       <label wx:for="{{decisionOptions}}" wx:key="value" class="decision-option">

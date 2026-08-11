@@ -3,6 +3,11 @@ import type { CandidateDecision, MealSlot } from './form';
 
 type SuccessData = Extract<PlanningApiResponse, { success: true }>['data'];
 export type CurrentContext = Extract<SuccessData, { kind: 'current_context' }>;
+type PendingMealPlanTargetDiff = CurrentContext['pendingMealPlanTargetDiffs'][number];
+type CompletePendingMealPlanTargetDiff = Extract<
+  PendingMealPlanTargetDiff,
+  { displayStatus: 'complete' }
+>;
 
 export const MEAL_SLOT_LABELS = {
   breakfast: '早餐',
@@ -17,6 +22,7 @@ export interface MealDisplay {
   readonly dishNameZh: string;
   readonly selectedRecipeIndex: number;
   readonly recipeLabels: readonly string[];
+  readonly displayMessage: string;
   readonly ingredients: readonly {
     readonly displayNameZh: string;
     readonly gramsText: string;
@@ -74,6 +80,7 @@ function signedDelta(previous: number, proposed: number): string {
 }
 
 function targetChangeText(diff: CurrentContext['pendingMealPlanTargetDiffs'][number]): string {
+  if (diff.displayStatus === 'legacy_unavailable') return diff.displayMessage;
   const previous = diff.previousTarget;
   const proposed = diff.proposedTarget;
   return [
@@ -85,7 +92,7 @@ function targetChangeText(diff: CurrentContext['pendingMealPlanTargetDiffs'][num
   ].join('；');
 }
 
-function mealSnapshotText(meals: CurrentContext['pendingMealPlanTargetDiffs'][number]['previousMeals']): string {
+function mealSnapshotText(meals: CompletePendingMealPlanTargetDiff['previousMeals']): string {
   return meals.map((meal) => {
     const ingredients = meal.ingredients
       .map((ingredient) => `${ingredient.displayNameZh} ${nutrientNumber(ingredient.grams)} 克`)
@@ -95,6 +102,7 @@ function mealSnapshotText(meals: CurrentContext['pendingMealPlanTargetDiffs'][nu
 }
 
 function mealChangeText(diff: CurrentContext['pendingMealPlanTargetDiffs'][number]): string {
+  if (diff.displayStatus === 'legacy_unavailable') return '';
   const previous = mealSnapshotText(diff.previousMeals);
   const proposed = mealSnapshotText(diff.proposedMeals);
   return previous === proposed
@@ -127,6 +135,7 @@ export function buildMealExecutionViewModel(context: CurrentContext): MealExecut
             dishNameZh: meal.dishNameZh,
             selectedRecipeIndex: recipe?.index ?? 0,
             recipeLabels,
+            displayMessage: meal.displayStatus === 'legacy_unavailable' ? meal.displayMessage : '',
             ingredients: meal.ingredients.map((ingredient) => ({
               displayNameZh: ingredient.displayNameZh,
               gramsText: `估算 ${nutrientNumber(ingredient.grams)} 克`

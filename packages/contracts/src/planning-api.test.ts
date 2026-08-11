@@ -387,6 +387,105 @@ describe('planning API contracts', () => {
     expect(planningApiResponseSchema.safeParse(retryableWithoutJob).success).toBe(false);
   });
 
+  it.each([
+    ['failureCode', null],
+    ['completedAt', '2026-08-19T04:01:00.000Z'],
+    ['activatedMealPlanVersionId', 'meal-plan-activated']
+  ] as const)(
+    'rejects a failed_retryable completion job with invalid %s',
+    (field, invalidValue) => {
+      const failedJob = {
+        kind: 'recalculation_job',
+        id: 'job-failed',
+        triggerEventId: 'training-completion-2',
+        triggerType: 'training_completion',
+        affectedDates: ['2026-08-19'],
+        status: 'failed_retryable',
+        createdAt: '2026-08-19T04:00:00.000Z',
+        completedAt: null,
+        candidateMealPlanVersionId: null,
+        activatedMealPlanVersionId: null,
+        failureCode: 'provider_unavailable'
+      } as const;
+      const response = {
+        success: true,
+        data: {
+          kind: 'training_completion_recorded',
+          event: {
+            kind: 'training_completion_event',
+            id: 'training-completion-2',
+            version: 2,
+            trainingPlanVersionId: 'training-plan-1',
+            businessDate: '2026-08-19',
+            completedDurationMinutes: 30,
+            occurredAt: '2026-08-19T04:00:00.000Z'
+          },
+          dailyEnergyTargets: [],
+          dailyNutritionTargets: [],
+          recalculationJob: { ...failedJob, [field]: invalidValue },
+          candidateMealPlan: null,
+          targetDiffs: [],
+          recalculationStatus: 'failed_retryable'
+        }
+      } as const;
+
+      expect(planningApiResponseSchema.safeParse(response).success).toBe(false);
+    }
+  );
+
+  it.each([
+    ['completedAt', '2026-08-19T04:01:00.000Z'],
+    ['activatedMealPlanVersionId', 'meal-plan-activated']
+  ] as const)(
+    'rejects a current-context retry job with invalid %s',
+    (field, invalidValue) => {
+      const currentContext = {
+        success: true,
+        data: {
+          kind: 'current_context',
+          bodyProfile: null,
+          goal: null,
+          trainingPlan: null,
+          dailyEnergyTargets: [],
+          dailyNutritionTargets: [],
+          inventory: null,
+          mealPlan: null,
+          mealPlanStale: false,
+          pendingMealPlanCandidate: null,
+          pendingMealPlanTargetDiffs: [],
+          selectableRecipes: [],
+          selectableRecipesStatus: 'no_options',
+          retryableRecalculationJob: {
+            kind: 'recalculation_job',
+            id: 'job-failed',
+            triggerEventId: 'training-completion-2',
+            triggerType: 'training_completion',
+            affectedDates: ['2026-08-19'],
+            status: 'failed_retryable',
+            createdAt: '2026-08-19T04:00:00.000Z',
+            completedAt: null,
+            candidateMealPlanVersionId: null,
+            activatedMealPlanVersionId: null,
+            failureCode: 'provider_unavailable',
+            [field]: invalidValue
+          },
+          latestVersions: {
+            bodyProfile: 0,
+            goal: 0,
+            trainingPlan: 0,
+            inventory: 0,
+            mealPlan: 0,
+            mealPlanDecision: 0,
+            trainingCompletion: 0,
+            recalculationJob: 1
+          }
+        }
+      } as const;
+
+      expect(planningApiResponseSchema.safeParse(currentContext).success).toBe(false);
+    }
+  );
+
   it('parses public inventory responses and rejects stored user identity', () => {
     const response = {
       success: true,

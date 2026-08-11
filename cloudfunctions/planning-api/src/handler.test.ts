@@ -143,12 +143,41 @@ function createCompletionHarness() {
   }));
   return {
     handler,
+    repository,
     setNow(value: string) {
       instant = value;
     },
     setProviderAvailable(value: boolean) {
       providerAvailable = value;
     }
+  };
+}
+
+function withoutMealDisplaySnapshots(
+  state: Awaited<ReturnType<InMemoryPlanningRepository['read']>>
+) {
+  return {
+    ...state,
+    mealPlans: state.mealPlans.map((plan) => ({
+      ...plan,
+      days: plan.days.map((day) => ({
+        ...day,
+        meals: day.meals.map((meal) => ({
+          slot: meal.slot,
+          recipeTemplateVersionId: meal.recipeTemplateVersionId,
+          servingMultiplier: meal.servingMultiplier
+        }))
+      }))
+    })),
+    mealPlanTargetDiffs: state.mealPlanTargetDiffs.map((diff) => ({
+      id: diff.id,
+      userId: diff.userId,
+      candidateMealPlanVersionId: diff.candidateMealPlanVersionId,
+      businessDate: diff.businessDate,
+      previousNutritionTargetVersionId: diff.previousNutritionTargetVersionId,
+      proposedNutritionTargetVersionId: diff.proposedNutritionTargetVersionId,
+      reason: diff.reason
+    }))
   };
 }
 
@@ -783,6 +812,61 @@ describe('handlePlanningApi', () => {
     if (!retry.success) expect(retry.error.code).toBe('provider_unavailable');
   });
 
+  it('publishes legacy-safe active and pending meal displays without mutating old schema-v4 state', async () => {
+    const harness = createCompletionHarness();
+    await prepareCompletionPlan(harness);
+    await harness.handler({
+      action: 'setMealPlanDayLock',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'legacy-display-lock-001',
+        payload: { businessDate: '2026-08-19', locked: true }
+      }
+    }, { userId: 'trusted-user-a' });
+    harness.setNow('2026-08-19T04:00:00.000Z');
+    const completion = await harness.handler({
+      action: 'recordTrainingCompletion',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'legacy-display-completion-001',
+        payload: { businessDate: '2026-08-19', completedDurationMinutes: 30 }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(completion).toMatchObject({
+      success: true,
+      data: { kind: 'training_completion_recorded', recalculationStatus: 'pending_confirmation' }
+    });
+    await harness.repository.transact('trusted-user-a', (state) => ({
+      nextState: withoutMealDisplaySnapshots(state),
+      result: undefined
+    }));
+    const beforeRead = await harness.repository.read('trusted-user-a');
+
+    const context = await harness.handler(
+      { action: 'getCurrentContext' },
+      { userId: 'trusted-user-a' }
+    );
+
+    expect(context.success).toBe(true);
+    if (!context.success || context.data.kind !== 'current_context') {
+      throw new Error('Expected legacy-safe current context');
+    }
+    expect(context.data.mealPlan?.days[0]?.meals[0]).toEqual(expect.objectContaining({
+      displayStatus: 'legacy_unavailable',
+      dishNameZh: '历史餐单菜名暂不可用',
+      ingredients: [],
+      displayMessage: '历史餐单缺少展示快照，数值记录仍保留，可重新生成补齐。'
+    }));
+    expect(context.data.pendingMealPlanCandidate?.days[0]?.meals[0]).toEqual(
+      expect.objectContaining({ displayStatus: 'legacy_unavailable' })
+    );
+    expect(context.data.pendingMealPlanTargetDiffs[0]).toEqual(expect.objectContaining({
+      displayStatus: 'legacy_unavailable',
+      displayMessage: '历史餐单差异缺少展示快照，数值记录仍保留；可保留当前餐单，或重新生成后再确认覆盖。'
+    }));
+    expect(await harness.repository.read('trusted-user-a')).toEqual(beforeRead);
+  });
+
   it('publishes the exact recalculation-job version and retries a failed job when meal-plan count differs', async () => {
     const harness = createCompletionHarness();
     await prepareCompletionPlan(harness);
@@ -853,6 +937,123 @@ describe('handlePlanningApi', () => {
         recalculationJob: { status: 'completed' }
       }
     });
+  });
+
+  it('hides an old-plan failed job after P2 is active and publishes only the newest P2 failure', async () => {
+    const harness = createCompletionHarness();
+    await prepareCompletionPlan(harness);
+    harness.setNow('2026-08-19T04:00:00.000Z');
+    harness.setProviderAvailable(false);
+    const p1Failure = await harness.handler({
+      action: 'recordTrainingCompletion',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'p1-failed-completion-001',
+        payload: { businessDate: '2026-08-19', completedDurationMinutes: 30 }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(p1Failure).toMatchObject({
+      success: true,
+      data: { kind: 'training_completion_recorded', recalculationStatus: 'failed_retryable' }
+    });
+    if (!p1Failure.success || p1Failure.data.kind !== 'training_completion_recorded') {
+      throw new Error('Expected P1 failed completion');
+    }
+    const p1JobId = p1Failure.data.recalculationJob?.id;
+
+    harness.setProviderAvailable(true);
+    const p2Saved = await harness.handler({
+      action: 'saveTrainingPlan',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'activate-p2-001',
+        payload: {
+          weekStartDate: '2026-08-17',
+          businessTimezone: 'Asia/Shanghai',
+          sessions: [
+            { businessDate: '2026-08-19', sessionCode: '02054', durationMinutes: 60 },
+            { businessDate: '2026-08-20', sessionCode: '02054', durationMinutes: 60 }
+          ]
+        }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(p2Saved).toMatchObject({ success: true, data: { kind: 'training_plan_saved' } });
+
+    const afterP2 = await harness.handler(
+      { action: 'getCurrentContext' },
+      { userId: 'trusted-user-a' }
+    );
+    expect(afterP2).toMatchObject({
+      success: true,
+      data: { kind: 'current_context', retryableRecalculationJob: null }
+    });
+
+    harness.setNow('2026-08-20T04:00:00.000Z');
+    harness.setProviderAvailable(false);
+    const p2Failure = await harness.handler({
+      action: 'recordTrainingCompletion',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'p2-failed-completion-001',
+        payload: { businessDate: '2026-08-20', completedDurationMinutes: 20 }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(p2Failure).toMatchObject({
+      success: true,
+      data: { kind: 'training_completion_recorded', recalculationStatus: 'failed_retryable' }
+    });
+    if (!p2Failure.success || p2Failure.data.kind !== 'training_completion_recorded') {
+      throw new Error('Expected P2 failed completion');
+    }
+    const afterP2Failure = await harness.handler(
+      { action: 'getCurrentContext' },
+      { userId: 'trusted-user-a' }
+    );
+    expect(afterP2Failure).toMatchObject({
+      success: true,
+      data: {
+        kind: 'current_context',
+        retryableRecalculationJob: { id: p2Failure.data.recalculationJob?.id }
+      }
+    });
+    const state = await harness.repository.read('trusted-user-a');
+    expect(state.recalculationJobs.find((job) => (
+      job.id === p1JobId
+    ))).toMatchObject({ status: 'failed_retryable' });
+  });
+
+  it('keeps failed-job history but does not publish retry when process prerequisites disappeared', async () => {
+    const harness = createCompletionHarness();
+    await prepareCompletionPlan(harness);
+    harness.setNow('2026-08-19T04:00:00.000Z');
+    harness.setProviderAvailable(false);
+    const failed = await harness.handler({
+      action: 'recordTrainingCompletion',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'failed-before-prerequisite-loss-001',
+        payload: { businessDate: '2026-08-19', completedDurationMinutes: 30 }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(failed).toMatchObject({
+      success: true,
+      data: { kind: 'training_completion_recorded', recalculationStatus: 'failed_retryable' }
+    });
+    await harness.repository.transact('trusted-user-a', (state) => ({
+      nextState: { ...state, activeInventoryVersionId: null },
+      result: undefined
+    }));
+
+    const context = await harness.handler(
+      { action: 'getCurrentContext' },
+      { userId: 'trusted-user-a' }
+    );
+
+    expect(context).toMatchObject({
+      success: true,
+      data: { kind: 'current_context', retryableRecalculationJob: null }
+    });
+    expect((await harness.repository.read('trusted-user-a')).recalculationJobs).toHaveLength(1);
   });
 
   it('maps future completion and a non-pending candidate to stable public errors', async () => {
