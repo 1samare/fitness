@@ -17,6 +17,7 @@ import {
   buildCompletionFeedback,
   buildMealExecutionViewModel,
   mealPlanningErrorMessage,
+  recalculationJobFailureMessage,
   type CurrentContext,
   type MealDayDisplay
 } from './view-model';
@@ -338,9 +339,11 @@ Page<PageData, PageActions>({
         needsRecalculationStatusRefresh: context.retryableRecalculationJob === null
           ? this.data.needsRecalculationStatusRefresh || hadRetryableJob
           : false,
-        mealMessage: context.retryableRecalculationJob === null && hadRetryableJob
-          ? '未发现当前训练计划可重试的餐单重算任务；旧任务可能已不再适用或已由后台处理，请刷新确认最新餐单。'
-          : this.data.mealMessage
+        mealMessage: context.retryableRecalculationJob !== null
+          ? recalculationJobFailureMessage(context.retryableRecalculationJob)
+          : hadRetryableJob
+            ? '未发现当前训练计划可重试的餐单重算任务；旧任务可能已不再适用或已由后台处理，请刷新确认最新餐单。'
+            : this.data.mealMessage
       });
     } catch (error: unknown) {
       this.setData({

@@ -12,6 +12,7 @@ type WeeklyMealConflict = Extract<
   Extract<PlanningApiResponse, { success: false }>['error'],
   { code: 'nutrition_constraints_infeasible' }
 >['conflicts'][number];
+type PublicRecalculationJob = NonNullable<CurrentContext['retryableRecalculationJob']>;
 
 export const MEAL_SLOT_LABELS = {
   breakfast: '早餐',
@@ -244,6 +245,16 @@ export function mealPlanningErrorMessage(
   return '操作未完成，请检查输入后重试。';
 }
 
+export function recalculationJobFailureMessage(job: PublicRecalculationJob): string {
+  if (job.failureCode === 'nutrition_constraints_infeasible') {
+    if (job.failureConflictDetailsStatus === 'legacy_unavailable') {
+      return '历史失败详情不可用。请检查库存、过敏原和忌口设置后重新生成餐单。';
+    }
+    return mealPlanningErrorMessage(job.failureCode, job.failureConflicts);
+  }
+  return mealPlanningErrorMessage(job.failureCode ?? 'provider_unavailable');
+}
+
 export function buildCompletionFeedback(response: PlanningApiResponse): CompletionFeedback {
   if (!response.success) {
     return {
@@ -264,7 +275,7 @@ export function buildCompletionFeedback(response: PlanningApiResponse): Completi
       factMessage: '训练完成情况已保存。',
       mealMessage: response.data.recalculationJob === null
         ? '餐单重算暂未完成，训练事实不受影响。请刷新状态后重试。'
-        : '餐单重算暂未完成，训练事实不受影响。请稍后重试。',
+        : recalculationJobFailureMessage(response.data.recalculationJob),
       retryJobId: response.data.recalculationJob?.id ?? '',
       needsStatusRefresh: response.data.recalculationJob === null
     };

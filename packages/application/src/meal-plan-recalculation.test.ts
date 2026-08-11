@@ -214,6 +214,21 @@ async function prepareGeneratedPlan(
   });
 }
 
+async function replaceWithInsufficientInventory(
+  harness: ReturnType<typeof createHarness>
+): Promise<void> {
+  await harness.service.saveInventory('user-a', {
+    expectedVersion: 1,
+    idempotencyKey: 'inventory-save-insufficient',
+    payload: {
+      items: BALANCED_SNAPSHOTS.map((snapshot) => ({
+        name: snapshot.canonicalNameZh,
+        availableGrams: 1
+      }))
+    }
+  });
+}
+
 async function prepareConsecutivePendingCandidates(
   harness: ReturnType<typeof createHarness>
 ) {
@@ -257,6 +272,64 @@ async function prepareConsecutivePendingCandidates(
     first,
     second,
     firstCandidate: first.candidateMealPlan,
+    secondCandidate: second.candidateMealPlan
+  };
+}
+
+async function prepareFirstLockedCompletionCandidate(
+  harness: ReturnType<typeof createHarness>
+) {
+  await prepareGeneratedPlan(harness, [{
+    businessDate: '2026-08-18',
+    sessionCode: '02054',
+    durationMinutes: 60
+  }, {
+    businessDate: '2026-08-19',
+    sessionCode: '02054',
+    durationMinutes: 60
+  }]);
+  await harness.service.setMealPlanDayLock('user-a', {
+    expectedVersion: 1,
+    idempotencyKey: 'meal-lock-completion-a',
+    payload: { businessDate: '2026-08-18', locked: true }
+  });
+  const active = await harness.service.setMealPlanDayLock('user-a', {
+    expectedVersion: 2,
+    idempotencyKey: 'meal-lock-completion-b',
+    payload: { businessDate: '2026-08-19', locked: true }
+  });
+  harness.setNow('2026-08-18T04:00:00.000Z');
+  const first = await harness.service.recordTrainingCompletion('user-a', {
+    expectedVersion: 0,
+    idempotencyKey: 'completion-consecutive-a',
+    payload: { businessDate: '2026-08-18', completedDurationMinutes: 30 }
+  });
+  if (first.candidateMealPlan === null || first.recalculationJob === null) {
+    throw new Error('Expected first completion candidate');
+  }
+  return {
+    active,
+    first,
+    firstJob: first.recalculationJob,
+    firstCandidate: first.candidateMealPlan
+  };
+}
+
+async function recordSecondLockedCompletionCandidate(
+  harness: ReturnType<typeof createHarness>
+) {
+  harness.setNow('2026-08-19T04:00:00.000Z');
+  const second = await harness.service.recordTrainingCompletion('user-a', {
+    expectedVersion: 1,
+    idempotencyKey: 'completion-consecutive-b',
+    payload: { businessDate: '2026-08-19', completedDurationMinutes: 20 }
+  });
+  if (second.candidateMealPlan === null || second.recalculationJob === null) {
+    throw new Error('Expected second completion candidate');
+  }
+  return {
+    second,
+    secondJob: second.recalculationJob,
     secondCandidate: second.candidateMealPlan
   };
 }
@@ -568,6 +641,10 @@ describe('training-change recalculation lifecycle', () => {
       }
     });
     expect(saved.recalculationJob.status).toBe('failed_retryable');
+    expect(saved.recalculationJob).toMatchObject({
+      failureConflictDetailsStatus: 'complete',
+      failureConflicts: []
+    });
 
     available = true;
     const failed = await harness.repository.read('user-a');
@@ -579,6 +656,11 @@ describe('training-change recalculation lifecycle', () => {
     const after = await harness.repository.read('user-a');
 
     expect(retried.recalculationJob.status).toBe('completed');
+    expect(retried.recalculationJob).toMatchObject({
+      failureCode: null,
+      failureConflictDetailsStatus: 'complete',
+      failureConflicts: []
+    });
     expect(retried.activatedMealPlan).toMatchObject({
       weekStartDate: NEXT_WEEK_START,
       supersedesVersionId: previous.id,
@@ -1033,6 +1115,56 @@ describe('training-change recalculation lifecycle', () => {
     expect(after.dailyNutritionTargets).toHaveLength(failed.dailyNutritionTargets.length);
     expect(after.recalculationJobs).toHaveLength(failed.recalculationJobs.length);
     expect(after.mealPlans).toHaveLength(failed.mealPlans.length + 1);
+  });
+
+  test('persists sanitized infeasibility conflicts for an immediate training-plan recalculation', async () => {
+    const harness = createHarness();
+    const previous = await prepareGeneratedPlan(harness);
+    await replaceWithInsufficientInventory(harness);
+
+    const saved = await harness.service.saveTrainingPlan('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'training-save-infeasible-details',
+      payload: {
+        weekStartDate: WEEK_START,
+        businessTimezone: 'Asia/Shanghai',
+        sessions: [{
+          businessDate: '2026-08-20',
+          sessionCode: '02054',
+          durationMinutes: 60
+        }]
+      }
+    });
+    const state = await harness.repository.read('user-a');
+    const storedJob = state.recalculationJobs.find((job) => job.id === saved.recalculationJob.id);
+
+    expect(saved.recalculationJob).toMatchObject({
+      status: 'failed_retryable',
+      failureCode: 'nutrition_constraints_infeasible',
+      failureConflictDetailsStatus: 'complete'
+    });
+    expect(saved.recalculationJob).toHaveProperty('failureConflicts.0.code', 'inventory_insufficient');
+    expect(saved.recalculationJob).toHaveProperty('failureConflicts.0.businessDate', '2026-08-17');
+    expect(storedJob).toEqual(saved.recalculationJob);
+    expect(state.activeMealPlanVersionId).toBe(previous.id);
+    expect(JSON.stringify(saved.recalculationJob)).not.toContain('fixture-');
+    expect(JSON.stringify(saved.recalculationJob)).not.toContain('snapshot-');
+
+    await expect(harness.service.retryPendingRecalculation('user-a', {
+      expectedVersion: state.recalculationJobs.length,
+      idempotencyKey: 'retry-training-infeasible-details',
+      payload: { recalculationJobId: saved.recalculationJob.id }
+    })).rejects.toMatchObject({ code: 'nutrition_constraints_infeasible' });
+    const afterRetry = await harness.repository.read('user-a');
+    const retriedJob = afterRetry.recalculationJobs.find(
+      (job) => job.id === saved.recalculationJob.id
+    );
+    expect(retriedJob).toMatchObject({
+      failureCode: 'nutrition_constraints_infeasible',
+      failureConflictDetailsStatus: 'complete'
+    });
+    expect(retriedJob?.failureConflicts.length).toBeGreaterThan(0);
+    expect(afterRetry.activeMealPlanVersionId).toBe(previous.id);
   });
 
   test('atomically records a successful retry so response-loss replay cannot observe an unrecorded result', async () => {
@@ -1752,6 +1884,38 @@ describe('training completion facts', () => {
     expect(state.mealPlans).toHaveLength(1);
   });
 
+  test('persists sanitized infeasibility conflicts with an accepted completion fact', async () => {
+    const harness = createHarness();
+    const previous = await prepareGeneratedPlan(harness, [plannedSession]);
+    await replaceWithInsufficientInventory(harness);
+    harness.setNow(NOW_ON_WEDNESDAY);
+
+    const recorded = await harness.service.recordTrainingCompletion('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'completion-infeasible-details',
+      payload: { businessDate: '2026-08-19', completedDurationMinutes: 30 }
+    });
+    const state = await harness.repository.read('user-a');
+    const storedJob = state.recalculationJobs.find(
+      (job) => job.id === recorded.recalculationJob?.id
+    );
+
+    expect(recorded.recalculationStatus).toBe('failed_retryable');
+    expect(recorded.recalculationJob).toMatchObject({
+      failureCode: 'nutrition_constraints_infeasible',
+      failureConflictDetailsStatus: 'complete'
+    });
+    expect(recorded.recalculationJob).toHaveProperty(
+      'failureConflicts.0.code',
+      'inventory_insufficient'
+    );
+    expect(storedJob).toEqual(recorded.recalculationJob);
+    expect(state.trainingCompletionEvents).toHaveLength(1);
+    expect(state.activeMealPlanVersionId).toBe(previous.id);
+    expect(JSON.stringify(recorded.recalculationJob)).not.toContain('fixture-');
+    expect(JSON.stringify(recorded.recalculationJob)).not.toContain('snapshot-');
+  });
+
   test('creates a protected completion candidate, exact diff, and idempotently replays the fact', async () => {
     const harness = createHarness();
     await prepareGeneratedPlan(harness, [plannedSession]);
@@ -1780,5 +1944,104 @@ describe('training completion facts', () => {
     expect(state.trainingCompletionEvents).toHaveLength(1);
     expect(state.recalculationJobs).toHaveLength(1);
     expect(state.activeMealPlanVersionId).toBe(locked.id);
+  });
+
+  test('keeping the newest completion candidate never resurfaces or accepts the older candidate', async () => {
+    const harness = createHarness();
+    const { firstJob, firstCandidate } = await prepareFirstLockedCompletionCandidate(harness);
+    const { secondJob, secondCandidate } = await recordSecondLockedCompletionCandidate(harness);
+
+    expect((await harness.service.getCurrentContext('user-a')).pendingMealPlanCandidate?.id)
+      .toBe(secondCandidate.id);
+    await harness.service.decideMealPlanCandidate('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'completion-candidate-keep-b',
+      payload: {
+        candidateMealPlanVersionId: secondCandidate.id,
+        decision: 'keep_existing'
+      }
+    });
+    const beforeObsoleteDecision = await harness.repository.read('user-a');
+
+    expect((await harness.service.getCurrentContext('user-a')).pendingMealPlanCandidate).toBeNull();
+    await expect(harness.service.decideMealPlanCandidate('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'completion-candidate-keep-a',
+      payload: {
+        candidateMealPlanVersionId: firstCandidate.id,
+        decision: 'keep_existing'
+      }
+    })).rejects.toBeInstanceOf(CandidateNotPendingError);
+
+    const after = await harness.repository.read('user-a');
+    expect(after).toEqual(beforeObsoleteDecision);
+    expect(after.mealPlans.map((plan) => plan.id)).toEqual(expect.arrayContaining([
+      firstCandidate.id,
+      secondCandidate.id
+    ]));
+    expect(after.recalculationJobs.map((job) => job.id)).toEqual(expect.arrayContaining([
+      firstJob.id,
+      secondJob.id
+    ]));
+  });
+
+  test('rejects obsolete completion overwrite without state changes and accepts the newest candidate', async () => {
+    const harness = createHarness();
+    const { firstCandidate } = await prepareFirstLockedCompletionCandidate(harness);
+    const { secondCandidate } = await recordSecondLockedCompletionCandidate(harness);
+    const beforeObsoleteDecision = await harness.repository.read('user-a');
+
+    await expect(harness.service.decideMealPlanCandidate('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'completion-candidate-overwrite-a',
+      payload: {
+        candidateMealPlanVersionId: firstCandidate.id,
+        decision: 'overwrite_locked'
+      }
+    })).rejects.toBeInstanceOf(CandidateNotPendingError);
+    expect(await harness.repository.read('user-a')).toEqual(beforeObsoleteDecision);
+
+    const decided = await harness.service.decideMealPlanCandidate('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'completion-candidate-overwrite-b',
+      payload: {
+        candidateMealPlanVersionId: secondCandidate.id,
+        decision: 'overwrite_locked'
+      }
+    });
+    expect(decided.activatedMealPlan?.id).toBe(
+      (await harness.repository.read('user-a')).activeMealPlanVersionId
+    );
+  });
+
+  test('rechecks completion candidate eligibility when a newer completion commits after the initial read', async () => {
+    const controlled = createControlledRepository();
+    const harness = createHarness({ repository: controlled.repository });
+    const { firstJob, firstCandidate } = await prepareFirstLockedCompletionCandidate(harness);
+    controlled.blockNextRead();
+    const obsoleteDecision = harness.service.decideMealPlanCandidate('user-a', {
+      expectedVersion: 0,
+      idempotencyKey: 'completion-candidate-race-a',
+      payload: {
+        candidateMealPlanVersionId: firstCandidate.id,
+        decision: 'keep_existing'
+      }
+    });
+    await controlled.waitForBlockedRead();
+    const { secondJob, secondCandidate } = await recordSecondLockedCompletionCandidate(harness);
+    const beforeDecisionTransaction = await controlled.inner.read('user-a');
+    controlled.releaseBlockedRead();
+
+    await expect(obsoleteDecision).rejects.toBeInstanceOf(CandidateNotPendingError);
+    const after = await controlled.inner.read('user-a');
+    expect(after).toEqual(beforeDecisionTransaction);
+    expect(after.mealPlans.map((plan) => plan.id)).toEqual(expect.arrayContaining([
+      firstCandidate.id,
+      secondCandidate.id
+    ]));
+    expect(after.recalculationJobs.map((job) => job.id)).toEqual(expect.arrayContaining([
+      firstJob.id,
+      secondJob.id
+    ]));
   });
 });

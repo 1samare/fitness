@@ -31,6 +31,10 @@ import {
 
 const NOW = '2026-08-10T00:00:00.000Z';
 const WEEK_START = '2026-08-17';
+const LEGACY_RESOLVED_RICE_INVENTORY_FINGERPRINT =
+  'v2:sha256:5b25b9f52e210022075b435fb20130b358c5741268e2c8caefa96455eb4300ee';
+const ROUND_ONE_RAW_RICE_INVENTORY_FINGERPRINT =
+  'v2:sha256:c406518bf7039534f5f0f192f1ce6e5ca3dd7255a810e638de95c01e938da3b4';
 const BALANCED_NUTRITION_SNAPSHOTS = TEST_NUTRITION_SNAPSHOTS.map((snapshot) => ({
   ...snapshot,
   nutrientsPer100g: {
@@ -133,6 +137,24 @@ async function saveFullInventory(
   });
 }
 
+async function replaceInventoryFingerprint(
+  repository: InMemoryPlanningRepository,
+  idempotencyKey: string,
+  requestFingerprintValue: string
+): Promise<void> {
+  await repository.transact('user-a', (state) => ({
+    nextState: {
+      ...state,
+      idempotencyRecords: state.idempotencyRecords.map((record) => (
+        record.operation === 'saveInventory' && record.key === idempotencyKey
+          ? { ...record, requestFingerprint: requestFingerprintValue }
+          : record
+      ))
+    },
+    result: undefined
+  }));
+}
+
 describe('meal plan generation application service', () => {
   test('resolves every name before saving a sorted inventory with duplicate food IDs merged', async () => {
     const { service } = createHarness();
@@ -206,7 +228,7 @@ describe('meal plan generation application service', () => {
     expect((await repository.read('user-a')).inventories).toHaveLength(1);
   });
 
-  test('replays a committed canonical inventory request without consulting an offline provider', async () => {
+  test('stores a v3 canonical inventory fingerprint and replays it without consulting an offline provider', async () => {
     const base = fixtureProviders();
     let offline = false;
     let providerCalls = 0;
@@ -236,6 +258,8 @@ describe('meal plan generation application service', () => {
         ]
       }
     });
+    expect((await repository.read('user-a')).idempotencyRecords.at(-1)?.requestFingerprint)
+      .toMatch(/^v3:sha256:[0-9a-f]{64}$/);
 
     offline = true;
     providerCalls = 0;
@@ -257,6 +281,215 @@ describe('meal plan generation application service', () => {
 
     expect(providerCalls).toBe(0);
     expect((await repository.read('user-a')).inventories).toEqual([first]);
+  });
+
+  test('replays a legacy resolved-v2 inventory record after provider validation', async () => {
+    const base = fixtureProviders();
+    let providerCalls = 0;
+    const providers: MealPlanningProviders = {
+      ...base,
+      nutrition: {
+        async resolveCanonicalName(name) {
+          providerCalls += 1;
+          return base.nutrition.resolveCanonicalName(name);
+        },
+        async getSnapshot(snapshotId) {
+          providerCalls += 1;
+          return base.nutrition.getSnapshot(snapshotId);
+        }
+      }
+    };
+    const { repository, service } = createHarness({ providers });
+    const command = {
+      expectedVersion: 0,
+      idempotencyKey: 'inventory-legacy-resolved-replay-001',
+      payload: { items: [{ name: '测试米饭', availableGrams: 5000 }] }
+    } as const;
+    const first = await service.saveInventory('user-a', command);
+    await replaceInventoryFingerprint(
+      repository,
+      command.idempotencyKey,
+      LEGACY_RESOLVED_RICE_INVENTORY_FINGERPRINT
+    );
+    providerCalls = 0;
+
+    await expect(service.saveInventory('user-a', command)).resolves.toEqual(first);
+    expect(providerCalls).toBeGreaterThan(0);
+    expect((await repository.read('user-a')).inventories).toEqual([first]);
+  });
+
+  test('rejects a changed request against a legacy resolved-v2 record after provider validation', async () => {
+    const base = fixtureProviders();
+    let providerCalls = 0;
+    const providers: MealPlanningProviders = {
+      ...base,
+      nutrition: {
+        async resolveCanonicalName(name) {
+          providerCalls += 1;
+          return base.nutrition.resolveCanonicalName(name);
+        },
+        async getSnapshot(snapshotId) {
+          providerCalls += 1;
+          return base.nutrition.getSnapshot(snapshotId);
+        }
+      }
+    };
+    const { repository, service } = createHarness({ providers });
+    const command = {
+      expectedVersion: 0,
+      idempotencyKey: 'inventory-legacy-resolved-reuse-001',
+      payload: { items: [{ name: '测试米饭', availableGrams: 5000 }] }
+    } as const;
+    const first = await service.saveInventory('user-a', command);
+    await replaceInventoryFingerprint(
+      repository,
+      command.idempotencyKey,
+      LEGACY_RESOLVED_RICE_INVENTORY_FINGERPRINT
+    );
+    providerCalls = 0;
+
+    await expect(service.saveInventory('user-a', {
+      ...command,
+      payload: { items: [{ name: '测试米饭', availableGrams: 4999 }] }
+    })).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
+    expect(providerCalls).toBeGreaterThan(0);
+    expect((await repository.read('user-a')).inventories).toEqual([first]);
+  });
+
+  test('fails with provider_unavailable when a legacy v2 replay cannot be validated offline', async () => {
+    const base = fixtureProviders();
+    let offline = false;
+    const providers: MealPlanningProviders = {
+      ...base,
+      nutrition: {
+        resolveCanonicalName(name) {
+          return offline
+            ? Promise.reject(new Error('offline'))
+            : base.nutrition.resolveCanonicalName(name);
+        },
+        getSnapshot(snapshotId) {
+          return offline
+            ? Promise.reject(new Error('offline'))
+            : base.nutrition.getSnapshot(snapshotId);
+        }
+      }
+    };
+    const { repository, service } = createHarness({ providers });
+    const command = {
+      expectedVersion: 0,
+      idempotencyKey: 'inventory-legacy-offline-001',
+      payload: { items: [{ name: '测试米饭', availableGrams: 5000 }] }
+    } as const;
+    const first = await service.saveInventory('user-a', command);
+    await replaceInventoryFingerprint(
+      repository,
+      command.idempotencyKey,
+      LEGACY_RESOLVED_RICE_INVENTORY_FINGERPRINT
+    );
+    offline = true;
+
+    await expect(service.saveInventory('user-a', command)).rejects.toMatchObject({
+      code: 'provider_unavailable',
+      reason: 'nutrition_source_unavailable'
+    });
+    expect((await repository.read('user-a')).inventories).toEqual([first]);
+  });
+
+  test('validates a Round1 raw-v2 inventory record through the provider before replaying', async () => {
+    const base = fixtureProviders();
+    let providerCalls = 0;
+    const providers: MealPlanningProviders = {
+      ...base,
+      nutrition: {
+        async resolveCanonicalName(name) {
+          providerCalls += 1;
+          return base.nutrition.resolveCanonicalName(name);
+        },
+        async getSnapshot(snapshotId) {
+          providerCalls += 1;
+          return base.nutrition.getSnapshot(snapshotId);
+        }
+      }
+    };
+    const { repository, service } = createHarness({ providers });
+    const command = {
+      expectedVersion: 0,
+      idempotencyKey: 'inventory-round-one-raw-replay-001',
+      payload: {
+        items: [
+          { name: ' 测试 米饭 ', availableGrams: 2000 },
+          { name: '测试米饭', availableGrams: 3000 }
+        ]
+      }
+    } as const;
+    const first = await service.saveInventory('user-a', command);
+    await replaceInventoryFingerprint(
+      repository,
+      command.idempotencyKey,
+      ROUND_ONE_RAW_RICE_INVENTORY_FINGERPRINT
+    );
+    providerCalls = 0;
+
+    await expect(service.saveInventory('user-a', command)).resolves.toEqual(first);
+    expect(providerCalls).toBeGreaterThan(0);
+    expect((await repository.read('user-a')).inventories).toEqual([first]);
+  });
+
+  test('replays a concurrently committed legacy v2 inventory record in the transaction check', async () => {
+    const repository = new InMemoryPlanningRepository();
+    const base = fixtureProviders();
+    const command = {
+      expectedVersion: 0,
+      idempotencyKey: 'inventory-legacy-race-001',
+      payload: { items: [{ name: '测试米饭', availableGrams: 5000 }] }
+    } as const;
+    const snapshot = BALANCED_NUTRITION_SNAPSHOTS.find(({ foodId }) => foodId === 'fixture-rice');
+    if (snapshot === undefined) throw new Error('Expected rice snapshot fixture');
+    const committedInventory = {
+      kind: 'inventory_version',
+      id: 'inventory-concurrent-legacy',
+      userId: 'user-a',
+      version: 1,
+      createdAt: NOW,
+      items: [{
+        foodId: snapshot.foodId,
+        nutritionSnapshotId: snapshot.id,
+        availableGrams: 5000
+      }]
+    } as const;
+    let committed = false;
+    const providers: MealPlanningProviders = {
+      ...base,
+      nutrition: {
+        async resolveCanonicalName(name) {
+          if (!committed) {
+            committed = true;
+            await repository.transact('user-a', (state) => ({
+              nextState: {
+                ...state,
+                inventories: [committedInventory],
+                activeInventoryVersionId: committedInventory.id,
+                idempotencyRecords: [{
+                  operation: 'saveInventory',
+                  key: command.idempotencyKey,
+                  requestFingerprint: LEGACY_RESOLVED_RICE_INVENTORY_FINGERPRINT,
+                  resultVersionId: committedInventory.id
+                }]
+              },
+              result: undefined
+            }));
+          }
+          return base.nutrition.resolveCanonicalName(name);
+        },
+        getSnapshot(snapshotId) {
+          return base.nutrition.getSnapshot(snapshotId);
+        }
+      }
+    };
+    const { service } = createHarness({ repository, providers });
+
+    await expect(service.saveInventory('user-a', command)).resolves.toEqual(committedInventory);
+    expect((await repository.read('user-a')).inventories).toEqual([committedInventory]);
   });
 
   test('requires an active profile, goal, training plan, inventory, and seven feasible targets', async () => {

@@ -53,7 +53,7 @@ export interface CloudBaseDatabase extends CloudBaseTransaction {
 }
 
 interface StoredPlanningDocument {
-  readonly schemaVersion: 4;
+  readonly schemaVersion: 5;
   readonly state: PlanningAggregateState;
 }
 
@@ -72,10 +72,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function migrateV4RecalculationConflictDetails(
+  state: Record<string, unknown>
+): Record<string, unknown> {
+  if (!Array.isArray(state.recalculationJobs)) return state;
+  const recalculationJobs: readonly unknown[] = state.recalculationJobs;
+  return {
+    ...state,
+    recalculationJobs: recalculationJobs.map((job): unknown => {
+      if (
+        !isRecord(job)
+        || Object.hasOwn(job, 'failureConflictDetailsStatus')
+        || Object.hasOwn(job, 'failureConflicts')
+      ) return job;
+      return {
+        ...job,
+        failureConflictDetailsStatus: 'legacy_unavailable',
+        failureConflicts: []
+      };
+    })
+  };
+}
+
 function decodeDocument(value: unknown, userId: string): PlanningAggregateState {
   if (
     !isRecord(value)
-    || (value.schemaVersion !== 2 && value.schemaVersion !== 3 && value.schemaVersion !== 4)
+    || (value.schemaVersion !== 2
+      && value.schemaVersion !== 3
+      && value.schemaVersion !== 4
+      && value.schemaVersion !== 5)
     || !isRecord(value.state)
   ) {
     throw new CorruptPlanningStateError();
@@ -84,7 +109,9 @@ function decodeDocument(value: unknown, userId: string): PlanningAggregateState 
     ? { ...value.state, dailyNutritionTargets: [], ...phase4Empty }
     : value.schemaVersion === 3
       ? { ...value.state, ...phase4Empty }
-      : value.state;
+      : value.schemaVersion === 4
+        ? migrateV4RecalculationConflictDetails(value.state)
+        : value.state;
   return parseAndAssertPlanningState(candidateState, userId);
 }
 
@@ -92,7 +119,7 @@ function encodeDocument(
   state: PlanningAggregateState,
   userId: string
 ): StoredPlanningDocument {
-  return { schemaVersion: 4, state: parseAndAssertPlanningState(state, userId) };
+  return { schemaVersion: 5, state: parseAndAssertPlanningState(state, userId) };
 }
 
 export class CloudBasePlanningRepository implements PlanningRepository {

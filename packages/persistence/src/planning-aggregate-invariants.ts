@@ -35,6 +35,62 @@ function assertContiguous(versions: readonly number[]): void {
   if (maximum !== versions.length) corrupt();
 }
 
+function assertFailureConflictsAreSanitized(
+  conflicts: unknown
+): void {
+  if (!Array.isArray(conflicts)) corrupt();
+  if (conflicts.length > 49) corrupt();
+  for (const rawConflict of conflicts) {
+    if (typeof rawConflict !== 'object' || rawConflict === null || Array.isArray(rawConflict)) {
+      corrupt();
+    }
+    const conflict = rawConflict as PlanningAggregateState['recalculationJobs'][number]['failureConflicts'][number];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(conflict.businessDate)) corrupt();
+    const commonKeys = ['businessDate', 'code'];
+    const keys = Object.keys(conflict);
+    if (
+      conflict.code === 'inventory_insufficient'
+      && keys.some((key) => ![...commonKeys, 'foodNameZh', 'requiredGrams', 'availableGrams'].includes(key))
+    ) corrupt();
+    if (
+      (conflict.code === 'source_chain_incomplete'
+        || conflict.code === 'allergen_detected'
+        || conflict.code === 'avoided_food')
+      && keys.some((key) => ![...commonKeys, 'foodNameZh'].includes(key))
+    ) corrupt();
+    if (
+      (conflict.code === 'target_nutrition_infeasible'
+        || conflict.code === 'nutrition_out_of_range'
+        || conflict.code === 'food_diversity_insufficient')
+      && keys.some((key) => !commonKeys.includes(key))
+    ) corrupt();
+    if (![
+      'target_nutrition_infeasible',
+      'source_chain_incomplete',
+      'allergen_detected',
+      'avoided_food',
+      'inventory_insufficient',
+      'nutrition_out_of_range',
+      'food_diversity_insufficient'
+    ].includes(conflict.code)) corrupt();
+    if ('foodNameZh' in conflict && (
+      typeof conflict.foodNameZh !== 'string'
+      || conflict.foodNameZh.trim().length === 0
+      || conflict.foodNameZh.length > 120
+    )) corrupt();
+    if ('requiredGrams' in conflict && (
+      typeof conflict.requiredGrams !== 'number'
+      || !Number.isFinite(conflict.requiredGrams)
+      || conflict.requiredGrams <= 0
+    )) corrupt();
+    if ('availableGrams' in conflict && (
+      typeof conflict.availableGrams !== 'number'
+      || !Number.isFinite(conflict.availableGrams)
+      || conflict.availableGrams < 0
+    )) corrupt();
+  }
+}
+
 function assertContiguousByBusinessDate(
   values: readonly { readonly businessDate: string; readonly version: number }[]
 ): void {
@@ -744,6 +800,22 @@ export function assertPlanningAggregateInvariants(
     PlanningAggregateState['recalculationJobs'][number]
   >();
   for (const job of state.recalculationJobs) {
+    assertFailureConflictsAreSanitized(job.failureConflicts);
+    const failureConflictDetailsStatus: unknown = job.failureConflictDetailsStatus;
+    if (
+      failureConflictDetailsStatus !== 'complete'
+      && failureConflictDetailsStatus !== 'legacy_unavailable'
+    ) corrupt();
+    if (
+      (failureConflictDetailsStatus === 'legacy_unavailable'
+        && job.failureConflicts.length !== 0)
+      || (failureConflictDetailsStatus === 'complete'
+        && job.failureCode === 'nutrition_constraints_infeasible'
+        && job.failureConflicts.length === 0)
+      || (failureConflictDetailsStatus === 'complete'
+        && job.failureCode !== 'nutrition_constraints_infeasible'
+        && job.failureConflicts.length !== 0)
+    ) corrupt();
     assertSortedUniqueDates(job.affectedDates);
     if (triggerEventIds.has(job.triggerEventId)) corrupt();
     triggerEventIds.add(job.triggerEventId);
@@ -811,6 +883,14 @@ export function assertPlanningAggregateInvariants(
         && !isDirectMealPlanSuccessor(activated, candidate)
       )
     ) {
+      corrupt();
+    }
+    const triggerWeekDates = new Set(
+      Array.from({ length: 7 }, (_unused, index) => (
+        addBusinessDays(triggerTrainingPlan.payload.weekStartDate, index)
+      ))
+    );
+    if (job.failureConflicts.some((conflict) => !triggerWeekDates.has(conflict.businessDate))) {
       corrupt();
     }
     if (job.triggerType === 'training_plan_changed') {

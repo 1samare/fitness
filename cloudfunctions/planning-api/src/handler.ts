@@ -99,6 +99,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isRecalculationJob(value: unknown): value is RecalculationJob {
+  return isRecord(value) && value.kind === 'recalculation_job';
+}
+
 function publicBodyProfile(version: BodyProfileVersion) {
   return {
     kind: version.kind,
@@ -297,7 +301,9 @@ function publicRecalculationJob(job: RecalculationJob) {
     completedAt: job.completedAt,
     candidateMealPlanVersionId: job.candidateMealPlanVersionId,
     activatedMealPlanVersionId: job.activatedMealPlanVersionId,
-    failureCode: job.failureCode
+    failureCode: job.failureCode,
+    failureConflictDetailsStatus: job.failureConflictDetailsStatus,
+    failureConflicts: job.failureConflicts.map((conflict) => ({ ...conflict }))
   };
 }
 
@@ -352,36 +358,7 @@ function errorResponse(
 function publicWeeklyMealConflicts(
   conflicts: NutritionConstraintsInfeasibleError['conflicts']
 ): readonly PublicWeeklyMealConflict[] {
-  const sanitized = new Map<string, PublicWeeklyMealConflict>();
-  for (const conflict of conflicts) {
-    const key = `${conflict.businessDate}\u0000${conflict.code}`;
-    if (sanitized.has(key)) continue;
-    let publicConflict: PublicWeeklyMealConflict;
-    if (conflict.code === 'inventory_insufficient') {
-      publicConflict = {
-        code: conflict.code,
-        businessDate: conflict.businessDate,
-        ...(conflict.foodNameZh === undefined ? {} : { foodNameZh: conflict.foodNameZh }),
-        ...(conflict.requiredGrams === undefined ? {} : { requiredGrams: conflict.requiredGrams }),
-        ...(conflict.availableGrams === undefined ? {} : { availableGrams: conflict.availableGrams })
-      };
-    } else if (
-      conflict.code === 'source_chain_incomplete'
-      || conflict.code === 'allergen_detected'
-      || conflict.code === 'avoided_food'
-    ) {
-      publicConflict = {
-        code: conflict.code,
-        businessDate: conflict.businessDate,
-        ...(conflict.foodNameZh === undefined ? {} : { foodNameZh: conflict.foodNameZh })
-      };
-    } else {
-      publicConflict = { code: conflict.code, businessDate: conflict.businessDate };
-    }
-    sanitized.set(key, publicConflict);
-    if (sanitized.size === 49) break;
-  }
-  return [...sanitized.values()];
+  return conflicts.map((conflict): PublicWeeklyMealConflict => ({ ...conflict }));
 }
 
 async function executeAuthenticatedAction(
@@ -408,7 +385,11 @@ async function executeAuthenticatedAction(
         kind: 'training_plan_saved',
         trainingPlan: publicTrainingPlan(result.trainingPlan),
         dailyEnergyTargets: result.dailyEnergyTargets.map(publicDailyEnergyTarget),
-        dailyNutritionTargets: result.dailyNutritionTargets.map(publicDailyNutritionTarget)
+        dailyNutritionTargets: result.dailyNutritionTargets.map(publicDailyNutritionTarget),
+        recalculationJob: 'recalculationJob' in result
+          && isRecalculationJob(result.recalculationJob)
+          ? publicRecalculationJob(result.recalculationJob)
+          : null
       }
     };
   }

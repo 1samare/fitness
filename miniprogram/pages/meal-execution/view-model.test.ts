@@ -367,7 +367,9 @@ describe('meal execution view model', () => {
           completedAt: null,
           candidateMealPlanVersionId: null,
           activatedMealPlanVersionId: null,
-          failureCode: 'provider_unavailable'
+          failureCode: 'provider_unavailable',
+          failureConflictDetailsStatus: 'complete',
+          failureConflicts: []
         },
         candidateMealPlan: null,
         targetDiffs: [],
@@ -377,10 +379,66 @@ describe('meal execution view model', () => {
 
     expect(feedback).toEqual({
       factMessage: '训练完成情况已保存。',
-      mealMessage: '餐单重算暂未完成，训练事实不受影响。请稍后重试。',
+      mealMessage: '营养数据暂时不可用，已有训练事实与餐单不会丢失。请稍后点击“重试餐单重算”。',
       retryJobId: 'retry-job-private',
       needsStatusRefresh: false
     });
+  });
+
+  it('explains persisted nutrition conflicts and legacy-unavailable details without retry wording', () => {
+    const responseFor = (
+      failureConflictDetailsStatus: 'complete' | 'legacy_unavailable',
+      failureConflicts: readonly Record<string, unknown>[]
+    ) => ({
+      success: true,
+      data: {
+        kind: 'training_completion_recorded',
+        event: {
+          kind: 'training_completion_event',
+          id: 'completion-infeasible',
+          version: 1,
+          trainingPlanVersionId: 'training-1',
+          businessDate: '2026-08-19',
+          completedDurationMinutes: 30,
+          occurredAt: '2026-08-19T04:00:00.000Z'
+        },
+        dailyEnergyTargets: [],
+        dailyNutritionTargets: [],
+        recalculationJob: {
+          kind: 'recalculation_job',
+          id: 'retry-job-infeasible',
+          triggerEventId: 'completion-infeasible',
+          triggerType: 'training_completion',
+          affectedDates: ['2026-08-19'],
+          status: 'failed_retryable',
+          createdAt: '2026-08-19T04:00:00.000Z',
+          completedAt: null,
+          candidateMealPlanVersionId: null,
+          activatedMealPlanVersionId: null,
+          failureCode: 'nutrition_constraints_infeasible',
+          failureConflictDetailsStatus,
+          failureConflicts
+        },
+        candidateMealPlan: null,
+        targetDiffs: [],
+        recalculationStatus: 'failed_retryable'
+      }
+    }) as unknown as PlanningApiResponse;
+
+    const detailed = buildCompletionFeedback(responseFor('complete', [{
+      code: 'inventory_insufficient',
+      businessDate: '2026-08-19',
+      foodNameZh: '审核鸡蛋',
+      requiredGrams: 120,
+      availableGrams: 20
+    }]));
+    const legacy = buildCompletionFeedback(responseFor('legacy_unavailable', []));
+
+    expect(detailed.mealMessage).toContain('“审核鸡蛋”库存不足');
+    expect(detailed.mealMessage).toContain('补充');
+    expect(detailed.mealMessage).not.toContain('稍后重试');
+    expect(legacy.mealMessage).toContain('历史失败详情不可用');
+    expect(legacy.mealMessage).not.toContain('稍后重试');
   });
 
   it('offers a refresh-status recovery when a retryable response has no job identifier', () => {

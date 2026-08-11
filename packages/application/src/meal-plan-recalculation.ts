@@ -352,7 +352,8 @@ export function createMealPlanRecalculationService(
   async function markJobRetryable(
     userId: string,
     jobId: string,
-    failureCode: NonNullable<RecalculationJob['failureCode']>
+    failureCode: NonNullable<RecalculationJob['failureCode']>,
+    failureConflicts: RecalculationJob['failureConflicts'] = []
   ): Promise<RecalculationResult> {
     return repository.transact(userId, (state) => {
       const job = findById(state.recalculationJobs, jobId);
@@ -365,7 +366,11 @@ export function createMealPlanRecalculationService(
         status: 'failed_retryable',
         completedAt: null,
         activatedMealPlanVersionId: null,
-        failureCode
+        failureCode,
+        failureConflictDetailsStatus: 'complete',
+        failureConflicts: failureCode === 'nutrition_constraints_infeasible'
+          ? [...failureConflicts]
+          : []
       };
       const nextState = { ...state, recalculationJobs: replaceJob(state, failed) };
       return { nextState, result: resultForJob(nextState, failed) };
@@ -388,7 +393,9 @@ export function createMealPlanRecalculationService(
         ...job,
         status: 'completed',
         completedAt: now(),
-        failureCode: null
+        failureCode: null,
+        failureConflictDetailsStatus: 'complete',
+        failureConflicts: []
       };
       const nextState = withRetryIdempotencyRecord(
         { ...state, recalculationJobs: replaceJob(state, completed) },
@@ -535,7 +542,9 @@ export function createMealPlanRecalculationService(
         completedAt: pendingConfirmation ? null : createdAt,
         candidateMealPlanVersionId: pendingConfirmation ? mealPlan.id : null,
         activatedMealPlanVersionId: pendingConfirmation ? null : mealPlan.id,
-        failureCode: null
+        failureCode: null,
+        failureConflictDetailsStatus: 'complete',
+        failureConflicts: []
       };
       const nextState = withRetryIdempotencyRecord({
         ...state,
@@ -561,7 +570,12 @@ export function createMealPlanRecalculationService(
         return markJobRetryable(userId, job.id, 'provider_unavailable');
       }
       if (error instanceof NutritionConstraintsInfeasibleError) {
-        return markJobRetryable(userId, job.id, 'nutrition_constraints_infeasible');
+        return markJobRetryable(
+          userId,
+          job.id,
+          'nutrition_constraints_infeasible',
+          error.conflicts
+        );
       }
       throw error;
     }
@@ -722,7 +736,9 @@ export function createMealPlanRecalculationService(
           completedAt: null,
           candidateMealPlanVersionId: null,
           activatedMealPlanVersionId: null,
-          failureCode: null
+          failureCode: null,
+          failureConflictDetailsStatus: 'complete',
+          failureConflicts: []
         };
       }
       const record: IdempotencyRecord = {
@@ -769,7 +785,9 @@ export function createMealPlanRecalculationService(
         completedAt: null,
         candidateMealPlanVersionId: null,
         activatedMealPlanVersionId: null,
-        failureCode: null
+        failureCode: null,
+        failureConflictDetailsStatus: 'complete',
+        failureConflicts: []
       };
       return {
         nextState: { ...state, recalculationJobs: [...state.recalculationJobs, job] },
@@ -944,7 +962,9 @@ export function createMealPlanRecalculationService(
             status: 'completed',
             completedAt: decidedAt,
             activatedMealPlanVersionId: null,
-            failureCode: null
+            failureCode: null,
+            failureConflictDetailsStatus: 'complete',
+            failureConflicts: []
           };
           const record: IdempotencyRecord = {
             operation: 'decideMealPlanCandidate',
@@ -1006,10 +1026,16 @@ export function createMealPlanRecalculationService(
         fixedDays: candidate.days.filter((day) => !affected.has(day.businessDate))
       });
       if (generated.kind === 'infeasible') {
-        await markJobRetryable(userId, job.id, 'nutrition_constraints_infeasible');
-        throw new NutritionConstraintsInfeasibleError(
+        const failure = new NutritionConstraintsInfeasibleError(
           withReviewedFoodNames(generated.conflicts, providerSnapshot.snapshots)
         );
+        await markJobRetryable(
+          userId,
+          job.id,
+          'nutrition_constraints_infeasible',
+          failure.conflicts
+        );
+        throw failure;
       }
       let commitProviderSnapshotToken: string;
       try {
@@ -1078,7 +1104,9 @@ export function createMealPlanRecalculationService(
             status: 'completed',
             completedAt: decidedAt,
             activatedMealPlanVersionId: activated.id,
-            failureCode: null
+            failureCode: null,
+            failureConflictDetailsStatus: 'complete',
+            failureConflicts: []
           };
           const record: IdempotencyRecord = {
             operation: 'decideMealPlanCandidate',
@@ -1150,7 +1178,12 @@ export function createMealPlanRecalculationService(
         if (error instanceof ProviderUnavailableError) {
           await markJobRetryable(userId, job.id, 'provider_unavailable');
         } else if (error instanceof NutritionConstraintsInfeasibleError) {
-          await markJobRetryable(userId, job.id, 'nutrition_constraints_infeasible');
+          await markJobRetryable(
+            userId,
+            job.id,
+            'nutrition_constraints_infeasible',
+            error.conflicts
+          );
         }
         throw error;
       }

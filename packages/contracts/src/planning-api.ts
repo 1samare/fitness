@@ -296,7 +296,7 @@ const goalSavedSchema = z.object({
   version: goalVersionSchema
 }).strict();
 
-const trainingPlanSavedSchema = z.object({
+const trainingPlanSavedBaseSchema = z.object({
   kind: z.literal('training_plan_saved'),
   trainingPlan: trainingPlanVersionSchema,
   dailyEnergyTargets: z.array(dailyEnergyTargetVersionSchema).max(7),
@@ -521,6 +521,27 @@ const selectableRecipeOptionSchema = z.object({
   dishNameZh: z.string().trim().min(1).max(200)
 }).strict();
 
+const weeklyMealConflictDateFields = { businessDate: businessDateSchema } as const;
+const weeklyMealConflictFoodFields = {
+  ...weeklyMealConflictDateFields,
+  foodNameZh: z.string().trim().min(1).max(120).optional()
+} as const;
+
+export const weeklyMealConflictSchema = z.discriminatedUnion('code', [
+  z.object({ code: z.literal('target_nutrition_infeasible'), ...weeklyMealConflictDateFields }).strict(),
+  z.object({ code: z.literal('source_chain_incomplete'), ...weeklyMealConflictFoodFields }).strict(),
+  z.object({ code: z.literal('allergen_detected'), ...weeklyMealConflictFoodFields }).strict(),
+  z.object({ code: z.literal('avoided_food'), ...weeklyMealConflictFoodFields }).strict(),
+  z.object({
+    code: z.literal('inventory_insufficient'),
+    ...weeklyMealConflictFoodFields,
+    requiredGrams: z.number().positive().optional(),
+    availableGrams: z.number().nonnegative().optional()
+  }).strict(),
+  z.object({ code: z.literal('nutrition_out_of_range'), ...weeklyMealConflictDateFields }).strict(),
+  z.object({ code: z.literal('food_diversity_insufficient'), ...weeklyMealConflictDateFields }).strict()
+]);
+
 const recalculationJobFields = {
   kind: z.literal('recalculation_job'),
   id: z.string().min(1),
@@ -532,7 +553,9 @@ const recalculationJobFields = {
   completedAt: z.iso.datetime().nullable(),
   candidateMealPlanVersionId: z.string().min(1).nullable(),
   activatedMealPlanVersionId: z.string().min(1).nullable(),
-  failureCode: z.enum(['provider_unavailable', 'nutrition_constraints_infeasible']).nullable()
+  failureCode: z.enum(['provider_unavailable', 'nutrition_constraints_infeasible']).nullable(),
+  failureConflictDetailsStatus: z.enum(['complete', 'legacy_unavailable']),
+  failureConflicts: z.array(weeklyMealConflictSchema).max(49)
 } as const;
 
 function recalculationJobHasCoherentLifecycle(job: {
@@ -540,7 +563,16 @@ function recalculationJobHasCoherentLifecycle(job: {
   readonly completedAt: string | null;
   readonly activatedMealPlanVersionId: string | null;
   readonly failureCode: 'provider_unavailable' | 'nutrition_constraints_infeasible' | null;
+  readonly failureConflictDetailsStatus: 'complete' | 'legacy_unavailable';
+  readonly failureConflicts: readonly PublicWeeklyMealConflict[];
 }): boolean {
+  if (job.failureConflictDetailsStatus === 'legacy_unavailable') {
+    if (job.failureConflicts.length !== 0) return false;
+  } else if (job.failureCode === 'nutrition_constraints_infeasible') {
+    if (job.failureConflicts.length === 0) return false;
+  } else if (job.failureConflicts.length !== 0) {
+    return false;
+  }
   if (job.status === 'pending') {
     return job.completedAt === null
       && job.activatedMealPlanVersionId === null
@@ -559,6 +591,10 @@ const recalculationJobSchema = z.object(recalculationJobFields)
   .refine(recalculationJobHasCoherentLifecycle, {
     message: 'public recalculation job lifecycle is inconsistent'
   });
+
+const trainingPlanSavedSchema = trainingPlanSavedBaseSchema.extend({
+  recalculationJob: recalculationJobSchema.nullable()
+}).strict();
 
 const currentContextRecalculationJobSchema = recalculationJobSchema.refine((job) => (
   job.status === 'failed_retryable'
@@ -663,14 +699,16 @@ const mealPlanRecalculationProcessedSchema = z.object({
 }).strict();
 
 const requestFingerprintSchema = z.string().regex(/^v2:sha256:[0-9a-f]{64}$/);
+const inventoryRequestFingerprintSchema = z.string().regex(/^v[23]:sha256:[0-9a-f]{64}$/);
 
 function singleResultIdempotencyRecordSchema<TOperation extends string>(
-  operation: TOperation
+  operation: TOperation,
+  fingerprintSchema = requestFingerprintSchema
 ) {
   return z.object({
     operation: z.literal(operation),
     key: z.string().min(1),
-    requestFingerprint: requestFingerprintSchema,
+    requestFingerprint: fingerprintSchema,
     resultVersionId: z.string().min(1)
   }).strict();
 }
@@ -706,7 +744,7 @@ const idempotencyRecordSchema = z.discriminatedUnion('operation', [
       eventId: z.string().min(1)
     }).strict()
   }).strict(),
-  singleResultIdempotencyRecordSchema('saveInventory'),
+  singleResultIdempotencyRecordSchema('saveInventory', inventoryRequestFingerprintSchema),
   singleResultIdempotencyRecordSchema('generateWeeklyMealPlan'),
   singleResultIdempotencyRecordSchema('setMealPlanDayLock'),
   singleResultIdempotencyRecordSchema('updateMealPlanDay'),
@@ -775,27 +813,6 @@ const standardApiErrorCodeSchema = z.enum([
     'candidate_diff_unavailable',
     'internal_error'
   ]);
-
-const weeklyMealConflictDateFields = { businessDate: businessDateSchema } as const;
-const weeklyMealConflictFoodFields = {
-  ...weeklyMealConflictDateFields,
-  foodNameZh: z.string().trim().min(1).max(120).optional()
-} as const;
-
-export const weeklyMealConflictSchema = z.discriminatedUnion('code', [
-  z.object({ code: z.literal('target_nutrition_infeasible'), ...weeklyMealConflictDateFields }).strict(),
-  z.object({ code: z.literal('source_chain_incomplete'), ...weeklyMealConflictFoodFields }).strict(),
-  z.object({ code: z.literal('allergen_detected'), ...weeklyMealConflictFoodFields }).strict(),
-  z.object({ code: z.literal('avoided_food'), ...weeklyMealConflictFoodFields }).strict(),
-  z.object({
-    code: z.literal('inventory_insufficient'),
-    ...weeklyMealConflictFoodFields,
-    requiredGrams: z.number().positive().optional(),
-    availableGrams: z.number().nonnegative().optional()
-  }).strict(),
-  z.object({ code: z.literal('nutrition_out_of_range'), ...weeklyMealConflictDateFields }).strict(),
-  z.object({ code: z.literal('food_diversity_insufficient'), ...weeklyMealConflictDateFields }).strict()
-]);
 
 const standardApiErrorSchema = z.object({
   code: standardApiErrorCodeSchema,

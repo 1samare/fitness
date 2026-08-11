@@ -22,12 +22,13 @@ import type {
   NutritionDataSnapshot,
   NutritionProvider,
   PlanningAggregateState,
+  RecalculationFailureConflict,
   RecipeTemplateProvider,
   RecipeTemplateVersion,
   TrainingPlanVersion,
   WriteCommandEnvelope
 } from '@fitness/domain';
-import { requestFingerprint } from './idempotency-fingerprint';
+import { requestFingerprint, requestFingerprintV3 } from './idempotency-fingerprint';
 import {
   IdempotencyKeyReuseError,
   PlanningPrerequisiteError,
@@ -70,17 +71,58 @@ export class ProviderUnavailableError extends Error {
   }
 }
 
+type ReviewedWeeklyMealConflict = Omit<WeeklyMealConflict, 'foodId'> & {
+  readonly foodNameZh?: string | undefined;
+};
+
+export function sanitizeWeeklyMealConflicts(
+  conflicts: readonly ReviewedWeeklyMealConflict[]
+): readonly RecalculationFailureConflict[] {
+  const sanitized = new Map<string, RecalculationFailureConflict>();
+  for (const conflict of conflicts) {
+    const foodNameZh = conflict.foodNameZh?.trim().slice(0, 120);
+    let safe: RecalculationFailureConflict;
+    if (conflict.code === 'inventory_insufficient') {
+      safe = {
+        code: conflict.code,
+        businessDate: conflict.businessDate,
+        ...(foodNameZh === undefined || foodNameZh.length === 0 ? {} : { foodNameZh }),
+        ...(conflict.requiredGrams === undefined ? {} : { requiredGrams: conflict.requiredGrams }),
+        ...(conflict.availableGrams === undefined ? {} : { availableGrams: conflict.availableGrams })
+      };
+    } else if (
+      conflict.code === 'source_chain_incomplete'
+      || conflict.code === 'allergen_detected'
+      || conflict.code === 'avoided_food'
+    ) {
+      safe = {
+        code: conflict.code,
+        businessDate: conflict.businessDate,
+        ...(foodNameZh === undefined || foodNameZh.length === 0 ? {} : { foodNameZh })
+      };
+    } else {
+      safe = { code: conflict.code, businessDate: conflict.businessDate };
+    }
+    const key = `${safe.businessDate}\u0000${safe.code}`;
+    if (!sanitized.has(key)) sanitized.set(key, safe);
+    if (sanitized.size === 49) break;
+  }
+  return [...sanitized.values()];
+}
+
 export class NutritionConstraintsInfeasibleError extends Error {
   public readonly code = 'nutrition_constraints_infeasible' as const;
 
   public constructor(
-    public readonly conflicts: readonly (Omit<WeeklyMealConflict, 'foodId'> & {
-      readonly foodNameZh?: string | undefined;
-    })[]
+    conflicts: readonly ReviewedWeeklyMealConflict[]
   ) {
-    super(`Weekly meal constraints are infeasible: ${JSON.stringify(conflicts)}`);
+    const sanitized = sanitizeWeeklyMealConflicts(conflicts);
+    super(`Weekly meal constraints are infeasible: ${JSON.stringify(sanitized)}`);
     this.name = 'NutritionConstraintsInfeasibleError';
+    this.conflicts = sanitized;
   }
+
+  public readonly conflicts: readonly RecalculationFailureConflict[];
 }
 
 export function withReviewedFoodNames(
@@ -114,11 +156,18 @@ function compareCodeUnits(left: string, right: string): number {
   return 0;
 }
 
-function inventoryRequestFingerprint(
-  envelope: WriteCommandEnvelope<{
+type InventoryWriteEnvelope = WriteCommandEnvelope<{
+  readonly items: readonly { readonly name: string; readonly availableGrams: number }[];
+}>;
+
+function canonicalInventoryRequest(
+  envelope: InventoryWriteEnvelope
+): {
+  readonly expectedVersion: number;
+  readonly payload: {
     readonly items: readonly { readonly name: string; readonly availableGrams: number }[];
-  }>
-): string {
+  };
+} {
   const gramsByName = new Map<string, number[]>();
   for (const item of envelope.payload.items) {
     if (!Number.isFinite(item.availableGrams) || item.availableGrams <= 0) {
@@ -137,10 +186,27 @@ function inventoryRequestFingerprint(
         .sort((left, right) => left - right)
         .reduce((sum, value) => sum + value, 0)
     }));
-  return requestFingerprint({
+  return {
     expectedVersion: envelope.expectedVersion,
     payload: { items }
-  });
+  };
+}
+
+function inventoryRequestFingerprint(envelope: InventoryWriteEnvelope): string {
+  return requestFingerprintV3(canonicalInventoryRequest(envelope));
+}
+
+function legacyInventoryRequestFingerprints(
+  envelope: InventoryWriteEnvelope,
+  items: readonly ResolvedInventoryItem[]
+): readonly string[] {
+  return [
+    requestFingerprint({
+      expectedVersion: envelope.expectedVersion,
+      payload: { items }
+    }),
+    requestFingerprint(canonicalInventoryRequest(envelope))
+  ];
 }
 
 export interface GenerationPrerequisites {
@@ -219,6 +285,22 @@ function assertReplay(
   if (record.requestFingerprint !== expectedFingerprint) {
     throw new IdempotencyKeyReuseError(idempotencyKey);
   }
+}
+
+function assertInventoryReplay(
+  record: IdempotencyRecord,
+  expectedFingerprint: string,
+  legacyFingerprints: readonly string[],
+  idempotencyKey: string
+): void {
+  if (
+    record.requestFingerprint === expectedFingerprint
+    || (
+      record.requestFingerprint.startsWith('v2:sha256:')
+      && legacyFingerprints.includes(record.requestFingerprint)
+    )
+  ) return;
+  throw new IdempotencyKeyReuseError(idempotencyKey);
 }
 
 function sourceAllowed(
@@ -477,24 +559,40 @@ export function createMealPlanGenerationService(
 
     async saveInventory(
       userId: string,
-      envelope: WriteCommandEnvelope<{
-        readonly items: readonly { readonly name: string; readonly availableGrams: number }[];
-      }>
+      envelope: InventoryWriteEnvelope
     ): Promise<InventoryVersion> {
       const expectedFingerprint = inventoryRequestFingerprint(envelope);
       const initialState = await repository.read(userId);
       const initialReplay = findRecord(initialState, 'saveInventory', envelope.idempotencyKey);
       if (initialReplay !== undefined) {
-        assertReplay(initialReplay, expectedFingerprint, envelope.idempotencyKey);
+        if (initialReplay.requestFingerprint.startsWith('v3:sha256:')) {
+          assertInventoryReplay(initialReplay, expectedFingerprint, [], envelope.idempotencyKey);
+          const previous = findById(initialState.inventories, initialReplay.resultVersionId);
+          if (previous === null) throw new Error('Stored idempotency result is missing');
+          return previous;
+        }
+        const legacyItems = await normalizeInventory(providers, envelope.payload.items);
+        assertInventoryReplay(
+          initialReplay,
+          expectedFingerprint,
+          legacyInventoryRequestFingerprints(envelope, legacyItems),
+          envelope.idempotencyKey
+        );
         const previous = findById(initialState.inventories, initialReplay.resultVersionId);
         if (previous === null) throw new Error('Stored idempotency result is missing');
         return previous;
       }
       const items = await normalizeInventory(providers, envelope.payload.items);
+      const legacyFingerprints = legacyInventoryRequestFingerprints(envelope, items);
       return repository.transact(userId, (state) => {
         const replay = findRecord(state, 'saveInventory', envelope.idempotencyKey);
         if (replay !== undefined) {
-          assertReplay(replay, expectedFingerprint, envelope.idempotencyKey);
+          assertInventoryReplay(
+            replay,
+            expectedFingerprint,
+            legacyFingerprints,
+            envelope.idempotencyKey
+          );
           const previous = findById(state.inventories, replay.resultVersionId);
           if (previous === null) throw new Error('Stored idempotency result is missing');
           return { nextState: state, result: previous };

@@ -193,7 +193,9 @@ function publicJob(status: 'failed_retryable' | 'completed' = 'failed_retryable'
     completedAt: status === 'completed' ? '2026-08-19T04:01:00.000Z' : null,
     candidateMealPlanVersionId: null,
     activatedMealPlanVersionId: status === 'completed' ? 'meal-plan-1' : null,
-    failureCode: status === 'failed_retryable' ? 'provider_unavailable' : null
+    failureCode: status === 'failed_retryable' ? 'provider_unavailable' : null,
+    failureConflictDetailsStatus: 'complete',
+    failureConflicts: []
   } as const;
 }
 
@@ -320,8 +322,39 @@ describe('meal execution page controller', () => {
     expect(page.data.savingFact).toBe(false);
     expect(page.data.recalculatingMeal).toBe(false);
     expect(page.data.factMessage).toBe('训练完成情况已保存。');
-    expect(page.data.mealMessage).toContain('训练事实不受影响');
+    expect(page.data.mealMessage).toContain('训练事实与餐单不会丢失');
     expect(page.data.retryJobId).toBe('job-from-server');
+  });
+
+  it('restores actionable persisted nutrition conflicts when context refreshes', async () => {
+    const context = emptyContextResponse();
+    responses.push({
+      ...context,
+      data: {
+        ...context.data,
+        retryableRecalculationJob: {
+          ...publicJob(),
+          failureCode: 'nutrition_constraints_infeasible',
+          failureConflictDetailsStatus: 'complete',
+          failureConflicts: [{
+            code: 'inventory_insufficient',
+            businessDate: '2026-08-19',
+            foodNameZh: '审核鸡蛋',
+            requiredGrams: 120,
+            availableGrams: 20
+          }]
+        },
+        latestVersions: { ...context.data.latestVersions, recalculationJob: 1 }
+      }
+    });
+    const page = pageInstance();
+
+    await page.refreshContext.call(page);
+
+    expect(page.data.retryJobId).toBe('job-from-server');
+    expect(page.data.mealMessage).toContain('“审核鸡蛋”库存不足');
+    expect(page.data.mealMessage).toContain('补充');
+    expect(page.data.mealMessage).not.toContain('稍后重试');
   });
 
   it('turns a disappeared retry job into an explicit refresh state', async () => {

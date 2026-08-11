@@ -301,7 +301,9 @@ async function createCandidateJobState(changedTargetCount = 1) {
       completedAt: null,
       candidateMealPlanVersionId: candidate.id,
       activatedMealPlanVersionId: null,
-      failureCode: null
+      failureCode: null,
+      failureConflictDetailsStatus: 'complete' as const,
+      failureConflicts: []
     }]
   };
   expect(() => {
@@ -1028,7 +1030,9 @@ describe('planning aggregate invariants', () => {
       completedAt: null,
       candidateMealPlanVersionId: null,
       activatedMealPlanVersionId: null,
-      failureCode: null
+      failureCode: null,
+      failureConflictDetailsStatus: 'complete' as const,
+      failureConflicts: []
     };
     expectCorrupt({
       ...state,
@@ -1036,6 +1040,87 @@ describe('planning aggregate invariants', () => {
         firstJob,
         { ...firstJob, id: 'recalculation-job-2' }
       ]
+    });
+  });
+
+  test('accepts only explicit legacy-unavailable provenance for a nutrition failure without details', async () => {
+    const state = await createValidMealState();
+    const event = state.outboxEvents[0];
+    if (event === undefined) throw new Error('Expected failure trigger fixture');
+    const failedJob = {
+      kind: 'recalculation_job' as const,
+      id: 'recalculation-job-legacy-failure',
+      userId: 'user-a',
+      triggerEventId: event.eventId,
+      triggerType: 'training_plan_changed' as const,
+      affectedDates: event.affectedDates,
+      status: 'failed_retryable' as const,
+      createdAt: '2026-08-10T01:00:00.000Z',
+      completedAt: null,
+      candidateMealPlanVersionId: null,
+      activatedMealPlanVersionId: null,
+      failureCode: 'nutrition_constraints_infeasible' as const,
+      failureConflicts: []
+    };
+
+    expect(() => {
+      assertPlanningAggregateInvariants({
+        ...state,
+        recalculationJobs: [{
+          ...failedJob,
+          failureConflictDetailsStatus: 'legacy_unavailable'
+        }]
+      }, 'user-a');
+    }).not.toThrow();
+    expectCorrupt({
+      ...state,
+      recalculationJobs: [{
+        ...failedJob,
+        failureConflictDetailsStatus: 'complete'
+      }]
+    });
+  });
+
+  test('accepts a sanitized complete nutrition failure snapshot and rejects internal identifiers', async () => {
+    const state = await createValidMealState();
+    const event = state.outboxEvents[0];
+    if (event === undefined) throw new Error('Expected failure trigger fixture');
+    const failedJob = {
+      kind: 'recalculation_job' as const,
+      id: 'recalculation-job-complete-failure',
+      userId: 'user-a',
+      triggerEventId: event.eventId,
+      triggerType: 'training_plan_changed' as const,
+      affectedDates: event.affectedDates,
+      status: 'failed_retryable' as const,
+      createdAt: '2026-08-10T01:00:00.000Z',
+      completedAt: null,
+      candidateMealPlanVersionId: null,
+      activatedMealPlanVersionId: null,
+      failureCode: 'nutrition_constraints_infeasible' as const,
+      failureConflictDetailsStatus: 'complete' as const,
+      failureConflicts: [{
+        code: 'inventory_insufficient' as const,
+        businessDate: event.affectedDates[0] ?? '2026-08-10',
+        foodNameZh: '审核鸡蛋',
+        requiredGrams: 120,
+        availableGrams: 20
+      }]
+    };
+
+    expect(() => {
+      assertPlanningAggregateInvariants({ ...state, recalculationJobs: [failedJob] }, 'user-a');
+    }).not.toThrow();
+    const conflictWithInternalId = {
+      ...failedJob.failureConflicts[0],
+      foodId: 'internal-food-id'
+    } as unknown as typeof failedJob.failureConflicts[number];
+    expectCorrupt({
+      ...state,
+      recalculationJobs: [{
+        ...failedJob,
+        failureConflicts: [conflictWithInternalId]
+      }]
     });
   });
 

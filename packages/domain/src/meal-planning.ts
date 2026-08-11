@@ -136,6 +136,25 @@ export interface TrainingCompletionEvent {
   readonly occurredAt: string;
 }
 
+export type RecalculationFailureConflict =
+  | {
+      readonly code: 'target_nutrition_infeasible' | 'nutrition_out_of_range'
+        | 'food_diversity_insufficient';
+      readonly businessDate: string;
+    }
+  | {
+      readonly code: 'source_chain_incomplete' | 'allergen_detected' | 'avoided_food';
+      readonly businessDate: string;
+      readonly foodNameZh?: string | undefined;
+    }
+  | {
+      readonly code: 'inventory_insufficient';
+      readonly businessDate: string;
+      readonly foodNameZh?: string | undefined;
+      readonly requiredGrams?: number | undefined;
+      readonly availableGrams?: number | undefined;
+    };
+
 export interface RecalculationJob {
   readonly kind: 'recalculation_job';
   readonly id: string;
@@ -149,4 +168,6 @@ export interface RecalculationJob {
   readonly candidateMealPlanVersionId: string | null;
   readonly activatedMealPlanVersionId: string | null;
   readonly failureCode: 'provider_unavailable' | 'nutrition_constraints_infeasible' | null;
+  readonly failureConflictDetailsStatus: 'complete' | 'legacy_unavailable';
+  readonly failureConflicts: readonly RecalculationFailureConflict[];
 }

@@ -618,9 +618,15 @@ export function pendingMealPlanCandidateMatchesCurrentContext(
   const goal = findById(state.goals, state.activeGoalVersionId);
   const trainingPlan = findById(state.trainingPlans, state.activeTrainingPlanVersionId);
   const inventory = findById(state.inventories, state.activeInventoryVersionId);
+  const activeMealPlan = findById(state.mealPlans, state.activeMealPlanVersionId);
+  const activeChainJobs = state.recalculationJobs.filter((candidateJob) => (
+    recalculationJobMatchesActiveTrainingChain(state, candidateJob)
+  ));
+  const latestActiveChainJob = activeChainJobs[activeChainJobs.length - 1];
   if (
     matchingJobs.length !== 1
     || job === undefined
+    || latestActiveChainJob?.id !== job.id
     || job.status === 'completed'
     || candidate.readiness !== 'pending_confirmation'
     || candidate.supersedesVersionId !== state.activeMealPlanVersionId
@@ -628,6 +634,7 @@ export function pendingMealPlanCandidateMatchesCurrentContext(
     || goal === null
     || trainingPlan === null
     || inventory === null
+    || activeMealPlan === null
     || candidate.bodyProfileVersionId !== bodyProfile.id
     || candidate.goalVersionId !== goal.id
     || candidate.trainingPlanVersionId !== trainingPlan.id
@@ -635,7 +642,34 @@ export function pendingMealPlanCandidateMatchesCurrentContext(
     || candidate.weekStartDate !== trainingPlan.payload.weekStartDate
     || !recalculationJobMatchesActiveTrainingChain(state, job)
   ) return false;
-  return true;
+  const latestEnergyTargets = latestTargetsForActivePlan(
+    state,
+    bodyProfile,
+    goal,
+    trainingPlan
+  );
+  const latestNutritionTargets = nutritionTargetsForEnergyTargets(state, latestEnergyTargets);
+  const latestTargetIdByDate = new Map(
+    latestNutritionTargets.map((target) => [target.businessDate, target.id])
+  );
+  const activeTargetIdByDate = new Map(
+    activeMealPlan.days.map((day) => [day.businessDate, day.dailyNutritionTargetVersionId])
+  );
+  const affectedDates = new Set(job.affectedDates);
+  if (
+    candidate.days.length !== 7
+    || activeTargetIdByDate.size !== 7
+    || affectedDates.size !== job.affectedDates.length
+  ) return false;
+  return candidate.days.every((day) => {
+    const expectedTargetId = affectedDates.has(day.businessDate)
+      ? latestTargetIdByDate.get(day.businessDate)
+      : activeTargetIdByDate.get(day.businessDate);
+    return expectedTargetId !== undefined
+      && day.dailyNutritionTargetVersionId === expectedTargetId;
+  }) && job.affectedDates.every((businessDate) => (
+    candidate.days.some((day) => day.businessDate === businessDate)
+  ));
 }
 
 function nutritionTargetsForEnergyTargets(
@@ -786,7 +820,9 @@ export function createVersionedPlanningService(
           completedAt: null,
           candidateMealPlanVersionId: null,
           activatedMealPlanVersionId: null,
-          failureCode: null
+          failureCode: null,
+          failureConflictDetailsStatus: 'complete',
+          failureConflicts: []
         };
         return {
           nextState: {

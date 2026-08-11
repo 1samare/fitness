@@ -253,7 +253,9 @@ async function createPhase4State(repository: PlanningRepository): Promise<Planni
       completedAt: null,
       candidateMealPlanVersionId: candidatePlan.id,
       activatedMealPlanVersionId: null,
-      failureCode: null
+      failureCode: null,
+      failureConflictDetailsStatus: 'complete',
+      failureConflicts: []
     }],
     activeInventoryVersionId: inventory.id,
     activeMealPlanVersionId: completePlan.id
@@ -297,7 +299,9 @@ function corruptPhase4State(
     completedAt: null,
     candidateMealPlanVersionId: null,
     activatedMealPlanVersionId: null,
-    failureCode: null
+    failureCode: null,
+    failureConflictDetailsStatus: 'complete' as const,
+    failureConflicts: []
   };
   return {
     ...state,
@@ -306,6 +310,54 @@ function corruptPhase4State(
 }
 
 describe('CloudBasePlanningRepository', () => {
+  test('migrates v4 nutrition failures to explicit legacy-unavailable details without mutating on read', async () => {
+    const database = new FakeDatabase();
+    const repository = new CloudBasePlanningRepository(database);
+    const phase4State = await createPhase4State(repository);
+    const documentKey = `planning_user_states/${repository.documentIdForUser('user-a')}`;
+    const stored = database.documents.get(documentKey);
+    const job = phase4State.recalculationJobs[0];
+    const activePlan = phase4State.mealPlans.find(
+      (plan) => plan.id === phase4State.activeMealPlanVersionId
+    );
+    if (job === undefined || activePlan === undefined || !isRecord(stored)) {
+      throw new Error('Expected stored v4 migration fixture');
+    }
+    const legacyDocument = {
+      schemaVersion: 4,
+      state: {
+        ...phase4State,
+        mealPlans: [activePlan],
+        mealPlanTargetDiffs: [],
+        recalculationJobs: [{
+          kind: job.kind,
+          id: job.id,
+          userId: job.userId,
+          triggerEventId: job.triggerEventId,
+          triggerType: job.triggerType,
+          affectedDates: job.affectedDates,
+          status: 'failed_retryable',
+          createdAt: job.createdAt,
+          completedAt: null,
+          candidateMealPlanVersionId: null,
+          activatedMealPlanVersionId: null,
+          failureCode: 'nutrition_constraints_infeasible'
+        }]
+      }
+    };
+    database.documents.set(documentKey, legacyDocument);
+
+    const migrated = await repository.read('user-a');
+
+    expect(migrated.recalculationJobs[0]).toMatchObject({
+      failureConflictDetailsStatus: 'legacy_unavailable',
+      failureConflicts: []
+    });
+    expect(database.documents.get(documentKey)).toEqual(legacyDocument);
+    await repository.transact('user-a', (state) => ({ nextState: state, result: undefined }));
+    expect(database.documents.get(documentKey)).toMatchObject({ schemaVersion: 5 });
+  });
+
   test.each([
     'cross_user',
     'dangling',
@@ -385,7 +437,7 @@ describe('CloudBasePlanningRepository', () => {
     expect(database.documents).toHaveLength(1);
     expect(database.requestedKeys.join('|')).not.toContain('wx-openid-sensitive');
     expect([...database.documents.values()][0]).toEqual(expect.objectContaining({
-      schemaVersion: 4
+      schemaVersion: 5
     }));
   });
 
@@ -424,7 +476,7 @@ describe('CloudBasePlanningRepository', () => {
     );
     await repository.transact('wx-openid-a', (state) => ({ nextState: state, result: undefined }));
     const migrated = database.documents.get(documentKey);
-    expect(isRecord(migrated) ? migrated.schemaVersion : undefined).toBe(4);
+    expect(isRecord(migrated) ? migrated.schemaVersion : undefined).toBe(5);
     expect(isRecord(migrated) && isRecord(migrated.state)
       ? migrated.state.dailyNutritionTargets
       : undefined).toEqual([]);
@@ -556,7 +608,7 @@ describe('CloudBasePlanningRepository', () => {
     );
   });
 
-  test.each([1, 5])(
+  test.each([1, 6])(
     'rejects schema version %s without attempting an implicit migration',
     async (schemaVersion) => {
     const database = new FakeDatabase();

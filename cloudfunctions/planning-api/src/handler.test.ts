@@ -827,6 +827,127 @@ describe('handlePlanningApi', () => {
     if (!retry.success) expect(retry.error.code).toBe('provider_unavailable');
   });
 
+  it('publishes persisted sanitized conflicts from saveTrainingPlan and subsequent context', async () => {
+    const harness = createCompletionHarness();
+    await prepareCompletionPlan(harness);
+    await harness.handler({
+      action: 'saveInventory',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'inventory-api-infeasible-details',
+        payload: {
+          items: TEST_NUTRITION_SNAPSHOTS.map((snapshot) => ({
+            name: snapshot.canonicalNameZh,
+            availableGrams: 1
+          }))
+        }
+      }
+    }, { userId: 'trusted-user-a' });
+
+    const saved = await harness.handler({
+      action: 'saveTrainingPlan',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'training-api-infeasible-details',
+        payload: {
+          weekStartDate: '2026-08-17',
+          businessTimezone: 'Asia/Shanghai',
+          sessions: [{
+            businessDate: '2026-08-19',
+            sessionCode: '02054',
+            durationMinutes: 30
+          }]
+        }
+      }
+    }, { userId: 'trusted-user-a' });
+    const context = await harness.handler(
+      { action: 'getCurrentContext' },
+      { userId: 'trusted-user-a' }
+    );
+
+    expect(saved).toMatchObject({
+      success: true,
+      data: {
+        kind: 'training_plan_saved',
+        recalculationJob: {
+          status: 'failed_retryable',
+          failureCode: 'nutrition_constraints_infeasible',
+          failureConflictDetailsStatus: 'complete'
+        }
+      }
+    });
+    expect(context).toMatchObject({
+      success: true,
+      data: {
+        kind: 'current_context',
+        retryableRecalculationJob: {
+          failureConflictDetailsStatus: 'complete'
+        }
+      }
+    });
+    if (
+      !saved.success
+      || saved.data.kind !== 'training_plan_saved'
+      || saved.data.recalculationJob === null
+      || !context.success
+      || context.data.kind !== 'current_context'
+      || context.data.retryableRecalculationJob === null
+    ) throw new Error('Expected public failed recalculation jobs');
+    const savedJob = saved.data.recalculationJob;
+    expect(savedJob.failureConflicts.some((conflict) => (
+      conflict.code === 'inventory_insufficient'
+      && conflict.businessDate === '2026-08-17'
+      && conflict.foodNameZh !== undefined
+    ))).toBe(true);
+    expect(context.data.retryableRecalculationJob.failureConflicts).toEqual(
+      savedJob.failureConflicts
+    );
+    const retry = await harness.handler({
+      action: 'retryPendingRecalculation',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'retry-api-infeasible-details',
+        payload: { recalculationJobId: savedJob.id }
+      }
+    }, { userId: 'trusted-user-a' });
+    if (retry.success || retry.error.code !== 'nutrition_constraints_infeasible') {
+      throw new Error('Expected public retry infeasibility details');
+    }
+    const afterRetry = await harness.repository.read('trusted-user-a');
+    expect(afterRetry.recalculationJobs.find(
+      (job) => job.id === savedJob.id
+    )?.failureConflicts).toEqual(retry.error.conflicts);
+    const beforeCompletion = await harness.repository.read('trusted-user-a');
+    harness.setNow('2026-08-19T04:00:00.000Z');
+    const completion = await harness.handler({
+      action: 'recordTrainingCompletion',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'completion-api-infeasible-details',
+        payload: { businessDate: '2026-08-19', completedDurationMinutes: 20 }
+      }
+    }, { userId: 'trusted-user-a' });
+    if (
+      !completion.success
+      || completion.data.kind !== 'training_completion_recorded'
+      || completion.data.recalculationJob === null
+    ) throw new Error('Expected public completion failure details');
+    expect(completion.data.recalculationJob).toMatchObject({
+      failureCode: 'nutrition_constraints_infeasible',
+      failureConflictDetailsStatus: 'complete'
+    });
+    expect(completion.data.recalculationJob.failureConflicts.some((conflict) => (
+      conflict.code === 'inventory_insufficient' && conflict.foodNameZh !== undefined
+    ))).toBe(true);
+    const afterCompletion = await harness.repository.read('trusted-user-a');
+    expect(afterCompletion.trainingCompletionEvents).toHaveLength(1);
+    expect(afterCompletion.activeMealPlanVersionId).toBe(beforeCompletion.activeMealPlanVersionId);
+    expect(JSON.stringify(saved)).not.toContain('fixture-');
+    expect(JSON.stringify(saved)).not.toContain('snapshot-');
+    expect(JSON.stringify(completion)).not.toContain('fixture-');
+    expect(JSON.stringify(completion)).not.toContain('snapshot-');
+  });
+
   it('publishes legacy-safe active and pending meal displays without mutating old schema-v4 state', async () => {
     const harness = createCompletionHarness();
     await prepareCompletionPlan(harness);

@@ -41,6 +41,105 @@ const supportedResponse = {
 } as const;
 
 describe('planning API contracts', () => {
+  it('publishes strict persisted conflict details on failed recalculation jobs', () => {
+    const failedJob = {
+      kind: 'recalculation_job',
+      id: 'job-infeasible',
+      triggerEventId: 'training-plan-change-infeasible',
+      triggerType: 'training_plan_changed',
+      affectedDates: ['2026-08-19'],
+      status: 'failed_retryable',
+      createdAt: '2026-08-19T04:00:00.000Z',
+      completedAt: null,
+      candidateMealPlanVersionId: null,
+      activatedMealPlanVersionId: null,
+      failureCode: 'nutrition_constraints_infeasible',
+      failureConflictDetailsStatus: 'complete',
+      failureConflicts: [{
+        code: 'inventory_insufficient',
+        businessDate: '2026-08-19',
+        foodNameZh: '审核鸡蛋',
+        requiredGrams: 120,
+        availableGrams: 20
+      }]
+    } as const;
+    const response = {
+      success: true,
+      data: {
+        kind: 'training_plan_saved',
+        trainingPlan: {
+          kind: 'training_plan_version',
+          id: 'training-plan-2',
+          version: 2,
+          createdAt: '2026-08-19T04:00:00.000Z',
+          bodyProfileVersionId: 'body-profile-1',
+          goalVersionId: 'goal-1',
+          payload: {
+            weekStartDate: '2026-08-17',
+            businessTimezone: 'Asia/Shanghai',
+            sessions: []
+          }
+        },
+        dailyEnergyTargets: [],
+        dailyNutritionTargets: [],
+        recalculationJob: failedJob
+      }
+    } as const;
+
+    expect(planningApiResponseSchema.parse(response)).toEqual(response);
+    expect(planningApiResponseSchema.safeParse({
+      ...response,
+      data: {
+        ...response.data,
+        recalculationJob: {
+          ...failedJob,
+          failureConflicts: [{
+            ...failedJob.failureConflicts[0],
+            foodId: 'internal-food-id',
+            nutritionSnapshotId: 'internal-snapshot-id'
+          }]
+        }
+      }
+    }).success).toBe(false);
+  });
+
+  it('distinguishes unavailable legacy nutrition conflict details from complete new snapshots', () => {
+    const baseJob = {
+      kind: 'recalculation_job',
+      id: 'job-legacy-infeasible',
+      triggerEventId: 'training-completion-legacy',
+      triggerType: 'training_completion',
+      affectedDates: ['2026-08-19'],
+      status: 'failed_retryable',
+      createdAt: '2026-08-19T04:00:00.000Z',
+      completedAt: null,
+      candidateMealPlanVersionId: null,
+      activatedMealPlanVersionId: null,
+      failureCode: 'nutrition_constraints_infeasible'
+    } as const;
+    const responseFor = (job: Record<string, unknown>) => ({
+      success: true,
+      data: {
+        kind: 'meal_plan_recalculation_processed',
+        recalculationJob: job,
+        candidateMealPlan: null,
+        activatedMealPlan: null,
+        targetDiffs: []
+      }
+    });
+
+    expect(planningApiResponseSchema.safeParse(responseFor({
+      ...baseJob,
+      failureConflictDetailsStatus: 'legacy_unavailable',
+      failureConflicts: []
+    })).success).toBe(true);
+    expect(planningApiResponseSchema.safeParse(responseFor({
+      ...baseJob,
+      failureConflictDetailsStatus: 'complete',
+      failureConflicts: []
+    })).success).toBe(false);
+  });
+
   it('accepts a distinct stable error for a forbidden future completion', () => {
     const response = {
       success: false,
@@ -212,7 +311,9 @@ describe('planning API contracts', () => {
         completedAt: null,
         candidateMealPlanVersionId: 'meal-plan-1',
         activatedMealPlanVersionId: null,
-        failureCode: null
+        failureCode: null,
+        failureConflictDetailsStatus: 'complete',
+        failureConflicts: []
       }],
       outboxEvents: [],
       idempotencyRecords: [
@@ -465,7 +566,9 @@ describe('planning API contracts', () => {
         completedAt: null,
         candidateMealPlanVersionId: null,
         activatedMealPlanVersionId: null,
-        failureCode: 'provider_unavailable'
+        failureCode: 'provider_unavailable',
+        failureConflictDetailsStatus: 'complete',
+        failureConflicts: []
       } as const;
       const response = {
         success: true,
@@ -528,6 +631,8 @@ describe('planning API contracts', () => {
             candidateMealPlanVersionId: null,
             activatedMealPlanVersionId: null,
             failureCode: 'provider_unavailable',
+            failureConflictDetailsStatus: 'complete',
+            failureConflicts: [],
             [field]: invalidValue
           },
           latestVersions: {
@@ -589,6 +694,8 @@ describe('planning API contracts', () => {
           affectedDates: ['2026-08-19'],
           createdAt: '2026-08-19T04:00:00.000Z',
           candidateMealPlanVersionId: null,
+          failureConflictDetailsStatus: 'complete',
+          failureConflicts: [],
           ...lifecycle
         },
         candidateMealPlan: null,
@@ -623,7 +730,9 @@ describe('planning API contracts', () => {
             completedAt,
             candidateMealPlanVersionId: status === 'pending' ? 'meal-plan-candidate' : null,
             activatedMealPlanVersionId,
-            failureCode
+            failureCode,
+            failureConflictDetailsStatus: 'complete',
+            failureConflicts: []
           },
           candidateMealPlan: null,
           activatedMealPlan: null,

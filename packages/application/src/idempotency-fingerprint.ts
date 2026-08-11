@@ -38,8 +38,16 @@ function canonicalizeJson(value: unknown): CanonicalJson {
   throw new TypeError('Idempotency input must be JSON serializable');
 }
 
-export function requestFingerprint(value: unknown): string {
+function sha256Fingerprint(value: unknown, version: 'v2' | 'v3'): string {
   const serialized = JSON.stringify(canonicalizeJson(value));
   const digest = createHash('sha256').update(serialized, 'utf8').digest('hex');
-  return `v2:sha256:${digest}`;
+  return `${version}:sha256:${digest}`;
+}
+
+export function requestFingerprint(value: unknown): string {
+  return sha256Fingerprint(value, 'v2');
+}
+
+export function requestFingerprintV3(value: unknown): string {
+  return sha256Fingerprint(value, 'v3');
 }
