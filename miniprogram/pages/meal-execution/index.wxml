@@ -72,11 +72,19 @@
       <text class="notice__title">有未完成的库存与餐单生成流程</text>
       <text>{{inventoryGenerationRecoveryMessage}}</text>
       <button
+        wx:if="{{!inventoryGenerationRecoveryCanEnd}}"
         class="button button--secondary button--wide"
         loading="{{savingInventory || generatingMeal}}"
         disabled="{{savingInventory || generatingMeal || inventoryGenerationRecoveryDamaged}}"
         bindtap="onResumeInventoryGeneration"
       >{{savingInventory ? '正在恢复库存保存…' : generatingMeal ? '正在恢复餐单生成…' : '恢复上次流程'}}</button>
+      <button
+        wx:if="{{inventoryGenerationRecoveryCanEnd}}"
+        class="button button--secondary button--wide"
+        loading="{{loadingContext}}"
+        disabled="{{savingInventory || generatingMeal || loadingContext}}"
+        bindtap="onEndInventoryGenerationRecovery"
+      >{{inventoryGenerationRecoveryEndLabel === '调整食材并重新生成' ? '调整食材并重新生成' : '按当前库存重新生成'}}</button>
       <button
         wx:if="{{inventoryGenerationRecoveryDamaged}}"
         class="button button--ghost button--wide"

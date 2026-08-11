@@ -435,7 +435,8 @@ describe('planning API contracts', () => {
 
   it.each([
     ['completedAt', '2026-08-19T04:01:00.000Z'],
-    ['activatedMealPlanVersionId', 'meal-plan-activated']
+    ['activatedMealPlanVersionId', 'meal-plan-activated'],
+    ['candidateMealPlanVersionId', 'meal-plan-candidate']
   ] as const)(
     'rejects a current-context retry job with invalid %s',
     (field, invalidValue) => {

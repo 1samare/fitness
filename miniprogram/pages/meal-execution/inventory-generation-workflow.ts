@@ -3,6 +3,16 @@ import { planningApiRequestSchema, type PlanningApiRequest } from '@fitness/cont
 type InventoryRequest = Extract<PlanningApiRequest, { action: 'saveInventory' }>;
 type GenerationRequest = Extract<PlanningApiRequest, { action: 'generateWeeklyMealPlan' }>;
 
+export type InventoryGenerationRecoveryStatus =
+  | 'replay_required'
+  | 'confirmed_infeasible'
+  | 'inventory_mismatch';
+
+const terminalRecoveryMessages = {
+  confirmed_infeasible: '当前食材与营养目标没有可行餐单。服务已确认本次没有写入餐单；请调整食材后明确重新生成。',
+  inventory_mismatch: '已生成餐单未关联本次保存或当前生效的库存。旧餐单会保留并标记待更新；请明确按当前库存重新生成。'
+} as const;
+
 export const inventoryGenerationWorkflowStorageKey = 'fitness.inventoryGenerationWorkflow.v1';
 
 export interface InventoryGenerationWorkflow {
@@ -11,6 +21,8 @@ export interface InventoryGenerationWorkflow {
   readonly inventoryRequest: InventoryRequest;
   readonly generationRequest: GenerationRequest;
   readonly inventoryVersionId: string | null;
+  readonly recoveryStatus: InventoryGenerationRecoveryStatus;
+  readonly recoveryMessage: string;
 }
 
 interface WorkflowRequests {
@@ -49,7 +61,9 @@ export function createInventoryGenerationWorkflow(
     stage: 'inventory_pending',
     inventoryRequest: parsed.inventoryRequest,
     generationRequest: parsed.generationRequest,
-    inventoryVersionId: null
+    inventoryVersionId: null,
+    recoveryStatus: 'replay_required',
+    recoveryMessage: ''
   };
 }
 
@@ -63,6 +77,20 @@ export function advanceInventoryGenerationWorkflow(
   return { ...workflow, stage: 'generation_pending', inventoryVersionId };
 }
 
+export function markInventoryGenerationWorkflowRecovery(
+  workflow: InventoryGenerationWorkflow,
+  recoveryStatus: Exclude<InventoryGenerationRecoveryStatus, 'replay_required'>
+): InventoryGenerationWorkflow {
+  if (workflow.stage !== 'generation_pending') {
+    throw new Error('只有餐单生成阶段可以进入已确认的恢复状态');
+  }
+  return {
+    ...workflow,
+    recoveryStatus,
+    recoveryMessage: terminalRecoveryMessages[recoveryStatus]
+  };
+}
+
 export function inventoryGenerationWorkflowMatches(
   workflow: InventoryGenerationWorkflow,
   requests: WorkflowRequests
@@ -73,25 +101,51 @@ export function inventoryGenerationWorkflowMatches(
 export function parseInventoryGenerationWorkflow(
   value: unknown
 ): InventoryGenerationWorkflow | undefined {
+  const keys = isRecord(value) ? Object.keys(value) : [];
+  const isLegacy = keys.length === 5;
   if (
     !isRecord(value)
-    || Object.keys(value).length !== 5
+    || (!isLegacy && keys.length !== 7)
     || typeof value.fingerprint !== 'string'
     || (value.stage !== 'inventory_pending' && value.stage !== 'generation_pending')
     || (value.inventoryVersionId !== null && typeof value.inventoryVersionId !== 'string')
   ) return undefined;
+  const recoveryStatus = isLegacy ? 'replay_required' : value.recoveryStatus;
+  const recoveryMessage = isLegacy ? '' : value.recoveryMessage;
+  if (
+    recoveryStatus !== 'replay_required'
+    && recoveryStatus !== 'confirmed_infeasible'
+    && recoveryStatus !== 'inventory_mismatch'
+  ) return undefined;
+  if (typeof recoveryMessage !== 'string') return undefined;
   const requests = parseRequests(value);
   if (requests === undefined || value.fingerprint !== fingerprint(requests)) return undefined;
-  if (value.stage === 'inventory_pending' && value.inventoryVersionId !== null) return undefined;
+  if (
+    value.stage === 'inventory_pending'
+    && (
+      value.inventoryVersionId !== null
+      || recoveryStatus !== 'replay_required'
+      || recoveryMessage !== ''
+    )
+  ) return undefined;
   if (
     value.stage === 'generation_pending'
     && (typeof value.inventoryVersionId !== 'string' || value.inventoryVersionId.length === 0)
+  ) return undefined;
+  if (
+    (recoveryStatus === 'replay_required' && recoveryMessage !== '')
+    || (
+      recoveryStatus !== 'replay_required'
+      && recoveryMessage !== terminalRecoveryMessages[recoveryStatus]
+    )
   ) return undefined;
   return {
     fingerprint: value.fingerprint,
     stage: value.stage,
     inventoryRequest: requests.inventoryRequest,
     generationRequest: requests.generationRequest,
-    inventoryVersionId: value.inventoryVersionId
+    inventoryVersionId: value.inventoryVersionId,
+    recoveryStatus,
+    recoveryMessage
   };
 }

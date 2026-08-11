@@ -521,7 +521,7 @@ const selectableRecipeOptionSchema = z.object({
   dishNameZh: z.string().trim().min(1).max(200)
 }).strict();
 
-const currentContextRecalculationJobSchema = z.object({
+const recalculationJobFields = {
   kind: z.literal('recalculation_job'),
   id: z.string().min(1),
   triggerEventId: z.string().min(1),
@@ -533,13 +533,38 @@ const currentContextRecalculationJobSchema = z.object({
   candidateMealPlanVersionId: z.string().min(1).nullable(),
   activatedMealPlanVersionId: z.string().min(1).nullable(),
   failureCode: z.enum(['provider_unavailable', 'nutrition_constraints_infeasible']).nullable()
-}).strict().refine((job) => (
+} as const;
+
+function recalculationJobHasCoherentLifecycle(job: {
+  readonly status: 'pending' | 'completed' | 'failed_retryable';
+  readonly completedAt: string | null;
+  readonly activatedMealPlanVersionId: string | null;
+  readonly failureCode: 'provider_unavailable' | 'nutrition_constraints_infeasible' | null;
+}): boolean {
+  if (job.status === 'pending') {
+    return job.completedAt === null
+      && job.activatedMealPlanVersionId === null
+      && job.failureCode === null;
+  }
+  if (job.status === 'failed_retryable') {
+    return job.completedAt === null
+      && job.activatedMealPlanVersionId === null
+      && job.failureCode !== null;
+  }
+  return job.completedAt !== null && job.failureCode === null;
+}
+
+const recalculationJobSchema = z.object(recalculationJobFields)
+  .strict()
+  .refine(recalculationJobHasCoherentLifecycle, {
+    message: 'public recalculation job lifecycle is inconsistent'
+  });
+
+const currentContextRecalculationJobSchema = recalculationJobSchema.refine((job) => (
   job.status === 'failed_retryable'
-  && job.failureCode !== null
-  && job.completedAt === null
-  && job.activatedMealPlanVersionId === null
+  && job.candidateMealPlanVersionId === null
 ), {
-  message: 'context retryable job must be failed_retryable'
+  message: 'context retryable job must be failed_retryable without a candidate'
 });
 
 const currentContextSchema = z.object({
@@ -580,51 +605,13 @@ const storedTrainingCompletionEventSchema = versionMetadataSchema.extend({
 }).omit({ createdAt: true }).strict();
 
 const storedRecalculationJobSchema = z.object({
-  kind: z.literal('recalculation_job'),
-  id: z.string().min(1),
+  ...recalculationJobFields,
   userId: z.string().min(1),
-  triggerEventId: z.string().min(1),
-  triggerType: z.enum(['training_plan_changed', 'training_completion']),
-  affectedDates: z.array(businessDateSchema).max(7),
-  status: z.enum(['pending', 'completed', 'failed_retryable']),
-  createdAt: z.iso.datetime(),
-  completedAt: z.iso.datetime().nullable(),
-  candidateMealPlanVersionId: z.string().min(1).nullable(),
-  activatedMealPlanVersionId: z.string().min(1).nullable(),
-  failureCode: z.enum([
-    'provider_unavailable',
-    'nutrition_constraints_infeasible'
-  ]).nullable()
 }).strict();
-
-function recalculationJobHasCoherentLifecycle(job: {
-  readonly status: 'pending' | 'completed' | 'failed_retryable';
-  readonly completedAt: string | null;
-  readonly activatedMealPlanVersionId: string | null;
-  readonly failureCode: 'provider_unavailable' | 'nutrition_constraints_infeasible' | null;
-}): boolean {
-  if (job.status === 'pending') {
-    return job.completedAt === null
-      && job.activatedMealPlanVersionId === null
-      && job.failureCode === null;
-  }
-  if (job.status === 'failed_retryable') {
-    return job.completedAt === null
-      && job.activatedMealPlanVersionId === null
-      && job.failureCode !== null;
-  }
-  return job.completedAt !== null && job.failureCode === null;
-}
 
 const trainingCompletionEventSchema = storedTrainingCompletionEventSchema
   .omit({ userId: true })
   .strict();
-const recalculationJobSchema = storedRecalculationJobSchema
-  .omit({ userId: true })
-  .strict()
-  .refine(recalculationJobHasCoherentLifecycle, {
-    message: 'public recalculation job lifecycle is inconsistent'
-  });
 const mealPlanDecisionSchema = storedMealPlanDecisionSchema.omit({ userId: true }).strict();
 
 const trainingCompletionRecordedSchema = z.object({

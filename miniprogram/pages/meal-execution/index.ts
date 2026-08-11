@@ -32,6 +32,7 @@ import {
   createInventoryGenerationWorkflow,
   inventoryGenerationWorkflowMatches,
   inventoryGenerationWorkflowStorageKey,
+  markInventoryGenerationWorkflowRecovery,
   parseInventoryGenerationWorkflow,
   type InventoryGenerationWorkflow
 } from './inventory-generation-workflow';
@@ -87,6 +88,9 @@ interface PageData {
   inventoryGenerationRecoveryVisible: boolean;
   inventoryGenerationRecoveryDamaged: boolean;
   inventoryGenerationRecoveryMessage: string;
+  inventoryGenerationRecoveryCanEnd: boolean;
+  inventoryGenerationRecoveryEndLabel: string;
+  activeInventoryVersionId: string;
 }
 
 interface TextValueEvent { readonly detail: { readonly value: string } }
@@ -112,6 +116,7 @@ interface PageActions {
   onSaveInventoryAndGenerate(): Promise<void>;
   onResumeInventoryGeneration(): Promise<void>;
   onClearDamagedInventoryGeneration(): void;
+  onEndInventoryGenerationRecovery(): void;
   syncInventoryGenerationRecovery(): void;
   onLockChange(event: IndexedSwitchValueEvent): Promise<void>;
   onRecipeChange(event: RecipePickerEvent): Promise<void>;
@@ -282,7 +287,10 @@ Page<PageData, PageActions>({
     generationMessage: '',
     inventoryGenerationRecoveryVisible: false,
     inventoryGenerationRecoveryDamaged: false,
-    inventoryGenerationRecoveryMessage: ''
+    inventoryGenerationRecoveryMessage: '',
+    inventoryGenerationRecoveryCanEnd: false,
+    inventoryGenerationRecoveryEndLabel: '',
+    activeInventoryVersionId: ''
   },
 
   async onLoad() {
@@ -306,6 +314,7 @@ Page<PageData, PageActions>({
       this.setData({
         contextLoaded: true,
         latestVersions: context.latestVersions,
+        activeInventoryVersionId: context.inventory?.id ?? '',
         generationWeekStart: weekStartDate,
         mealDays: viewModel.days.map((day) => ({
           ...day,
@@ -348,7 +357,9 @@ Page<PageData, PageActions>({
       this.setData({
         inventoryGenerationRecoveryVisible: false,
         inventoryGenerationRecoveryDamaged: false,
-        inventoryGenerationRecoveryMessage: ''
+        inventoryGenerationRecoveryMessage: '',
+        inventoryGenerationRecoveryCanEnd: false,
+        inventoryGenerationRecoveryEndLabel: ''
       });
       return;
     }
@@ -356,7 +367,21 @@ Page<PageData, PageActions>({
       this.setData({
         inventoryGenerationRecoveryVisible: true,
         inventoryGenerationRecoveryDamaged: true,
-        inventoryGenerationRecoveryMessage: '上次库存与餐单生成恢复记录已损坏，系统不会猜测或重放请求。请明确清除损坏记录后重新提交。'
+        inventoryGenerationRecoveryMessage: '上次库存与餐单生成恢复记录已损坏，系统不会猜测或重放请求。请明确清除损坏记录后重新提交。',
+        inventoryGenerationRecoveryCanEnd: false,
+        inventoryGenerationRecoveryEndLabel: ''
+      });
+      return;
+    }
+    if (stored.workflow.recoveryStatus !== 'replay_required') {
+      this.setData({
+        inventoryGenerationRecoveryVisible: true,
+        inventoryGenerationRecoveryDamaged: false,
+        inventoryGenerationRecoveryMessage: stored.workflow.recoveryMessage,
+        inventoryGenerationRecoveryCanEnd: true,
+        inventoryGenerationRecoveryEndLabel: stored.workflow.recoveryStatus === 'confirmed_infeasible'
+          ? '调整食材并重新生成'
+          : '按当前库存重新生成'
       });
       return;
     }
@@ -384,6 +409,8 @@ Page<PageData, PageActions>({
     this.setData({
       inventoryGenerationRecoveryVisible: true,
       inventoryGenerationRecoveryDamaged: false,
+      inventoryGenerationRecoveryCanEnd: false,
+      inventoryGenerationRecoveryEndLabel: '',
       inventoryGenerationRecoveryMessage: inputsChanged
         ? `检测到上次未完成流程（${stageText}），且当前食材或餐单周已变化。新输入不会替代旧请求，请先恢复上次流程。`
         : `检测到上次未完成流程（${stageText}）。请先恢复上次流程，系统会精确重放原请求。`
@@ -562,6 +589,11 @@ Page<PageData, PageActions>({
       return;
     }
     let workflow = stored.workflow;
+    if (workflow.recoveryStatus !== 'replay_required') {
+      this.syncInventoryGenerationRecovery();
+      return;
+    }
+    const replayingSavedInventory = workflow.stage === 'generation_pending';
     let shouldRefresh = false;
     this.setData({ actionMessage: '', generationMessage: '', formError: '' });
     try {
@@ -599,6 +631,19 @@ Page<PageData, PageActions>({
         generationResponse,
         'weekly_meal_plan_generated'
       );
+      if (
+        !generationResponse.success
+        && generationResponse.error.code === 'nutrition_constraints_infeasible'
+      ) {
+        workflow = markInventoryGenerationWorkflowRecovery(
+          workflow,
+          'confirmed_infeasible'
+        );
+        wx.setStorageSync(inventoryGenerationWorkflowStorageKey, workflow);
+        this.setData({ generationMessage: workflow.recoveryMessage });
+        shouldRefresh = true;
+        return;
+      }
       if (generationDisposition === 'discard') {
         clearInventoryGenerationWorkflow();
         this.setData({ generationMessage: `库存已保存，但餐单生成请求已失效。${responseError(generationResponse)}` });
@@ -613,9 +658,21 @@ Page<PageData, PageActions>({
         this.setData({ generationMessage: `库存已保存，但餐单生成尚未确认。${responseError(generationResponse)}` });
         return;
       }
-      if (generationResponse.data.version.inventoryVersionId !== workflow.inventoryVersionId) {
+      if (
+        generationResponse.data.version.inventoryVersionId !== workflow.inventoryVersionId
+        || (
+          replayingSavedInventory
+          && this.data.activeInventoryVersionId.length > 0
+          && generationResponse.data.version.inventoryVersionId !== this.data.activeInventoryVersionId
+        )
+      ) {
+        workflow = markInventoryGenerationWorkflowRecovery(
+          workflow,
+          'inventory_mismatch'
+        );
+        wx.setStorageSync(inventoryGenerationWorkflowStorageKey, workflow);
         this.setData({
-          generationMessage: '餐单返回的库存版本与已保存库存不一致，已保留恢复记录，请刷新后重试。'
+          generationMessage: workflow.recoveryMessage
         });
         shouldRefresh = true;
         return;
@@ -643,6 +700,20 @@ Page<PageData, PageActions>({
     clearInventoryGenerationWorkflow();
     this.syncInventoryGenerationRecovery();
     this.setData({ generationMessage: '损坏的恢复记录已清除，请重新校验输入后提交。' });
+  },
+
+  onEndInventoryGenerationRecovery() {
+    const stored = storedInventoryGenerationWorkflow();
+    if (
+      stored.workflow === undefined
+      || stored.workflow.recoveryStatus === 'replay_required'
+    ) return;
+    clearInventoryGenerationWorkflow();
+    this.syncInventoryGenerationRecovery();
+    this.setData({
+      generationMessage: '已结束上次恢复流程。请使用当前食材和餐单周重新保存库存并生成餐单。',
+      formError: ''
+    });
   },
 
   async onLockChange(event) {
