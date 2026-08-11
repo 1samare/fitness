@@ -250,7 +250,7 @@
 
 | 日期 | 分支/基线 | 更新 |
 |---|---|---|
-| 2026-08-11 | `feat/v1.0` / `32810af` 后最终审查 Round 3 | 关闭同 active training/date 旧 failed completion job 重现与误重试：合法库存版本链、初始零 Provider 调用、事务竞态回滚和公共 `candidate_not_pending`；fresh 六门禁为 43 文件、527 测试及 smoke 1/1，独立复审 CLEAN |
+| 2026-08-11 | `feat/v1.0` / `cefc812` 最终审查 Round 3 | 关闭同 active training/date 旧 failed completion job 重现与误重试：合法库存版本链、初始零 Provider 调用、事务竞态回滚和公共 `candidate_not_pending`；fresh 六门禁为 43 文件、527 测试及 smoke 1/1，独立复审 CLEAN |
 | 2026-08-11 | `feat/v1.0` / `55aa739` 后最终审查 Round 2 | 关闭 2 Important + 2 Minor：completion candidate authoritative eligibility、持久化脱敏无解快照与 v4→v5 兼容、库存 v3 指纹及旧 v2 fail-closed 重放、fresh 文档计数；六门禁为 43 文件、523 测试及 smoke 1/1 |
 | 2026-08-11 | `feat/v1.0` / `898b649` 后最终审查修复 | 关闭最终审查 4 Important + 1 Minor：离线库存幂等重放、公开结构化无解冲突与可信中文名、obsolete candidate 生命周期、完整 Provider 图 digest/三路径二次 CAS、未来完成独立错误；fresh 六门禁为 43 文件、505 测试及 smoke 1/1 |
 | 2026-08-11 | `feat/v1.0` / `fix: version balanced meal fixtures` | 修复阶段四验收 fixture 的身份冲突：均衡营养快照、食谱、菜单和目录使用独立闭合版本图；本地/E2E/smoke 使用该图，cloud 构造和调用不加载 fixture；阶段四完成状态经 43 文件、492 测试及六门禁复验后继续成立 |
