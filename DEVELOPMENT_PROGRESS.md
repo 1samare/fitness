@@ -24,14 +24,14 @@
 | 2. 身份、持久化与版本基础 | 第 3–4 周 | 已完成 | 可信微信身份、原子建档、不可变版本、CloudBase 持久化和双账号隔离验收已完成 |
 | 3. 营养计算与审核数据 | 第 5–6 周 | 已完成 | 确定性营养目标、约束冲突、审核数据边界、离线 Provider 和版本化每日营养目标已实现并验证 |
 | 4. 一周餐单与联动闭环 | 第 7–8 周 | 已完成 | 手动库存、确定性七天餐单、锁定/手改保护、训练变更与完成度重算闭环已实现并验证 |
-| 5. 食材图片与 Provider | 第 9 周 | 进行中 | 临时 worktree 已形成阶段退出候选并通过本地门禁；待控制任务合入 `feat/v1.0` 后 fresh 复验并决定是否完成 |
+| 5. 食材图片与 Provider | 第 9 周 | 已完成 | 私有上传、受控候选、明确确认、Provider 韧性、原图清理和本地端到端证据已进入 `feat/v1.0` 并通过 fresh 主线门禁；真实云/Provider/设备仍是外部门禁 |
 | 6. 单 Agent 有限对话 | 第 10 周 | 未开始 | 尚未引入 LangGraph.js 单 Agent 和白名单领域命令编排 |
 | 7. 云端集成与内测发布 | 第 11–12 周 | 未开始 | 阶段二基础设施已验收，但完整 MVP 的云端发布、隐私、供应商和恢复门禁尚未开始 |
 
 ## 当前下一阶段
 
-- 当前阶段：阶段 5“食材图片与 Provider”（进行中，阶段退出候选）。阶段 6 尚未开始。
-- 开发入口：由控制任务审查临时 worktree 的精确 diff，合入 `feat/v1.0` 后按阶段五要求 fresh 重跑 lint、类型检查、全量测试、构建、双函数 dry-run、smoke、diff/sensitive 检查；只有主线证据通过后才能勾选验收项、标记完成并把阶段 6 设为下一阶段。阶段五真实云端部署事项继续保留为阶段七/发布门禁，不因本地候选证据而视为已验证。
+- 当前下一阶段：阶段 6“单 Agent 有限对话”（未开始）。
+- 开发入口：先完成阶段六设计、白名单领域命令和模型输出/降级边界确认；未经用户确认不得引入 LangGraph.js 或模型依赖。阶段五真实云端部署事项继续保留为阶段七/发布门禁，不因本地阶段退出而视为已验证。
 
 ## 生产上线前待办
 
@@ -164,33 +164,32 @@
 
 ## 阶段 5：食材图片与 Provider
 
-**状态：进行中（阶段退出候选）**
+**状态：已完成**
 
 ### 验收清单
 
-- [ ] 实现用户私有路径图片上传和最小权限访问。（阶段退出候选证据已通过，待合入 `feat/v1.0`）
-- [ ] 定义 `VisionProvider`，实现候选名称、置信度和内部标准食材 ID 映射。（阶段退出候选证据已通过，待合入 `feat/v1.0`）
-- [ ] 实现用户确认门禁；确认前不得写入正式库存或触发营养计算。（阶段退出候选证据已通过，待合入 `feat/v1.0`）
-- [ ] 实现识别失败手动录入、超时、一次有限重试、熔断和脱敏观测。（阶段退出候选证据已通过，待合入 `feat/v1.0`）
-- [ ] 实现原图 24 小时内清理、失败重试和孤儿对象处理。（阶段退出候选证据已通过，待合入 `feat/v1.0`）
-- [ ] 覆盖候选确认、用户隔离、供应商失败、日志脱敏和清理幂等测试。（阶段退出候选证据已通过，待合入 `feat/v1.0`）
+- [x] 实现用户私有路径图片上传和最小权限访问。
+- [x] 定义 `VisionProvider`，实现候选名称、置信度和内部标准食材 ID 映射。
+- [x] 实现用户确认门禁；确认前不得写入正式库存或触发营养计算。
+- [x] 实现识别失败手动录入、超时、一次有限重试、熔断和脱敏观测。
+- [x] 实现原图 24 小时内清理、失败重试和孤儿对象处理。
+- [x] 覆盖候选确认、用户隔离、供应商失败、日志脱敏和清理幂等测试。
 
 ### 代码与验证证据
 
-- 设计与计划：`docs/superpowers/specs/2026-08-19-phase-5-ingredient-photo-vision-design.md`、`docs/superpowers/plans/2026-08-19-phase-5-ingredient-photo-vision.md`；任务 1–7 本地完成点为 `2a8f070`，Task 8 端到端证据、smoke 与文档当前只构成临时 worktree 的阶段退出候选，不计为 `feat/v1.0` 动态完成事实。
+- 设计与计划：`docs/superpowers/specs/2026-08-19-phase-5-ingredient-photo-vision-design.md`、`docs/superpowers/plans/2026-08-19-phase-5-ingredient-photo-vision.md`；任务 1–7 本地完成点为 `2a8f070`，Task 8、最终审查修复、端到端证据、smoke 与部署文档已在 `3aa9b07` 快进进入 `feat/v1.0`。
 - schema v6 以不可变 `ingredientPhotoVersions` 和派生 `nextPhotoCleanupAt` 扩展规划聚合；v5→v6 只补空图片历史/null 清理指针，不制造历史照片、fileID、候选或清理事实。CloudBase 到期扫描只信任持久化 `state.userId`，并按 `state.nextPhotoCleanupAt ASC, state.userId ASC` 有界查询。
 - `VisionProvider` 只接受/返回受限候选合同；8 秒单次超时、一次传输/超时重试、三次完整操作失败熔断、60 秒半开探测和字段白名单观测均在 Provider 层。生产 cloud-only 制品不包含 fixture、本地身份开关或本地入口。
 - 创建/登记/识别/确认均经 authenticated `planning-api`、严格 schema、可信服务端身份、版本化 SHA-256 幂等和预期版本门禁。确认前库存、能量/营养目标、餐单、重算和 outbox 不变；候选与正整数克数确认在一个事务中追加图片/库存版本，不自动生成餐单。
 - 清理函数支持每 15 分钟处理确认后的即时私有指针和创建后 `+23h` 的未确认/未登记孤儿；删除失败 15 分钟后重试，`NOT_FOUND` 收敛为已删除，同一任务重复执行不重复增长有效删除。默认 `cloudbaserc.json` 不含 trigger，独立 `cloudbaserc.photo-cleanup-timer.json` 只在索引、可信身份、规则/IAM 和双账号门禁后用于激活。
 - Task 8 E2E 通过真实 authenticated handler + 一个内存仓库、私有存储 fake、版本化营养 fixture 和定时清理 handler 覆盖：创建/登记响应丢失、识别/确认幂等、确认前零副作用、125 g 原子确认、历史版本不变、跨用户登记/确认、确认时间即时 `NOT_FOUND` 清理、孤儿 `+23h` 和重复清理。Windows 上精确 `pnpm.cmd exec vitest ...` 因无法解析 `vitest` 退出 1，按任务裁决使用 `pnpm.cmd test -- tests/e2e/ingredient-photo-workflow.test.ts`，1/1 文件、2/2 项通过。
-- 2026-08-19 review 修复前的临时候选 fresh 本地门禁按顺序通过：`pnpm.cmd lint` 退出 0；`pnpm.cmd typecheck` 完成 11/12 个带脚本工作区项目及小程序严格检查；`pnpm.cmd test` 通过 62/62 个测试文件、693/693 项测试；`pnpm.cmd build` 生成 planning-api 本地 3.22 MB、cloud-only 3.19 MB、photo-cleanup 2.99 MB 双函数制品和云模式小程序；`pnpm.cmd dry-run:api`、`pnpm.cmd dry-run:photo-cleanup` 均成功加载；`pnpm.cmd smoke:api` 通过真实本地函数进程 1/1；`git diff --check` 退出 0。该证据不替代合入 `feat/v1.0` 后的复验。
-- 2026-08-19 artifact review 纠错后的阶段退出候选再次按顺序 fresh 通过：`pnpm.cmd lint` 退出 0；`pnpm.cmd typecheck` 完成 11/12 个带脚本工作区项目及小程序严格检查；`pnpm.cmd test` 通过 62/62 个测试文件、694/694 项测试；`pnpm.cmd build` 生成 planning-api 本地 3.22 MB、cloud-only 3.19 MB、photo-cleanup 2.99 MB 双函数制品和云模式小程序；`pnpm.cmd dry-run:api`、`pnpm.cmd dry-run:photo-cleanup` 均成功加载；`pnpm.cmd smoke:api` 通过真实本地函数进程 1/1。官方 flat 存储规则、trigger-free 默认配置和独立 timer activation config 的 focused artifact 测试为 4/4。该候选证据仍不替代合入 `feat/v1.0` 后的复验。
-- 敏感扫描未发现私钥头、`SECRET_ACCESS_KEY`、真实 fileID/密钥/用户照片或本地临时路径；命中项均为测试/计划中的合成 `cloud://` 哨兵、CloudBase 格式示例或小程序 `tempFilePath` 字段名。`.pnpm-store/` 未出现在工作区状态且未暂存。
+- 2026-08-19 合入 `feat/v1.0` 后 fresh 主线门禁按顺序通过：`pnpm.cmd lint` 退出 0；锁文件离线重建主工作区链接复用 607/607 个包且零下载；`pnpm.cmd typecheck` 完成 11/12 个带脚本工作区项目及小程序严格检查；`pnpm.cmd test` 通过 62/62 个测试文件、694/694 项测试；`pnpm.cmd build` 生成 planning-api 本地 3.22 MB、cloud-only 3.19 MB、photo-cleanup 2.99 MB 双函数制品和云模式小程序；`pnpm.cmd dry-run:api`、`pnpm.cmd dry-run:photo-cleanup` 均成功加载；`pnpm.cmd smoke:api` 通过真实本地函数进程 1/1；`git diff --check 1c6a55e..3aa9b07` 和敏感扫描通过。
+- 敏感扫描未发现私钥头、`SECRET_ACCESS_KEY`、真实 fileID/密钥/用户照片或本地临时路径；命中项均为测试/计划中的合成 `cloud://` 哨兵、CloudBase 格式示例或小程序 `tempFilePath` 字段名。主工作区只保留任务开始前已有且未暂存的 `.pnpm-store/`。
 - 部署、索引、规则、外部验收和回滚清单见 `docs/cloudbase/phase-5-ingredient-photo-deployment.md`。
 
 ### 剩余工作
 
-- 控制任务须审查并把阶段退出候选的精确 diff 合入 `feat/v1.0`，在主线 fresh 复验全部阶段五门禁后，才可单独勾选验收项、标记阶段完成并更新记录；阶段六在此之前不得开始。阶段五下列真实部署检查仍须在受控环境关闭。
+- 无阶段五本地代码剩余项。阶段六有限对话另行设计实施；阶段五下列真实部署检查仍须在受控环境关闭。
 
 ### 外部阻塞
 
@@ -262,6 +261,7 @@
 
 | 日期 | 分支/基线 | 更新 |
 |---|---|---|
+| 2026-08-19 | `feat/v1.0` / `3aa9b07` 阶段五最终审查与合入 | 完成阶段五本地代码验收：私有食材图片上传、受控 Vision Provider、明确候选/克数确认、schema v6、原图清理、原生页面与 authenticated handler E2E；fresh 主线门禁为 62 文件、694 测试、双函数 dry-run 和 smoke 1/1。真实混元、CloudBase 规则/IAM/定时器/复合索引、early-v6 可信身份检查、IDE/设备仍列外部未验，下一阶段为阶段六 |
 | 2026-08-11 | `feat/v1.0` / `cefc812` 最终审查 Round 3 | 关闭同 active training/date 旧 failed completion job 重现与误重试：合法库存版本链、初始零 Provider 调用、事务竞态回滚和公共 `candidate_not_pending`；fresh 六门禁为 43 文件、527 测试及 smoke 1/1，独立复审 CLEAN |
 | 2026-08-11 | `feat/v1.0` / `55aa739` 后最终审查 Round 2 | 关闭 2 Important + 2 Minor：completion candidate authoritative eligibility、持久化脱敏无解快照与 v4→v5 兼容、库存 v3 指纹及旧 v2 fail-closed 重放、fresh 文档计数；六门禁为 43 文件、523 测试及 smoke 1/1 |
 | 2026-08-11 | `feat/v1.0` / `898b649` 后最终审查修复 | 关闭最终审查 4 Important + 1 Minor：离线库存幂等重放、公开结构化无解冲突与可信中文名、obsolete candidate 生命周期、完整 Provider 图 digest/三路径二次 CAS、未来完成独立错误；fresh 六门禁为 43 文件、505 测试及 smoke 1/1 |
