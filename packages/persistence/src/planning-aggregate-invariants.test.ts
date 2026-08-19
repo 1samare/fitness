@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { createVersionedPlanningService } from '@fitness/application';
 import type { PlanningAggregateState } from '@fitness/domain';
+import type { IngredientPhotoVersion } from '@fitness/domain';
 import { InMemoryPlanningRepository } from './in-memory-planning-repository';
 import {
   CorruptPlanningStateError,
@@ -429,7 +430,45 @@ function expectCorrupt(state: PlanningAggregateState): void {
   });
 }
 
+function validPhotoVersion(userId: string): IngredientPhotoVersion {
+  return {
+    kind: 'ingredient_photo_version',
+    id: 'ingredient-photo-version-1',
+    photoId: 'ingredient-photo-1',
+    userId,
+    revision: 1,
+    createdAt: '2026-08-19T00:00:00.000Z',
+    uploadCreatedAt: '2026-08-19T00:00:00.000Z',
+    deleteDueAt: '2026-08-19T23:00:00.000Z',
+    expectedCloudPath: 'ingredient-photos/ingredient-photo-1/upload-1.jpg',
+    expectedPrivateFileId: 'cloud://env.bucket/ingredient-photos/ingredient-photo-1/upload-1.jpg',
+    mediaType: 'image/jpeg',
+    workflowStatus: 'awaiting_upload',
+    storageStatus: 'retained',
+    candidates: [],
+    confirmedCandidateId: null,
+    confirmedGrams: null,
+    inventoryVersionId: null,
+    recognitionFailureCode: null,
+    cleanupAttemptCount: 0,
+    nextCleanupAt: '2026-08-19T23:00:00.000Z',
+    lastCleanupFailureCode: null,
+    deletedAt: null
+  };
+}
+
 describe('planning aggregate invariants', () => {
+  test('rejects a next photo cleanup pointer that is not derived from latest revisions', async () => {
+    const state = await createValidState();
+    const corrupt = {
+      ...state,
+      ingredientPhotoVersions: [validPhotoVersion('user-a')],
+      nextPhotoCleanupAt: '2026-08-20T00:00:00.000Z'
+    };
+    expect(() => assertPlanningAggregateInvariants(corrupt, 'user-a'))
+      .toThrow(CorruptPlanningStateError);
+  });
+
   test('accepts an aggregate created by the real application service', async () => {
     const state = await createValidState();
     expect(() => {

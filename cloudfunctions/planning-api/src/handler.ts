@@ -35,6 +35,7 @@ import type {
   DailyNutritionTargetVersion,
   GoalVersion,
   InventoryVersion,
+  IngredientPhotoVersion,
   MealPlanTargetDiff,
   MealPlanVersion,
   MealPlanDecision,
@@ -320,6 +321,25 @@ function publicMealPlanDecision(decision: MealPlanDecision) {
   };
 }
 
+function publicIngredientPhoto(photo: IngredientPhotoVersion) {
+  return {
+    photoId: photo.photoId,
+    revision: photo.revision,
+    workflowStatus: photo.workflowStatus,
+    storageStatus: photo.storageStatus,
+    deleteDueAt: photo.deleteDueAt,
+    candidates: photo.candidates.map((candidate) => ({
+      id: candidate.id,
+      foodId: candidate.foodId,
+      canonicalNameZh: candidate.canonicalNameZh,
+      confidence: candidate.confidence,
+      foodState: candidate.foodState
+    })),
+    confirmedCandidateId: photo.confirmedCandidateId,
+    inventoryVersionId: photo.inventoryVersionId
+  };
+}
+
 function currentContextResponse(context: CurrentPlanningContext) {
   return {
     kind: 'current_context' as const,
@@ -340,6 +360,9 @@ function currentContextResponse(context: CurrentPlanningContext) {
     retryableRecalculationJob: context.retryableRecalculationJob === null
       ? null
       : publicRecalculationJob(context.retryableRecalculationJob),
+    ingredientPhoto: context.ingredientPhoto === null
+      ? null
+      : publicIngredientPhoto(context.ingredientPhoto),
     latestVersions: context.latestVersions
   };
 }

@@ -137,7 +137,8 @@ const emptyVersions: LatestVersions = {
   mealPlan: 0,
   mealPlanDecision: 0,
   trainingCompletion: 0,
-  recalculationJob: 0
+  recalculationJob: 0,
+  ingredientPhoto: 0
 };
 
 let inventoryRowSequence = 0;

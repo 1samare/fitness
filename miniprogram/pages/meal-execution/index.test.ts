@@ -102,6 +102,7 @@ function emptyContextResponse() {
       selectableRecipes: [],
       selectableRecipesStatus: 'no_options',
       retryableRecalculationJob: null,
+      ingredientPhoto: null,
       latestVersions: {
         bodyProfile: 0,
         goal: 0,
@@ -110,7 +111,8 @@ function emptyContextResponse() {
         mealPlan: 0,
         mealPlanDecision: 0,
         trainingCompletion: 1,
-        recalculationJob: 0
+        recalculationJob: 0,
+        ingredientPhoto: 0
       }
     }
   } as const;

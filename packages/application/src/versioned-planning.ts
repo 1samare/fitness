@@ -1,22 +1,23 @@
 import { addBusinessDays } from '@fitness/contracts';
 import { calculateNutritionTargets, findReviewedTrainingSession } from '@fitness/calculation';
-import type {
-  BodyProfilePayload,
-  BodyProfileVersion,
-  CompletePlanningSetupCommand,
-  CurrentPlanningContext,
-  DailyEnergyTargetVersion,
-  DailyNutritionTargetVersion,
-  GoalPayload,
-  GoalVersion,
-  IdempotencyRecord,
-  MealPlanVersion,
-  PlanningAggregateState,
-  RecalculationJob,
-  TrainingPlanChangedEvent,
-  TrainingPlanPayload,
-  TrainingPlanVersion,
-  WriteCommandEnvelope
+import {
+  latestIngredientPhotoVersions,
+  type BodyProfilePayload,
+  type BodyProfileVersion,
+  type CompletePlanningSetupCommand,
+  type CurrentPlanningContext,
+  type DailyEnergyTargetVersion,
+  type DailyNutritionTargetVersion,
+  type GoalPayload,
+  type GoalVersion,
+  type IdempotencyRecord,
+  type MealPlanVersion,
+  type PlanningAggregateState,
+  type RecalculationJob,
+  type TrainingPlanChangedEvent,
+  type TrainingPlanPayload,
+  type TrainingPlanVersion,
+  type WriteCommandEnvelope
 } from '@fitness/domain';
 import { businessDateAt } from './business-time';
 import { requestFingerprint } from './idempotency-fingerprint';
@@ -968,6 +969,7 @@ export function createVersionedPlanningService(
           job.status === 'failed_retryable'
           && recalculationJobCanRetryForCurrentContext(state, job)
         )) ?? null;
+      const ingredientPhoto = latestIngredientPhotoVersions(state.ingredientPhotoVersions).at(-1) ?? null;
       return {
         bodyProfile,
         goal,
@@ -986,6 +988,7 @@ export function createVersionedPlanningService(
         selectableRecipes: [],
         selectableRecipesStatus: 'no_options',
         retryableRecalculationJob,
+        ingredientPhoto,
         latestVersions: {
           bodyProfile: state.bodyProfiles.length,
           goal: state.goals.length,
@@ -994,7 +997,8 @@ export function createVersionedPlanningService(
           mealPlan: state.mealPlans.length,
           mealPlanDecision: state.mealPlanDecisions.length,
           trainingCompletion: state.trainingCompletionEvents.length,
-          recalculationJob: state.recalculationJobs.length
+          recalculationJob: state.recalculationJobs.length,
+          ingredientPhoto: state.ingredientPhotoVersions.length
         }
       };
     }

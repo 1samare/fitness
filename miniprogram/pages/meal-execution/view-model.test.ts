@@ -173,6 +173,7 @@ function contextFixture(): CurrentContext {
     selectableRecipes: [...recipes],
     selectableRecipesStatus: 'available',
     retryableRecalculationJob: null,
+    ingredientPhoto: null,
     latestVersions: {
       bodyProfile: 1,
       goal: 1,
@@ -181,7 +182,8 @@ function contextFixture(): CurrentContext {
       mealPlan: 4,
       mealPlanDecision: 0,
       trainingCompletion: 0,
-      recalculationJob: 0
+      recalculationJob: 0,
+      ingredientPhoto: 0
     }
   };
 }

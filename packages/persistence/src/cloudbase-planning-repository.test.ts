@@ -310,6 +310,22 @@ function corruptPhase4State(
 }
 
 describe('CloudBasePlanningRepository', () => {
+  test('migrates schema v5 without inventing photo facts', async () => {
+    const database = new FakeDatabase();
+    const repository = new CloudBasePlanningRepository(database);
+    const phase4State = await createPhase4State(new InMemoryPlanningRepository());
+    const key = `planning_user_states/${repository.documentIdForUser('user-a')}`;
+    const legacyState = structuredClone(phase4State) as unknown as Record<string, unknown>;
+    delete legacyState.ingredientPhotoVersions;
+    delete legacyState.nextPhotoCleanupAt;
+    database.documents.set(key, { schemaVersion: 5, state: legacyState });
+
+    const migrated = await repository.read('user-a');
+
+    expect(migrated.ingredientPhotoVersions).toEqual([]);
+    expect(migrated.nextPhotoCleanupAt).toBeNull();
+  });
+
   test('migrates v4 nutrition failures to explicit legacy-unavailable details without mutating on read', async () => {
     const database = new FakeDatabase();
     const repository = new CloudBasePlanningRepository(database);
@@ -355,7 +371,7 @@ describe('CloudBasePlanningRepository', () => {
     });
     expect(database.documents.get(documentKey)).toEqual(legacyDocument);
     await repository.transact('user-a', (state) => ({ nextState: state, result: undefined }));
-    expect(database.documents.get(documentKey)).toMatchObject({ schemaVersion: 5 });
+    expect(database.documents.get(documentKey)).toMatchObject({ schemaVersion: 6 });
   });
 
   test.each([
@@ -437,7 +453,7 @@ describe('CloudBasePlanningRepository', () => {
     expect(database.documents).toHaveLength(1);
     expect(database.requestedKeys.join('|')).not.toContain('wx-openid-sensitive');
     expect([...database.documents.values()][0]).toEqual(expect.objectContaining({
-      schemaVersion: 5
+      schemaVersion: 6
     }));
   });
 
@@ -476,7 +492,7 @@ describe('CloudBasePlanningRepository', () => {
     );
     await repository.transact('wx-openid-a', (state) => ({ nextState: state, result: undefined }));
     const migrated = database.documents.get(documentKey);
-    expect(isRecord(migrated) ? migrated.schemaVersion : undefined).toBe(5);
+    expect(isRecord(migrated) ? migrated.schemaVersion : undefined).toBe(6);
     expect(isRecord(migrated) && isRecord(migrated.state)
       ? migrated.state.dailyNutritionTargets
       : undefined).toEqual([]);
@@ -608,7 +624,7 @@ describe('CloudBasePlanningRepository', () => {
     );
   });
 
-  test.each([1, 6])(
+  test.each([1, 7])(
     'rejects schema version %s without attempting an implicit migration',
     async (schemaVersion) => {
     const database = new FakeDatabase();

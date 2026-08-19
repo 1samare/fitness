@@ -1,12 +1,13 @@
 import { addBusinessDays, planningAggregateStateSchema } from '@fitness/contracts';
-import type {
-  IdempotencyRecord,
-  InventoryVersion,
-  MealPlanVersion,
-  PlanningAggregateState,
-  TrainingPlanChangedEvent
+import {
+  deriveNextPhotoCleanupAt,
+  type IngredientPhotoVersion,
+  type IdempotencyRecord,
+  type InventoryVersion,
+  type MealPlanVersion,
+  type PlanningAggregateState,
+  type TrainingPlanChangedEvent
 } from '@fitness/domain';
-
 export class CorruptPlanningStateError extends Error {
   public readonly code = 'corrupt_planning_state' as const;
 
@@ -126,6 +127,7 @@ interface EntityIds {
   readonly trainingCompletions: ReadonlySet<string>;
   readonly recalculationJobs: ReadonlySet<string>;
   readonly events: ReadonlySet<string>;
+  readonly ingredientPhotos: ReadonlySet<string>;
 }
 
 interface IdempotencyReferences {
@@ -182,6 +184,15 @@ function assertIdempotencyResult(
     if (!entityIds.recalculationJobs.has(record.resultVersionId)) corrupt();
     return;
   }
+  if (
+    record.operation === 'createIngredientPhotoUpload'
+    || record.operation === 'registerIngredientPhotoUpload'
+    || record.operation === 'recognizeIngredientPhoto'
+    || record.operation === 'confirmIngredientCandidate'
+  ) {
+    if (!entityIds.ingredientPhotos.has(record.resultVersionId)) corrupt();
+    return;
+  }
 
   const result = record.resultVersionIds;
   assertUnique(result.dailyEnergyTargetVersionIds);
@@ -216,6 +227,81 @@ function assertIdempotencyResult(
       || target.trainingPlanVersionId !== result.trainingPlanVersionId
     ) {
       corrupt();
+    }
+  }
+}
+
+function assertIngredientPhotoVersions(
+  versions: readonly IngredientPhotoVersion[],
+  inventories: ReadonlyMap<string, InventoryVersion>
+): void {
+  const byPhotoId = new Map<string, IngredientPhotoVersion[]>();
+  for (const version of versions) {
+    const values = byPhotoId.get(version.photoId) ?? [];
+    values.push(version);
+    byPhotoId.set(version.photoId, values);
+  }
+  const workflowTransitions: Readonly<Record<IngredientPhotoVersion['workflowStatus'], readonly IngredientPhotoVersion['workflowStatus'][]>> = {
+    awaiting_upload: ['awaiting_upload', 'uploaded'],
+    uploaded: ['uploaded', 'recognized', 'recognition_failed'],
+    recognized: ['recognized', 'confirmed'],
+    recognition_failed: ['recognition_failed'],
+    confirmed: ['confirmed']
+  };
+  const storageTransitions: Readonly<Record<IngredientPhotoVersion['storageStatus'], readonly IngredientPhotoVersion['storageStatus'][]>> = {
+    retained: ['retained', 'cleanup_pending', 'cleanup_failed', 'deleted'],
+    cleanup_pending: ['cleanup_pending', 'cleanup_failed', 'deleted'],
+    cleanup_failed: ['cleanup_failed', 'cleanup_pending', 'deleted'],
+    deleted: ['deleted']
+  };
+  for (const versionsForPhoto of byPhotoId.values()) {
+    const ordered = [...versionsForPhoto].sort((left, right) => left.revision - right.revision);
+    assertContiguous(ordered.map((version) => version.revision));
+    const first = ordered[0];
+    if (first === undefined) corrupt();
+    for (let index = 0; index < ordered.length; index += 1) {
+      const version = ordered[index];
+      if (version === undefined) corrupt();
+      if (
+        version.userId !== first.userId
+        || version.uploadCreatedAt !== first.uploadCreatedAt
+        || version.deleteDueAt !== first.deleteDueAt
+        || version.expectedCloudPath !== first.expectedCloudPath
+        || version.expectedPrivateFileId !== first.expectedPrivateFileId
+        || version.mediaType !== first.mediaType
+      ) corrupt();
+      assertUnique(version.candidates.map((candidate) => candidate.id));
+      const confirmed = version.confirmedCandidateId === null
+        ? undefined
+        : version.candidates.find((candidate) => candidate.id === version.confirmedCandidateId);
+      if (
+        (version.confirmedCandidateId === null) !== (version.confirmedGrams === null)
+        || (version.confirmedCandidateId === null) !== (version.inventoryVersionId === null)
+        || (version.workflowStatus === 'confirmed') !== (confirmed !== undefined)
+        || (version.workflowStatus === 'recognition_failed')
+          !== (version.recognitionFailureCode === 'no_supported_candidate')
+      ) corrupt();
+      if (confirmed !== undefined) {
+        const inventory = version.inventoryVersionId === null
+          ? undefined
+          : inventories.get(version.inventoryVersionId);
+        if (!inventory || !inventory.items.some((item) => (
+          item.foodId === confirmed.foodId
+          && item.nutritionSnapshotId === confirmed.nutritionSnapshotId
+        ))) corrupt();
+      }
+      if (version.storageStatus === 'deleted') {
+        if (version.deletedAt === null || version.nextCleanupAt !== null) corrupt();
+      } else if (version.deletedAt !== null) corrupt();
+      if ((version.storageStatus === 'cleanup_failed')
+        !== (version.lastCleanupFailureCode === 'storage_unavailable')) corrupt();
+      if (index > 0) {
+        const previous = ordered[index - 1];
+        if (previous === undefined
+          || !workflowTransitions[previous.workflowStatus].includes(version.workflowStatus)
+          || !storageTransitions[previous.storageStatus].includes(version.storageStatus)
+        ) corrupt();
+      }
     }
   }
 }
@@ -470,6 +556,7 @@ export function assertPlanningAggregateInvariants(
     ...state.mealPlanDecisions,
     ...state.trainingCompletionEvents,
     ...state.recalculationJobs,
+    ...state.ingredientPhotoVersions,
     ...state.outboxEvents
   ];
   if (ownedRecords.some((record) => record.userId !== userId)) corrupt();
@@ -486,6 +573,7 @@ export function assertPlanningAggregateInvariants(
     ...state.mealPlanDecisions.map((value) => value.id),
     ...state.trainingCompletionEvents.map((value) => value.id),
     ...state.recalculationJobs.map((value) => value.id),
+    ...state.ingredientPhotoVersions.map((value) => value.id),
     ...state.outboxEvents.map((event) => event.eventId)
   ];
   assertUnique(entityIds);
@@ -509,6 +597,10 @@ export function assertPlanningAggregateInvariants(
     state.dailyNutritionTargets.map((value) => [value.id, value])
   );
   const inventories = new Map(state.inventories.map((value) => [value.id, value]));
+  assertIngredientPhotoVersions(state.ingredientPhotoVersions, inventories);
+  if (deriveNextPhotoCleanupAt(state.ingredientPhotoVersions) !== state.nextPhotoCleanupAt) {
+    corrupt();
+  }
   const mealPlans = new Map(state.mealPlans.map((value) => [value.id, value]));
   const events = new Map(state.outboxEvents.map((value) => [value.eventId, value]));
   const completions = new Map(
@@ -970,7 +1062,8 @@ export function assertPlanningAggregateInvariants(
     mealPlanDecisions: new Set(state.mealPlanDecisions.map((value) => value.id)),
     trainingCompletions: new Set(completions.keys()),
     recalculationJobs: new Set(state.recalculationJobs.map((value) => value.id)),
-    events: new Set(events.keys())
+    events: new Set(events.keys()),
+    ingredientPhotos: new Set(state.ingredientPhotoVersions.map((value) => value.id))
   };
   for (const record of state.idempotencyRecords) {
     assertIdempotencyResult(record, idSets, {

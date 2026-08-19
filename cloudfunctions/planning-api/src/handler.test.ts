@@ -511,6 +511,7 @@ describe('handlePlanningApi', () => {
         selectableRecipes: [],
         selectableRecipesStatus: 'no_options',
         retryableRecalculationJob: null,
+        ingredientPhoto: null,
         latestVersions: {
           bodyProfile: 0,
           goal: 0,
@@ -519,7 +520,8 @@ describe('handlePlanningApi', () => {
           mealPlan: 0,
           mealPlanDecision: 0,
           trainingCompletion: 0,
-          recalculationJob: 0
+          recalculationJob: 0,
+          ingredientPhoto: 0
         }
       }
     });

@@ -23,13 +23,15 @@ function createEmptyState(): PlanningAggregateState {
     mealPlanDecisions: [],
     trainingCompletionEvents: [],
     recalculationJobs: [],
+    ingredientPhotoVersions: [],
     outboxEvents: [],
     idempotencyRecords: [],
     activeBodyProfileVersionId: null,
     activeGoalVersionId: null,
     activeTrainingPlanVersionId: null,
     activeInventoryVersionId: null,
-    activeMealPlanVersionId: null
+    activeMealPlanVersionId: null,
+    nextPhotoCleanupAt: null
   };
 }
 
@@ -53,7 +55,7 @@ export interface CloudBaseDatabase extends CloudBaseTransaction {
 }
 
 interface StoredPlanningDocument {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: 6;
   readonly state: PlanningAggregateState;
 }
 
@@ -66,6 +68,11 @@ const phase4Empty = {
   recalculationJobs: [],
   activeInventoryVersionId: null,
   activeMealPlanVersionId: null
+} as const;
+
+const phase5Empty = {
+  ingredientPhotoVersions: [],
+  nextPhotoCleanupAt: null
 } as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -100,18 +107,21 @@ function decodeDocument(value: unknown, userId: string): PlanningAggregateState 
     || (value.schemaVersion !== 2
       && value.schemaVersion !== 3
       && value.schemaVersion !== 4
-      && value.schemaVersion !== 5)
+      && value.schemaVersion !== 5
+      && value.schemaVersion !== 6)
     || !isRecord(value.state)
   ) {
     throw new CorruptPlanningStateError();
   }
   const candidateState = value.schemaVersion === 2
-    ? { ...value.state, dailyNutritionTargets: [], ...phase4Empty }
+    ? { ...value.state, dailyNutritionTargets: [], ...phase4Empty, ...phase5Empty }
     : value.schemaVersion === 3
-      ? { ...value.state, ...phase4Empty }
+      ? { ...value.state, ...phase4Empty, ...phase5Empty }
       : value.schemaVersion === 4
-        ? migrateV4RecalculationConflictDetails(value.state)
-        : value.state;
+        ? { ...migrateV4RecalculationConflictDetails(value.state), ...phase5Empty }
+        : value.schemaVersion === 5
+          ? { ...value.state, ...phase5Empty }
+          : value.state;
   return parseAndAssertPlanningState(candidateState, userId);
 }
 
@@ -119,7 +129,7 @@ function encodeDocument(
   state: PlanningAggregateState,
   userId: string
 ): StoredPlanningDocument {
-  return { schemaVersion: 5, state: parseAndAssertPlanningState(state, userId) };
+  return { schemaVersion: 6, state: parseAndAssertPlanningState(state, userId) };
 }
 
 export class CloudBasePlanningRepository implements PlanningRepository {

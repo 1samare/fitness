@@ -343,6 +343,7 @@ describe('versioned planning service', () => {
       selectableRecipes: [],
       selectableRecipesStatus: 'no_options',
       retryableRecalculationJob: null,
+      ingredientPhoto: null,
       latestVersions: {
         bodyProfile: 0,
         goal: 0,
@@ -351,7 +352,8 @@ describe('versioned planning service', () => {
         mealPlan: 0,
         mealPlanDecision: 0,
         trainingCompletion: 0,
-        recalculationJob: 0
+        recalculationJob: 0,
+        ingredientPhoto: 0
       }
     });
   });
@@ -533,6 +535,7 @@ describe('versioned planning service', () => {
       selectableRecipes: [],
       selectableRecipesStatus: 'no_options',
       retryableRecalculationJob: null,
+      ingredientPhoto: null,
       latestVersions: {
         bodyProfile: 2,
         goal: 1,
@@ -541,7 +544,8 @@ describe('versioned planning service', () => {
         mealPlan: 0,
         mealPlanDecision: 0,
         trainingCompletion: 0,
-        recalculationJob: 0
+        recalculationJob: 0,
+        ingredientPhoto: 0
       }
     });
   });
@@ -574,6 +578,7 @@ describe('versioned planning service', () => {
       selectableRecipes: [],
       selectableRecipesStatus: 'no_options',
       retryableRecalculationJob: null,
+      ingredientPhoto: null,
       latestVersions: {
         bodyProfile: 1,
         goal: 2,
@@ -582,7 +587,8 @@ describe('versioned planning service', () => {
         mealPlan: 0,
         mealPlanDecision: 0,
         trainingCompletion: 0,
-        recalculationJob: 0
+        recalculationJob: 0,
+        ingredientPhoto: 0
       }
     });
   });

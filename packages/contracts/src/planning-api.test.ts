@@ -315,6 +315,7 @@ describe('planning API contracts', () => {
         failureConflictDetailsStatus: 'complete',
         failureConflicts: []
       }],
+      ingredientPhotoVersions: [],
       outboxEvents: [],
       idempotencyRecords: [
         ['saveInventory', 'inventory-1'],
@@ -334,7 +335,8 @@ describe('planning API contracts', () => {
       activeGoalVersionId: null,
       activeTrainingPlanVersionId: null,
       activeInventoryVersionId: 'inventory-1',
-      activeMealPlanVersionId: null
+      activeMealPlanVersionId: null,
+      nextPhotoCleanupAt: null
     };
 
     expect(planningAggregateStateSchema.parse(v4State)).toEqual(v4State);
@@ -635,6 +637,7 @@ describe('planning API contracts', () => {
             failureConflicts: [],
             [field]: invalidValue
           },
+          ingredientPhoto: null,
           latestVersions: {
             bodyProfile: 0,
             goal: 0,
@@ -643,7 +646,8 @@ describe('planning API contracts', () => {
             mealPlan: 0,
             mealPlanDecision: 0,
             trainingCompletion: 0,
-            recalculationJob: 1
+            recalculationJob: 1,
+            ingredientPhoto: 0
           }
         }
       } as const;

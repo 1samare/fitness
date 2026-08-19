@@ -5,6 +5,7 @@ import type {
   SexCode
 } from './daily-energy';
 import type { NutritionTargetResult } from './nutrition-target';
+import type { IngredientPhotoVersion } from './ingredient-photo';
 import type {
   InventoryVersion,
   MealPlanDecision,
@@ -106,6 +107,7 @@ export interface LatestPlanningVersions {
   readonly mealPlanDecision: number;
   readonly trainingCompletion: number;
   readonly recalculationJob: number;
+  readonly ingredientPhoto: number;
 }
 
 export interface CompletePlanningSetupCommand {
@@ -143,7 +145,11 @@ export type PlanningWriteOperation =
   | 'updateMealPlanDay'
   | 'recordTrainingCompletion'
   | 'decideMealPlanCandidate'
-  | 'retryPendingRecalculation';
+  | 'retryPendingRecalculation'
+  | 'createIngredientPhotoUpload'
+  | 'registerIngredientPhotoUpload'
+  | 'recognizeIngredientPhoto'
+  | 'confirmIngredientCandidate';
 
 type SingleResultIdempotencyRecord<TOperation extends PlanningWriteOperation> = {
   readonly operation: TOperation;
@@ -163,6 +169,10 @@ export type IdempotencyRecord =
   | SingleResultIdempotencyRecord<'recordTrainingCompletion'>
   | SingleResultIdempotencyRecord<'decideMealPlanCandidate'>
   | SingleResultIdempotencyRecord<'retryPendingRecalculation'>
+  | SingleResultIdempotencyRecord<'createIngredientPhotoUpload'>
+  | SingleResultIdempotencyRecord<'registerIngredientPhotoUpload'>
+  | SingleResultIdempotencyRecord<'recognizeIngredientPhoto'>
+  | SingleResultIdempotencyRecord<'confirmIngredientCandidate'>
   | {
       readonly operation: 'completePlanningSetup';
       readonly key: string;
@@ -188,6 +198,7 @@ export interface PlanningAggregateState {
   readonly mealPlanDecisions: readonly MealPlanDecision[];
   readonly trainingCompletionEvents: readonly TrainingCompletionEvent[];
   readonly recalculationJobs: readonly RecalculationJob[];
+  readonly ingredientPhotoVersions: readonly IngredientPhotoVersion[];
   readonly outboxEvents: readonly TrainingPlanChangedEvent[];
   readonly idempotencyRecords: readonly IdempotencyRecord[];
   readonly activeBodyProfileVersionId: string | null;
@@ -195,6 +206,7 @@ export interface PlanningAggregateState {
   readonly activeTrainingPlanVersionId: string | null;
   readonly activeInventoryVersionId: string | null;
   readonly activeMealPlanVersionId: string | null;
+  readonly nextPhotoCleanupAt: string | null;
 }
 
 export interface CurrentPlanningContext {
@@ -214,6 +226,7 @@ export interface CurrentPlanningContext {
   }[];
   readonly selectableRecipesStatus: 'available' | 'no_options' | 'provider_unavailable';
   readonly retryableRecalculationJob: RecalculationJob | null;
+  readonly ingredientPhoto: IngredientPhotoVersion | null;
   readonly latestVersions: LatestPlanningVersions;
 }
 

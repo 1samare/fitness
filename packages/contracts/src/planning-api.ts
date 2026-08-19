@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { businessDateSchema } from './business-date';
 import { nutrientValuesSchema, nutritionTargetResultSchema } from './nutrition';
+import {
+  ingredientPhotoMediaTypeSchema,
+  storedIngredientPhotoVersionSchema,
+  publicIngredientPhotoSchema
+} from './ingredient-photo';
 
 const policyMetadataSchema = z.object({
   policyVersion: z.literal('calculation-policy-v2'),
@@ -130,7 +135,8 @@ const latestPlanningVersionsSchema = setupPlanningVersionsSchema.extend({
   mealPlan: z.number().int().nonnegative(),
   mealPlanDecision: z.number().int().nonnegative(),
   trainingCompletion: z.number().int().nonnegative(),
-  recalculationJob: z.number().int().nonnegative()
+  recalculationJob: z.number().int().nonnegative(),
+  ingredientPhoto: z.number().int().nonnegative()
 }).strict();
 
 export const planningApiRequestSchema = z.discriminatedUnion('action', [
@@ -189,6 +195,30 @@ export const planningApiRequestSchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('retryPendingRecalculation'),
     payload: writeEnvelopeSchema(recalculationRetryPayloadSchema)
+  }).strict(),
+  z.object({
+    action: z.literal('createIngredientPhotoUpload'),
+    payload: writeEnvelopeSchema(z.object({ mediaType: ingredientPhotoMediaTypeSchema }).strict())
+  }).strict(),
+  z.object({
+    action: z.literal('registerIngredientPhotoUpload'),
+    payload: writeEnvelopeSchema(z.object({
+      photoId: z.string().min(1).max(200),
+      privateFileId: z.string().min(10).max(1_024).regex(/^cloud:\/\//)
+    }).strict())
+  }).strict(),
+  z.object({
+    action: z.literal('recognizeIngredientPhoto'),
+    payload: writeEnvelopeSchema(z.object({ photoId: z.string().min(1).max(200) }).strict())
+  }).strict(),
+  z.object({
+    action: z.literal('confirmIngredientCandidate'),
+    payload: writeEnvelopeSchema(z.object({
+      photoId: z.string().min(1).max(200),
+      candidateId: z.string().min(1).max(200),
+      confirmedGrams: z.number().int().positive().max(1_000_000),
+      expectedInventoryVersion: z.number().int().nonnegative()
+    }).strict())
   }).strict(),
   z.object({ action: z.literal('getCurrentContext') }).strict()
 ]);
@@ -618,6 +648,7 @@ const currentContextSchema = z.object({
   selectableRecipes: z.array(selectableRecipeOptionSchema),
   selectableRecipesStatus: z.enum(['available', 'no_options', 'provider_unavailable']),
   retryableRecalculationJob: currentContextRecalculationJobSchema.nullable(),
+  ingredientPhoto: publicIngredientPhotoSchema.nullable(),
   latestVersions: latestPlanningVersionsSchema
 }).strict();
 
@@ -644,6 +675,7 @@ const storedRecalculationJobSchema = z.object({
   ...recalculationJobFields,
   userId: z.string().min(1),
 }).strict();
+
 
 const trainingCompletionEventSchema = storedTrainingCompletionEventSchema
   .omit({ userId: true })
@@ -750,7 +782,11 @@ const idempotencyRecordSchema = z.discriminatedUnion('operation', [
   singleResultIdempotencyRecordSchema('updateMealPlanDay'),
   singleResultIdempotencyRecordSchema('recordTrainingCompletion'),
   singleResultIdempotencyRecordSchema('decideMealPlanCandidate'),
-  singleResultIdempotencyRecordSchema('retryPendingRecalculation')
+  singleResultIdempotencyRecordSchema('retryPendingRecalculation'),
+  singleResultIdempotencyRecordSchema('createIngredientPhotoUpload'),
+  singleResultIdempotencyRecordSchema('registerIngredientPhotoUpload'),
+  singleResultIdempotencyRecordSchema('recognizeIngredientPhoto'),
+  singleResultIdempotencyRecordSchema('confirmIngredientCandidate')
 ]);
 
 export const planningAggregateStateSchema = z.object({
@@ -765,13 +801,15 @@ export const planningAggregateStateSchema = z.object({
   mealPlanDecisions: z.array(storedMealPlanDecisionSchema),
   trainingCompletionEvents: z.array(storedTrainingCompletionEventSchema),
   recalculationJobs: z.array(storedRecalculationJobSchema),
+  ingredientPhotoVersions: z.array(storedIngredientPhotoVersionSchema),
   outboxEvents: z.array(storedTrainingPlanChangedEventSchema),
   idempotencyRecords: z.array(idempotencyRecordSchema),
   activeBodyProfileVersionId: z.string().min(1).nullable(),
   activeGoalVersionId: z.string().min(1).nullable(),
   activeTrainingPlanVersionId: z.string().min(1).nullable(),
   activeInventoryVersionId: z.string().min(1).nullable(),
-  activeMealPlanVersionId: z.string().min(1).nullable()
+  activeMealPlanVersionId: z.string().min(1).nullable(),
+  nextPhotoCleanupAt: z.iso.datetime().nullable()
 }).strict();
 
 const successfulDataSchema = z.discriminatedUnion('kind', [
@@ -789,6 +827,24 @@ const successfulDataSchema = z.discriminatedUnion('kind', [
   trainingCompletionRecordedSchema,
   mealPlanCandidateDecidedSchema,
   mealPlanRecalculationProcessedSchema,
+  z.object({
+    kind: z.literal('ingredient_photo_upload_created'),
+    photo: publicIngredientPhotoSchema,
+    cloudPath: z.string().min(1).max(1_024)
+  }).strict(),
+  z.object({
+    kind: z.literal('ingredient_photo_upload_registered'),
+    photo: publicIngredientPhotoSchema
+  }).strict(),
+  z.object({
+    kind: z.literal('ingredient_photo_recognized'),
+    photo: publicIngredientPhotoSchema
+  }).strict(),
+  z.object({
+    kind: z.literal('ingredient_candidate_confirmed'),
+    photo: publicIngredientPhotoSchema,
+    inventory: inventoryVersionSchema
+  }).strict(),
   currentContextSchema
 ]);
 
@@ -811,6 +867,8 @@ const standardApiErrorCodeSchema = z.enum([
     'recipe_not_selectable',
     'candidate_not_pending',
     'candidate_diff_unavailable',
+    'storage_unavailable',
+    'candidate_confirmation_required',
     'internal_error'
   ]);
 
