@@ -565,6 +565,40 @@ describe('planning aggregate invariants', () => {
     });
   });
 
+  test('accepts successful recognition after a failed recognition retry', async () => {
+    const state = await createValidState();
+    const initial = validPhotoVersion('user-a');
+    const uploaded: IngredientPhotoVersion = {
+      ...initial,
+      id: 'ingredient-photo-version-2',
+      revision: 2,
+      workflowStatus: 'uploaded'
+    };
+    const failed: IngredientPhotoVersion = {
+      ...uploaded,
+      id: 'ingredient-photo-version-3',
+      revision: 3,
+      workflowStatus: 'recognition_failed',
+      recognitionFailureCode: 'no_supported_candidate'
+    };
+    const recognized: IngredientPhotoVersion = {
+      ...failed,
+      id: 'ingredient-photo-version-4',
+      revision: 4,
+      workflowStatus: 'recognized',
+      candidates: [photoCandidate],
+      recognitionFailureCode: null
+    };
+
+    expect(() => {
+      assertPlanningAggregateInvariants({
+        ...state,
+        ingredientPhotoVersions: [initial, uploaded, failed, recognized],
+        nextPhotoCleanupAt: recognized.nextCleanupAt
+      }, 'user-a');
+    }).not.toThrow();
+  });
+
   test('rejects an initial photo cleanup time that is not exactly 23 hours after upload', async () => {
     const state = await createValidState();
     const photo = {

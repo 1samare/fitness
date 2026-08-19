@@ -245,7 +245,7 @@ function assertIngredientPhotoVersions(
     awaiting_upload: ['awaiting_upload', 'uploaded'],
     uploaded: ['uploaded', 'recognized', 'recognition_failed'],
     recognized: ['recognized', 'confirmed'],
-    recognition_failed: ['recognition_failed'],
+    recognition_failed: ['recognized', 'recognition_failed'],
     confirmed: ['confirmed']
   };
   const storageTransitions: Readonly<Record<IngredientPhotoVersion['storageStatus'], readonly IngredientPhotoVersion['storageStatus'][]>> = {

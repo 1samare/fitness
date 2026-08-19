@@ -1,5 +1,6 @@
 export * from './business-time';
 export * from './idempotency-fingerprint';
+export * from './ingredient-photo';
 export * from './meal-plan-editing';
 export * from './meal-plan-generation';
 export * from './meal-plan-recalculation';

@@ -969,7 +969,8 @@ export function createVersionedPlanningService(
           job.status === 'failed_retryable'
           && recalculationJobCanRetryForCurrentContext(state, job)
         )) ?? null;
-      const ingredientPhoto = latestIngredientPhotoVersions(state.ingredientPhotoVersions).at(-1) ?? null;
+      const latestIngredientPhotos = latestIngredientPhotoVersions(state.ingredientPhotoVersions);
+      const ingredientPhoto = latestIngredientPhotos.at(-1) ?? null;
       return {
         bodyProfile,
         goal,
@@ -998,7 +999,7 @@ export function createVersionedPlanningService(
           mealPlanDecision: state.mealPlanDecisions.length,
           trainingCompletion: state.trainingCompletionEvents.length,
           recalculationJob: state.recalculationJobs.length,
-          ingredientPhoto: state.ingredientPhotoVersions.length
+          ingredientPhoto: latestIngredientPhotos.length
         }
       };
     }
