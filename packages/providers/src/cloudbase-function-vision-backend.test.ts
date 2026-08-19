@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 import { CloudBaseFunctionVisionBackend } from './cloudbase-function-vision-backend';
+import { ResilientVisionProvider } from './resilient-vision-provider';
 
 describe('CloudBaseFunctionVisionBackend', () => {
   test('calls only the configured CloudBase function with a private fileID', async () => {
@@ -29,5 +30,22 @@ describe('CloudBaseFunctionVisionBackend', () => {
 
     await expect(backend.recognizePrivateFile('cloud://env.bucket/photo.jpg'))
       .rejects.toMatchObject({ code: 'provider_unavailable', reason: 'invalid_response' });
+  });
+
+  test('preserves an authentication rejection so the composed provider does not retry it', async () => {
+    const callFunction = vi.fn().mockRejectedValue({ code: 'AUTHENTICATION_FAILED' });
+    const backend = new CloudBaseFunctionVisionBackend(callFunction, 'fitness-vision');
+    const provider = new ResilientVisionProvider({
+      providerName: 'fixture-vision',
+      backend,
+      nowMs: () => 0,
+      observe: () => undefined
+    });
+
+    await expect(provider.recognize({
+      privateFileId: 'cloud://env.bucket/photo.jpg',
+      requestId: 'vision-request-1'
+    })).rejects.toMatchObject({ code: 'provider_unavailable', reason: 'request_rejected' });
+    expect(callFunction).toHaveBeenCalledTimes(1);
   });
 });

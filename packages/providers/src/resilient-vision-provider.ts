@@ -51,7 +51,7 @@ export class ResilientVisionProvider implements VisionProvider {
           const parsed = visionProviderResponseSchema.safeParse(response);
           if (!parsed.success) throw new ProviderUnavailableError('invalid_response');
           const latencyMs = Math.max(0, this.options.nowMs() - startedAtMs);
-          this.options.observe(observation({
+          this.observe(observation({
             provider: this.options.providerName,
             requestId: input.requestId,
             attempt,
@@ -68,7 +68,7 @@ export class ResilientVisionProvider implements VisionProvider {
         } catch (error: unknown) {
           const providerError = toProviderUnavailableError(error);
           const latencyMs = Math.max(0, this.options.nowMs() - startedAtMs);
-          this.options.observe({
+          this.observe({
             provider: this.options.providerName,
             requestId: input.requestId,
             attempt,
@@ -92,7 +92,7 @@ export class ResilientVisionProvider implements VisionProvider {
   private enterCircuit(requestId: string): boolean {
     if (this.openedAtMs === null) return false;
     if (this.options.nowMs() - this.openedAtMs < VISION_PROVIDER_POLICY_V1.cooldownMs) {
-      this.options.observe({
+      this.observe({
         provider: this.options.providerName,
         requestId,
         attempt: 0,
@@ -103,7 +103,7 @@ export class ResilientVisionProvider implements VisionProvider {
       throw new ProviderUnavailableError('circuit_open');
     }
     if (this.halfOpenInFlight) {
-      this.options.observe({
+      this.observe({
         provider: this.options.providerName,
         requestId,
         attempt: 0,
@@ -121,6 +121,14 @@ export class ResilientVisionProvider implements VisionProvider {
     this.consecutiveFailures += 1;
     if (this.consecutiveFailures >= VISION_PROVIDER_POLICY_V1.failureThreshold) {
       this.openedAtMs = this.options.nowMs();
+    }
+  }
+
+  private observe(event: ProviderObservation): void {
+    try {
+      this.options.observe(event);
+    } catch {
+      // Observation failures must not alter recognition outcomes or circuit state.
     }
   }
 }
@@ -151,7 +159,7 @@ function callWithTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T
 
 function toProviderUnavailableError(error: unknown): ProviderUnavailableError {
   if (error instanceof ProviderUnavailableError) return error;
-  return new ProviderUnavailableError('transport_unavailable');
+  return new ProviderUnavailableError('request_rejected');
 }
 
 function observation(event: {

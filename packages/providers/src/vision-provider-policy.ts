@@ -11,7 +11,7 @@ export const VISION_PROVIDER_POLICY_V1 = Object.freeze({
 export class ProviderUnavailableError extends Error {
   public readonly code = 'provider_unavailable' as const;
 
-  public constructor(public readonly reason: 'circuit_open' | 'invalid_response' | 'transport_unavailable' | 'timeout' | 'vision_provider_unavailable') {
+  public constructor(public readonly reason: 'circuit_open' | 'invalid_response' | 'request_rejected' | 'transport_unavailable' | 'timeout' | 'vision_provider_unavailable') {
     super('Vision provider is unavailable');
     this.name = 'ProviderUnavailableError';
   }

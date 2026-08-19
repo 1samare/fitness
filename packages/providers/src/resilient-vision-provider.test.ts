@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { ResilientVisionProvider, UnavailableVisionProvider } from './resilient-vision-provider';
+import { ProviderUnavailableError } from './vision-provider-policy';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -87,6 +88,73 @@ describe('ResilientVisionProvider', () => {
       requestId: 'vision-request-malformed'
     })).rejects.toMatchObject({ code: 'provider_unavailable', reason: 'invalid_response' });
     expect(backend.recognizePrivateFile).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not retry an unclassified backend rejection', async () => {
+    const backend = {
+      recognizePrivateFile: vi.fn().mockRejectedValue(new Error('unexpected backend failure'))
+    };
+    const provider = new ResilientVisionProvider({
+      providerName: 'fixture-vision',
+      backend,
+      nowMs: () => 0,
+      observe: () => undefined
+    });
+
+    await expect(provider.recognize({
+      privateFileId: 'cloud://private/photo.jpg',
+      requestId: 'vision-request-unclassified'
+    })).rejects.toMatchObject({ code: 'provider_unavailable', reason: 'request_rejected' });
+    expect(backend.recognizePrivateFile).toHaveBeenCalledTimes(1);
+  });
+
+  test('returns a successful recognition when observation fails', async () => {
+    const backend = {
+      recognizePrivateFile: vi.fn().mockResolvedValue({
+        requestId: 'provider-request-1',
+        candidates: []
+      })
+    };
+    const provider = new ResilientVisionProvider({
+      providerName: 'fixture-vision',
+      backend,
+      nowMs: () => 0,
+      observe: () => {
+        throw new Error('observer failure');
+      }
+    });
+
+    await expect(provider.recognize({
+      privateFileId: 'cloud://private/photo.jpg',
+      requestId: 'vision-request-observer-failure'
+    })).resolves.toMatchObject({ providerRequestId: 'provider-request-1' });
+    expect(backend.recognizePrivateFile).toHaveBeenCalledTimes(1);
+  });
+
+  test('preserves circuit-open behavior when observation fails', async () => {
+    const backend = {
+      recognizePrivateFile: vi.fn().mockRejectedValue(new ProviderUnavailableError('transport_unavailable'))
+    };
+    const provider = new ResilientVisionProvider({
+      providerName: 'fixture-vision',
+      backend,
+      nowMs: () => 0,
+      observe: () => {
+        throw new Error('observer failure');
+      }
+    });
+
+    for (let operation = 0; operation < 3; operation += 1) {
+      await expect(provider.recognize({
+        privateFileId: 'cloud://private/photo.jpg',
+        requestId: `request-${String(operation)}`
+      })).rejects.toMatchObject({ code: 'provider_unavailable' });
+    }
+    await expect(provider.recognize({
+      privateFileId: 'cloud://private/photo.jpg',
+      requestId: 'request-open'
+    })).rejects.toMatchObject({ code: 'provider_unavailable', reason: 'circuit_open' });
+    expect(backend.recognizePrivateFile).toHaveBeenCalledTimes(6);
   });
 
   test('allows one half-open call after the cooldown', async () => {
