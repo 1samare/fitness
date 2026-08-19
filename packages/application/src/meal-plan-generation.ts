@@ -65,6 +65,7 @@ export class ProviderUnavailableError extends Error {
       | 'food_name_unresolved'
       | 'nutrition_source_unavailable'
       | 'meal_catalog_unavailable'
+      | 'vision_provider_unavailable'
   ) {
     super(`Meal planning provider is unavailable: ${reason}`);
     this.name = 'ProviderUnavailableError';

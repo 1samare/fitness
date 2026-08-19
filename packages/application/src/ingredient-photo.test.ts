@@ -196,6 +196,19 @@ function planningOutputs(state: PlanningAggregateState) {
   };
 }
 
+async function captureError(operation: () => Promise<unknown>): Promise<unknown> {
+  try {
+    await operation();
+  } catch (error: unknown) {
+    return error;
+  }
+  throw new Error('Expected operation to reject');
+}
+
+function errorText(error: unknown): string {
+  return `${String(error)} ${JSON.stringify(error)}`;
+}
+
 describe('ingredient photo commands', () => {
   test('composes photo commands with the existing phase-four planning service', () => {
     const { nutrition, repository, storage, vision } = createHarness();
@@ -361,6 +374,29 @@ describe('ingredient photo commands', () => {
       payload: { photoId: 'photo-a', privateFileId: EXPECTED_FILE_ID }
     })).rejects.toEqual(new VersionConflictError(1, 2));
     expect((await repository.read('user-a')).ingredientPhotoVersions).toHaveLength(2);
+  });
+
+  test('maps storage inspection failures to a sanitized application error', async () => {
+    const privateDetail = `download failed for ${EXPECTED_FILE_ID}`;
+    const storage: PrivatePhotoStorage = {
+      inspectPrivateFile: vi.fn(async () => Promise.reject(new Error(privateDetail))),
+      deletePrivateFile: vi.fn(async () => 'deleted' as const)
+    };
+    const { commands } = createHarness({ storage });
+    await createUpload(commands);
+
+    const error = await captureError(() => commands.registerIngredientPhotoUpload('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'photo-register-storage-down-001',
+      payload: { photoId: 'photo-a', privateFileId: EXPECTED_FILE_ID }
+    }));
+
+    expect(error).toMatchObject({
+      code: 'storage_unavailable',
+      message: 'Private photo storage is unavailable'
+    });
+    expect(errorText(error)).not.toContain(privateDetail);
+    expect(errorText(error)).not.toContain(EXPECTED_FILE_ID);
   });
 
   test('replays registration without inspecting storage twice', async () => {
@@ -546,6 +582,61 @@ describe('ingredient photo commands', () => {
     });
   });
 
+  test('drops a candidate whose food state disagrees with its nutrition snapshot', async () => {
+    const { commands } = createHarness({
+      vision: defaultVision([{
+        providerCandidateId: 'raw-cooked-chicken',
+        name: '鸡胸肉',
+        confidence: 0.92,
+        foodState: 'cooked'
+      }])
+    });
+    await createAndRegisterPhoto(commands);
+
+    await expect(commands.recognizeIngredientPhoto('user-a', {
+      expectedVersion: 2,
+      idempotencyKey: 'photo-recognize-state-mismatch-001',
+      payload: { photoId: 'photo-a' }
+    })).resolves.toMatchObject({
+      photo: {
+        workflowStatus: 'recognition_failed',
+        recognitionFailureCode: 'no_supported_candidate',
+        candidates: []
+      }
+    });
+  });
+
+  test.each([
+    ['canonical name resolution', (): NutritionProvider => ({
+      resolveCanonicalName: vi.fn(async () => Promise.reject(
+        new Error(`nutrition lookup leaked ${EXPECTED_FILE_ID}`)
+      )),
+      getSnapshot: vi.fn(async () => CHICKEN_SNAPSHOT)
+    })],
+    ['snapshot loading', (): NutritionProvider => ({
+      resolveCanonicalName: defaultNutrition().resolveCanonicalName,
+      getSnapshot: vi.fn(async () => Promise.reject(
+        new Error(`snapshot provider leaked ${CHICKEN_SNAPSHOT.id}`)
+      ))
+    })]
+  ])('maps %s failures to a sanitized nutrition Provider error', async (_label, createNutrition) => {
+    const { commands } = createHarness({ nutrition: createNutrition() });
+    await createAndRegisterPhoto(commands);
+
+    const error = await captureError(() => commands.recognizeIngredientPhoto('user-a', {
+      expectedVersion: 2,
+      idempotencyKey: 'photo-recognize-nutrition-down-001',
+      payload: { photoId: 'photo-a' }
+    }));
+
+    expect(error).toMatchObject({
+      code: 'provider_unavailable',
+      reason: 'nutrition_source_unavailable'
+    });
+    expect(errorText(error)).not.toContain(EXPECTED_FILE_ID);
+    expect(errorText(error)).not.toContain(CHICKEN_SNAPSHOT.id);
+  });
+
   test('replays recognition without calling vision or nutrition twice', async () => {
     const { commands, nutrition, repository, vision } = createHarness();
     await createAndRegisterPhoto(commands);
@@ -565,8 +656,9 @@ describe('ingredient photo commands', () => {
     expect((await repository.read('user-a')).ingredientPhotoVersions).toHaveLength(3);
   });
 
-  test('leaves the uploaded photo unchanged when the vision Provider is unavailable', async () => {
-    const providerError = Object.assign(new Error('private provider detail'), {
+  test('sanitizes vision Provider failures and leaves the uploaded photo unchanged', async () => {
+    const privateDetail = `private provider detail for ${EXPECTED_FILE_ID}`;
+    const providerError = Object.assign(new Error(privateDetail), {
       code: 'provider_unavailable'
     });
     const vision: VisionProvider = {
@@ -575,11 +667,17 @@ describe('ingredient photo commands', () => {
     const { commands, repository } = createHarness({ vision });
     await createAndRegisterPhoto(commands);
 
-    await expect(commands.recognizeIngredientPhoto('user-a', {
+    const error = await captureError(() => commands.recognizeIngredientPhoto('user-a', {
       expectedVersion: 2,
       idempotencyKey: 'photo-recognize-provider-down-001',
       payload: { photoId: 'photo-a' }
-    })).rejects.toBe(providerError);
+    }));
+    expect(error).toMatchObject({
+      code: 'provider_unavailable',
+      reason: 'vision_provider_unavailable'
+    });
+    expect(errorText(error)).not.toContain(privateDetail);
+    expect(errorText(error)).not.toContain(EXPECTED_FILE_ID);
     expect(latestPhoto(await repository.read('user-a'))).toMatchObject({
       revision: 2,
       workflowStatus: 'uploaded'

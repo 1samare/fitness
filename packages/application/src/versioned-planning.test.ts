@@ -91,7 +91,7 @@ describe('versioned planning ingredient photo context', () => {
       nextCleanupAt: null,
       deletedAt: '2026-08-19T02:00:00.000Z'
     };
-    const versions = [first, secondAwaiting, secondUploaded, secondRecognized, secondDeleted];
+    const versions = [secondAwaiting, secondUploaded, secondRecognized, secondDeleted, first];
     await repository.transact('user-a', (state) => ({
       nextState: {
         ...state,
@@ -110,6 +110,41 @@ describe('versioned planning ingredient photo context', () => {
       storageStatus: 'deleted',
       candidates
     });
+    expect(context.latestVersions.ingredientPhoto).toBe(2);
+  });
+
+  test('breaks equal upload timestamps by logical photo ID independent of stored order', async () => {
+    const repository = new InMemoryPlanningRepository();
+    const service = createVersionedPlanningService({
+      repository,
+      now: () => '2026-08-19T00:00:00.000Z',
+      nextId: (prefix) => `${prefix}-unused`
+    });
+    const photoB = photo({
+      id: 'photo-b-version-1',
+      photoId: 'photo-b',
+      revision: 1,
+      uploadCreatedAt: '2026-08-19T00:00:00.000Z'
+    });
+    const photoA = photo({
+      id: 'photo-a-version-1',
+      photoId: 'photo-a',
+      revision: 1,
+      uploadCreatedAt: '2026-08-19T00:00:00.000Z'
+    });
+    const versions = [photoB, photoA];
+    await repository.transact('user-a', (state) => ({
+      nextState: {
+        ...state,
+        ingredientPhotoVersions: versions,
+        nextPhotoCleanupAt: deriveNextPhotoCleanupAt(versions)
+      },
+      result: undefined
+    }));
+
+    const context = await service.getCurrentContext('user-a');
+
+    expect(context.ingredientPhoto?.photoId).toBe('photo-b');
     expect(context.latestVersions.ingredientPhoto).toBe(2);
   });
 });

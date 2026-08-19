@@ -11,6 +11,7 @@ import {
   type GoalPayload,
   type GoalVersion,
   type IdempotencyRecord,
+  type IngredientPhotoVersion,
   type MealPlanVersion,
   type PlanningAggregateState,
   type RecalculationJob,
@@ -153,6 +154,22 @@ function findById<T extends { readonly id: string }>(
 ): T | null {
   if (id === null) return null;
   return values.find((value) => value.id === id) ?? null;
+}
+
+function mostRecentlyCreatedIngredientPhoto(
+  photos: readonly IngredientPhotoVersion[]
+): IngredientPhotoVersion | null {
+  let latest: IngredientPhotoVersion | null = null;
+  for (const photo of photos) {
+    if (
+      latest === null
+      || photo.uploadCreatedAt > latest.uploadCreatedAt
+      || (photo.uploadCreatedAt === latest.uploadCreatedAt && photo.photoId > latest.photoId)
+    ) {
+      latest = photo;
+    }
+  }
+  return latest;
 }
 
 function fingerprint<T>(envelope: WriteCommandEnvelope<T>): string {
@@ -970,7 +987,7 @@ export function createVersionedPlanningService(
           && recalculationJobCanRetryForCurrentContext(state, job)
         )) ?? null;
       const latestIngredientPhotos = latestIngredientPhotoVersions(state.ingredientPhotoVersions);
-      const ingredientPhoto = latestIngredientPhotos.at(-1) ?? null;
+      const ingredientPhoto = mostRecentlyCreatedIngredientPhoto(latestIngredientPhotos);
       return {
         bodyProfile,
         goal,

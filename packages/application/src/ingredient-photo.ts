@@ -14,6 +14,7 @@ import {
   type WriteCommandEnvelope
 } from '@fitness/domain';
 import { requestFingerprint } from './idempotency-fingerprint';
+import { ProviderUnavailableError } from './meal-plan-generation';
 import {
   createMealPlanRecalculationService,
   type MealPlanRecalculationServiceDependencies
@@ -52,6 +53,15 @@ export class PrivatePhotoOwnershipError extends Error {
   public constructor() {
     super('Private photo does not match the upload session');
     this.name = 'PrivatePhotoOwnershipError';
+  }
+}
+
+export class StorageUnavailableError extends Error {
+  public readonly code = 'storage_unavailable' as const;
+
+  public constructor() {
+    super('Private photo storage is unavailable');
+    this.name = 'StorageUnavailableError';
   }
 }
 
@@ -195,16 +205,26 @@ async function normalizeCandidate(
   raw: VisionCandidate
 ): Promise<NormalizedIngredientCandidate | null> {
   if (raw.foodState === 'unknown') return null;
-  const resolution = await dependencies.nutrition.resolveCanonicalName(raw.name);
+  let resolution;
+  try {
+    resolution = await dependencies.nutrition.resolveCanonicalName(raw.name);
+  } catch {
+    throw new ProviderUnavailableError('nutrition_source_unavailable');
+  }
   if (resolution === null) return null;
-  const parsedSnapshot = nutritionDataSnapshotSchema.safeParse(
-    await dependencies.nutrition.getSnapshot(resolution.nutritionSnapshotId)
-  );
+  let rawSnapshot;
+  try {
+    rawSnapshot = await dependencies.nutrition.getSnapshot(resolution.nutritionSnapshotId);
+  } catch {
+    throw new ProviderUnavailableError('nutrition_source_unavailable');
+  }
+  const parsedSnapshot = nutritionDataSnapshotSchema.safeParse(rawSnapshot);
   if (!parsedSnapshot.success) return null;
   const snapshot = parsedSnapshot.data;
   if (
     snapshot.id !== resolution.nutritionSnapshotId
     || snapshot.foodId !== resolution.foodId
+    || snapshot.foodState !== raw.foodState
     || (
       snapshot.qualityStatus !== 'reviewed'
       && !(dependencies.allowTestFixtures && snapshot.qualityStatus === 'test_fixture')
@@ -349,9 +369,14 @@ export function createIngredientPhotoCommands(
         || envelope.payload.privateFileId !== beforeIo.expectedPrivateFileId
       ) throw new PrivatePhotoOwnershipError();
 
-      const inspected = await dependencies.storage.inspectPrivateFile({
-        privateFileId: beforeIo.expectedPrivateFileId
-      });
+      let inspected;
+      try {
+        inspected = await dependencies.storage.inspectPrivateFile({
+          privateFileId: beforeIo.expectedPrivateFileId
+        });
+      } catch {
+        throw new StorageUnavailableError();
+      }
       if (
         inspected.mediaType !== beforeIo.mediaType
         || !Number.isInteger(inspected.sizeBytes)
@@ -422,10 +447,15 @@ export function createIngredientPhotoCommands(
         throw new VersionConflictError(envelope.expectedVersion, beforeIo.revision);
       }
 
-      const rawResult = await dependencies.vision.recognize({
-        privateFileId: beforeIo.expectedPrivateFileId,
-        requestId: dependencies.nextId('ingredient-photo-recognition-request')
-      });
+      let rawResult;
+      try {
+        rawResult = await dependencies.vision.recognize({
+          privateFileId: beforeIo.expectedPrivateFileId,
+          requestId: dependencies.nextId('ingredient-photo-recognition-request')
+        });
+      } catch {
+        throw new ProviderUnavailableError('vision_provider_unavailable');
+      }
       const candidates = await normalizeCandidates(
         dependencies,
         beforeIo.photoId,
