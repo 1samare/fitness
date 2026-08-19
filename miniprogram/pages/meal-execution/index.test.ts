@@ -37,6 +37,7 @@ interface PageOptions {
   onConfirmCandidateDecision(): Promise<void>;
   onRecordCompletion(): Promise<void>;
   onRetryRecalculation(): Promise<void>;
+  onOpenIngredientPhoto(): void;
 }
 
 interface IndexedEvent {
@@ -68,6 +69,7 @@ interface PageInstance extends PageOptions {
 const calls: PlanningApiRequest[] = [];
 const responses: unknown[] = [];
 const storage = new Map<string, unknown>();
+const navigations: string[] = [];
 let apiCallOverride: ((request: PlanningApiRequest) => Promise<unknown>) | undefined;
 let registeredPage: PageOptions | undefined;
 
@@ -240,6 +242,7 @@ beforeEach(async () => {
   calls.length = 0;
   responses.length = 0;
   storage.clear();
+  navigations.length = 0;
   apiCallOverride = undefined;
   registeredPage = undefined;
   vi.resetModules();
@@ -247,7 +250,8 @@ beforeEach(async () => {
   vi.stubGlobal('wx', {
     getStorageSync: (key: string) => storage.get(key),
     setStorageSync: (key: string, value: unknown) => { storage.set(key, value); },
-    removeStorageSync: (key: string) => { storage.delete(key); }
+    removeStorageSync: (key: string) => { storage.delete(key); },
+    navigateTo: ({ url }: { readonly url: string }) => { navigations.push(url); }
   });
   await import('./index');
 });
@@ -257,6 +261,14 @@ afterEach(() => {
 });
 
 describe('meal execution page controller', () => {
+  it('opens the native ingredient photo confirmation page', () => {
+    const page = pageInstance();
+
+    page.onOpenIngredientPhoto.call(page);
+
+    expect(navigations).toEqual(['/pages/ingredient-photo/index']);
+  });
+
   it('refreshes public planning context on load', async () => {
     responses.push(emptyContextResponse());
     const page = pageInstance();

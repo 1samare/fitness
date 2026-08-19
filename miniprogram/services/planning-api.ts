@@ -12,6 +12,35 @@ export type CloudFunctionInvoker = (
   data: PlanningApiRequest
 ) => Promise<unknown>;
 
+export const PLANNING_API_TIMEOUT_MS = 20_000;
+
+function withPlanningApiTimeout<T>(operation: Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('规划服务请求超时，请稍后重试。'));
+    }, PLANNING_API_TIMEOUT_MS);
+    operation.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error instanceof Error
+          ? error
+          : new Error('规划服务请求失败，请稍后重试。'));
+      }
+    );
+  });
+}
+
 export function createCloudPlanningTransport(
   invoke: CloudFunctionInvoker
 ): PlanningTransport {
@@ -21,7 +50,9 @@ export function createCloudPlanningTransport(
 export function createPlanningApiClient(transport: PlanningTransport) {
   return {
     async call(request: PlanningApiRequest): Promise<PlanningApiResponse> {
-      const parsed = planningApiResponseSchema.safeParse(await transport(request));
+      const parsed = planningApiResponseSchema.safeParse(
+        await withPlanningApiTimeout(transport(request))
+      );
       if (!parsed.success) throw new Error('规划服务返回了无法识别的数据。');
       return parsed.data;
     }
@@ -45,7 +76,7 @@ const localTransport: PlanningTransport = (request) => new Promise((resolve, rej
     url: 'http://127.0.0.1:3000/',
     method: 'POST',
     data: request,
-    timeout: 10_000,
+    timeout: PLANNING_API_TIMEOUT_MS,
     success: (response) => { resolve(response.data); },
     fail: () => { reject(new Error('无法连接本地规划服务，请先运行 pnpm dev:api。')); }
   });

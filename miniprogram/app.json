@@ -2,7 +2,8 @@
   "pages": [
     "pages/planning-setup/index",
     "pages/planning-preview/index",
-    "pages/meal-execution/index"
+    "pages/meal-execution/index",
+    "pages/ingredient-photo/index"
   ],
   "window": {
     "navigationBarTitleText": "Fitness 规划预览",

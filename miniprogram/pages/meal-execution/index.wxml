@@ -14,6 +14,7 @@
   <view class="card">
     <text class="section-title">1. 现有食材库存</text>
     <text class="section-help">每行食材名称须先通过审核数据校验。克数由你确认，系统不会从名称或图片猜测重量。</text>
+    <button class="button button--secondary button--wide" bindtap="onOpenIngredientPhoto">拍照辅助识别食材</button>
     <view wx:for="{{inventoryRows}}" wx:key="key" wx:for-item="row" wx:for-index="rowIndex" class="inventory-row">
       <label class="field">
         <text class="field__label">第 {{rowIndex + 1}} 行食材名称</text>

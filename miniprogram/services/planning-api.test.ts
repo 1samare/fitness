@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { PlanningApiRequest } from '@fitness/contracts';
 import {
   createCloudPlanningTransport,
@@ -117,6 +117,24 @@ describe('mini program planning API client', () => {
     await client.call({ action: 'health' });
 
     expect(calls).toEqual(['cloud']);
+  });
+
+  it('fails with a controlled client timeout after 20 seconds', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createPlanningApiClient(() => new Promise(() => undefined));
+      const outcome = client.call({ action: 'health' }).then(
+        () => 'resolved',
+        (error: unknown) => error instanceof Error ? error.message : 'unknown'
+      );
+
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(await Promise.race([outcome, Promise.resolve('still-pending')]))
+        .toBe('规划服务请求超时，请稍后重试。');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('forwards every weekly meal action type while accepting strict runtime error responses', async () => {

@@ -127,6 +127,7 @@ interface PageActions {
   onCompletionMinutesInput(event: TextValueEvent): void;
   onRecordCompletion(): Promise<void>;
   onRetryRecalculation(): Promise<void>;
+  onOpenIngredientPhoto(): void;
 }
 
 const emptyVersions: LatestVersions = {
@@ -300,6 +301,10 @@ Page<PageData, PageActions>({
 
   async onLoad() {
     await this.refreshContext();
+  },
+
+  onOpenIngredientPhoto() {
+    void wx.navigateTo({ url: '/pages/ingredient-photo/index' });
   },
 
   async refreshContext() {

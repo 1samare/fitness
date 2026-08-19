@@ -28,7 +28,8 @@ await build({
     app: 'miniprogram/app.ts',
     'pages/planning-setup/index': 'miniprogram/pages/planning-setup/index.ts',
     'pages/planning-preview/index': 'miniprogram/pages/planning-preview/index.ts',
-    'pages/meal-execution/index': 'miniprogram/pages/meal-execution/index.ts'
+    'pages/meal-execution/index': 'miniprogram/pages/meal-execution/index.ts',
+    'pages/ingredient-photo/index': 'miniprogram/pages/ingredient-photo/index.ts'
   },
   bundle: true,
   format: 'iife',
@@ -54,7 +55,10 @@ const assets = [
   'pages/planning-preview/index.wxss',
   'pages/meal-execution/index.json',
   'pages/meal-execution/index.wxml',
-  'pages/meal-execution/index.wxss'
+  'pages/meal-execution/index.wxss',
+  'pages/ingredient-photo/index.json',
+  'pages/ingredient-photo/index.wxml',
+  'pages/ingredient-photo/index.wxss'
 ];
 
 for (const relativePath of assets) {

@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { afterEach, expect, test, vi } from 'vitest';
 
 interface ZodConfiguredGlobal {
@@ -25,4 +26,12 @@ test('keeps contract validation callable when runtime code generation is restric
   expect(planningApiRequestSchema.parse({ action: 'health' })).toEqual({
     action: 'health'
   });
+});
+
+test('registers the ingredient photo page in the runtime manifest', async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL('./app.json', import.meta.url), 'utf8')
+  ) as { readonly pages?: readonly string[] };
+
+  expect(manifest.pages).toContain('pages/ingredient-photo/index');
 });
