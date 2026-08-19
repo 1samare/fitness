@@ -62,9 +62,13 @@ function mediaTypeFromSignature(content: Uint8Array): 'image/jpeg' | 'image/png'
 function deletionCode(value: unknown): string | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const fileList = (value as { readonly fileList?: unknown }).fileList;
-  if (!Array.isArray(fileList) || fileList.length !== 1) return null;
-  const entry = fileList[0];
+  if (!isSingleEntryList(fileList)) return null;
+  const [entry] = fileList;
   if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return null;
   const code = (entry as { readonly code?: unknown }).code;
   return typeof code === 'string' ? code : null;
+}
+
+function isSingleEntryList(value: unknown): value is readonly [unknown] {
+  return Array.isArray(value) && value.length === 1;
 }

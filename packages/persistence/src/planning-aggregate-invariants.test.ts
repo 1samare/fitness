@@ -835,7 +835,9 @@ describe('planning aggregate invariants', () => {
       ingredientPhotoVersions: [validPhotoVersion('user-a')],
       nextPhotoCleanupAt: '2026-08-20T00:00:00.000Z'
     };
-    expect(() => assertPlanningAggregateInvariants(corrupt, 'user-a'))
+    expect(() => {
+      assertPlanningAggregateInvariants(corrupt, 'user-a');
+    })
       .toThrow(CorruptPlanningStateError);
   });
 

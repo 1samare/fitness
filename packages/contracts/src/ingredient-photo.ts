@@ -11,14 +11,14 @@ export const ingredientPhotoStorageStatusSchema = z.enum([
 export const visionCandidateSchema = z.object({
   providerCandidateId: z.string().trim().min(1).max(128),
   name: z.string().trim().min(1).max(40),
-  confidence: z.number().finite().min(0).max(1),
+  confidence: z.number().min(0).max(1),
   foodState: z.enum(['raw', 'cooked', 'dry', 'unknown'])
 }).strict();
 
 export const visionProviderResponseSchema = z.object({
   requestId: z.string().trim().min(1).max(200),
   candidates: z.array(visionCandidateSchema).max(5),
-  estimatedCostUnits: z.number().finite().nonnegative().optional()
+  estimatedCostUnits: z.number().nonnegative().optional()
 }).strict();
 
 export const normalizedIngredientCandidateSchema = z.object({
@@ -26,7 +26,7 @@ export const normalizedIngredientCandidateSchema = z.object({
   foodId: z.string().min(1).max(200),
   nutritionSnapshotId: z.string().min(1).max(200),
   canonicalNameZh: z.string().trim().min(1).max(120),
-  confidence: z.number().finite().min(0).max(1),
+  confidence: z.number().min(0).max(1),
   foodState: z.enum(['raw', 'cooked', 'dry'])
 }).strict();
 

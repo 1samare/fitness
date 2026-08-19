@@ -15,7 +15,7 @@ describe('CloudBaseFunctionVisionBackend', () => {
     });
   });
 
-  test('rejects invalid configured function names before an external call', async () => {
+  test('rejects invalid configured function names before an external call', () => {
     const callFunction = vi.fn();
 
     expect(() => new CloudBaseFunctionVisionBackend(callFunction, 'fitness/vision')).toThrow();

@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
+import type { Mock } from 'vitest';
 import type {
   IngredientPhotoVersion,
   NutritionDataSnapshot,
@@ -66,18 +67,18 @@ function createSequenceId(ids: readonly string[]): (prefix: string) => string {
   return (prefix) => ids[index++] ?? `${prefix}-fallback-${String(index)}`;
 }
 
-function defaultNutrition(): NutritionProvider {
+function defaultNutrition() {
   return {
-    resolveCanonicalName: vi.fn(async (name: string) => name === '鸡胸肉'
+    resolveCanonicalName: vi.fn((name: string) => Promise.resolve(name === '鸡胸肉'
       ? {
           foodId: CHICKEN_SNAPSHOT.foodId,
           canonicalNameZh: CHICKEN_SNAPSHOT.canonicalNameZh,
           nutritionSnapshotId: CHICKEN_SNAPSHOT.id
         }
-      : null),
-    getSnapshot: vi.fn(async (snapshotId: string) => {
-      if (snapshotId !== CHICKEN_SNAPSHOT.id) throw new Error('snapshot_not_found');
-      return CHICKEN_SNAPSHOT;
+      : null)),
+    getSnapshot: vi.fn((snapshotId: string) => {
+      if (snapshotId !== CHICKEN_SNAPSHOT.id) return Promise.reject(new Error('snapshot_not_found'));
+      return Promise.resolve(CHICKEN_SNAPSHOT);
     })
   };
 }
@@ -87,22 +88,23 @@ function defaultVision(candidates: readonly VisionCandidate[] = [{
   name: '鸡胸肉',
   confidence: 0.92,
   foodState: 'raw'
-}]): VisionProvider {
+}]): { readonly recognize: Mock<VisionProvider['recognize']> } {
+  const recognize: Mock<VisionProvider['recognize']> = vi.fn(() => Promise.resolve({
+    providerRequestId: 'provider-request-1',
+    candidates
+  }));
   return {
-    recognize: vi.fn(async () => ({
-      providerRequestId: 'provider-request-1',
-      candidates
-    }))
+    recognize
   };
 }
 
-function defaultStorage(): PrivatePhotoStorage {
+function defaultStorage() {
   return {
-    inspectPrivateFile: vi.fn(async () => ({
+    inspectPrivateFile: vi.fn(() => Promise.resolve({
       mediaType: 'image/jpeg' as const,
       sizeBytes: 4
     })),
-    deletePrivateFile: vi.fn(async () => 'deleted' as const)
+    deletePrivateFile: vi.fn(() => Promise.resolve('deleted' as const))
   };
 }
 
@@ -116,9 +118,12 @@ function createHarness(options: {
   readonly allowTestFixtures?: boolean;
 } = {}) {
   const repository = options.repository ?? new InMemoryPlanningRepository();
-  const nutrition = options.nutrition ?? defaultNutrition();
-  const vision = options.vision ?? defaultVision();
-  const storage = options.storage ?? defaultStorage();
+  const nutritionFixture = defaultNutrition();
+  const visionFixture = defaultVision();
+  const storageFixture = defaultStorage();
+  const nutrition = options.nutrition ?? nutritionFixture;
+  const vision = options.vision ?? visionFixture;
+  const storage = options.storage ?? storageFixture;
   const commands = createIngredientPhotoCommands({
     repository,
     nutrition,
@@ -138,7 +143,16 @@ function createHarness(options: {
     storageFileIdPrefix: options.storageFileIdPrefix ?? 'cloud://env.bucket/',
     allowTestFixtures: options.allowTestFixtures ?? true
   });
-  return { commands, nutrition, repository, storage, vision };
+  return {
+    commands,
+    nutrition,
+    nutritionFixture,
+    repository,
+    storage,
+    storageFixture,
+    vision,
+    visionFixture
+  };
 }
 
 type Commands = ReturnType<typeof createIngredientPhotoCommands>;
@@ -268,12 +282,10 @@ describe('ingredient photo commands', () => {
       }
     });
 
-    expect(service).toEqual(expect.objectContaining({
-      getCurrentContext: expect.any(Function),
-      createIngredientPhotoUpload: expect.any(Function),
-      registerIngredientPhotoUpload: expect.any(Function),
-      recognizeIngredientPhoto: expect.any(Function)
-    }));
+    expect(typeof service.getCurrentContext).toBe('function');
+    expect(typeof service.createIngredientPhotoUpload).toBe('function');
+    expect(typeof service.registerIngredientPhotoUpload).toBe('function');
+    expect(typeof service.recognizeIngredientPhoto).toBe('function');
   });
 
   test('creates a private upload session with cleanup due before 24 hours', async () => {
@@ -330,7 +342,7 @@ describe('ingredient photo commands', () => {
   });
 
   test('registers only the exact private fileID after byte inspection', async () => {
-    const { commands, storage } = createHarness();
+    const { commands, storageFixture } = createHarness();
     await createUpload(commands);
 
     await expect(commands.registerIngredientPhotoUpload('user-a', {
@@ -338,11 +350,11 @@ describe('ingredient photo commands', () => {
       idempotencyKey: 'photo-register-001',
       payload: { photoId: 'photo-a', privateFileId: EXPECTED_FILE_ID }
     })).resolves.toMatchObject({ photo: { workflowStatus: 'uploaded', revision: 2 } });
-    expect(storage.inspectPrivateFile).toHaveBeenCalledWith({ privateFileId: EXPECTED_FILE_ID });
+    expect(storageFixture.inspectPrivateFile).toHaveBeenCalledWith({ privateFileId: EXPECTED_FILE_ID });
   });
 
   test('rejects another fileID without inspecting it', async () => {
-    const { commands, storage } = createHarness();
+    const { commands, storageFixture } = createHarness();
     await createUpload(commands);
 
     await expect(commands.registerIngredientPhotoUpload('user-a', {
@@ -350,7 +362,7 @@ describe('ingredient photo commands', () => {
       idempotencyKey: 'photo-register-wrong-file-001',
       payload: { photoId: 'photo-a', privateFileId: 'cloud://env.bucket/other/photo.jpg' }
     })).rejects.toBeInstanceOf(PrivatePhotoOwnershipError);
-    expect(storage.inspectPrivateFile).not.toHaveBeenCalled();
+    expect(storageFixture.inspectPrivateFile).not.toHaveBeenCalled();
   });
 
   test.each([
@@ -358,8 +370,8 @@ describe('ingredient photo commands', () => {
     ['oversized inspected bytes', { mediaType: 'image/jpeg' as const, sizeBytes: MAXIMUM_FILE_BYTES + 1 }]
   ])('rejects %s without registering an upload', async (_label, inspected) => {
     const storage: PrivatePhotoStorage = {
-      inspectPrivateFile: vi.fn(async () => inspected),
-      deletePrivateFile: vi.fn(async () => 'deleted' as const)
+      inspectPrivateFile: vi.fn(() => Promise.resolve(inspected)),
+      deletePrivateFile: vi.fn(() => Promise.resolve('deleted' as const))
     };
     const { commands, repository } = createHarness({ storage });
     await createUpload(commands);
@@ -373,7 +385,7 @@ describe('ingredient photo commands', () => {
   });
 
   test('rejects a stale photo revision before inspecting storage', async () => {
-    const { commands, storage } = createHarness();
+    const { commands, storageFixture } = createHarness();
     await createUpload(commands);
 
     await expect(commands.registerIngredientPhotoUpload('user-a', {
@@ -381,7 +393,7 @@ describe('ingredient photo commands', () => {
       idempotencyKey: 'photo-register-stale-001',
       payload: { photoId: 'photo-a', privateFileId: EXPECTED_FILE_ID }
     })).rejects.toEqual(new VersionConflictError(0, 1));
-    expect(storage.inspectPrivateFile).not.toHaveBeenCalled();
+    expect(storageFixture.inspectPrivateFile).not.toHaveBeenCalled();
   });
 
   test('rejects a status and revision change that happens during storage inspection', async () => {
@@ -397,7 +409,7 @@ describe('ingredient photo commands', () => {
         }));
         return { mediaType: 'image/jpeg' as const, sizeBytes: 4 };
       }),
-      deletePrivateFile: vi.fn(async () => 'deleted' as const)
+      deletePrivateFile: vi.fn(() => Promise.resolve('deleted' as const))
     };
     const { commands } = createHarness({ repository, storage });
     await createUpload(commands);
@@ -413,8 +425,8 @@ describe('ingredient photo commands', () => {
   test('maps storage inspection failures to a sanitized application error', async () => {
     const privateDetail = `download failed for ${EXPECTED_FILE_ID}`;
     const storage: PrivatePhotoStorage = {
-      inspectPrivateFile: vi.fn(async () => Promise.reject(new Error(privateDetail))),
-      deletePrivateFile: vi.fn(async () => 'deleted' as const)
+      inspectPrivateFile: vi.fn(() => Promise.reject(new Error(privateDetail))),
+      deletePrivateFile: vi.fn(() => Promise.resolve('deleted' as const))
     };
     const { commands } = createHarness({ storage });
     await createUpload(commands);
@@ -434,7 +446,7 @@ describe('ingredient photo commands', () => {
   });
 
   test('replays registration without inspecting storage twice', async () => {
-    const { commands, repository, storage } = createHarness();
+    const { commands, repository, storageFixture } = createHarness();
     await createUpload(commands);
     const envelope = {
       expectedVersion: 1,
@@ -446,12 +458,12 @@ describe('ingredient photo commands', () => {
     const replay = await commands.registerIngredientPhotoUpload('user-a', envelope);
 
     expect(replay).toEqual(first);
-    expect(storage.inspectPrivateFile).toHaveBeenCalledTimes(1);
+    expect(storageFixture.inspectPrivateFile).toHaveBeenCalledTimes(1);
     expect((await repository.read('user-a')).ingredientPhotoVersions).toHaveLength(2);
   });
 
   test('does not reveal another user photo through registration', async () => {
-    const { commands, storage } = createHarness();
+    const { commands, storageFixture } = createHarness();
     await createUpload(commands);
 
     await expect(commands.registerIngredientPhotoUpload('user-b', {
@@ -459,7 +471,7 @@ describe('ingredient photo commands', () => {
       idempotencyKey: 'photo-register-cross-user-001',
       payload: { photoId: 'photo-a', privateFileId: EXPECTED_FILE_ID }
     })).rejects.toBeInstanceOf(IngredientPhotoNotFoundError);
-    expect(storage.inspectPrivateFile).not.toHaveBeenCalled();
+    expect(storageFixture.inspectPrivateFile).not.toHaveBeenCalled();
   });
 
   test('maps reviewed candidates and leaves every planning output unchanged', async () => {
@@ -478,8 +490,11 @@ describe('ingredient photo commands', () => {
       payload: { photoId: 'photo-a' }
     });
 
-    expect(result.photo.candidates).toEqual([{
-      id: expect.any(String),
+    const candidate = result.photo.candidates[0];
+    if (candidate === undefined) throw new Error('Expected a mapped candidate');
+    expect(typeof candidate.id).toBe('string');
+    expect([candidate]).toEqual([{
+      id: candidate.id,
       foodId: 'food-chicken-breast',
       nutritionSnapshotId: 'snapshot-chicken-breast-2026-08',
       canonicalNameZh: '鸡胸肉',
@@ -502,18 +517,18 @@ describe('ingredient photo commands', () => {
       return [value.id, value] as const;
     }));
     const nutrition: NutritionProvider = {
-      resolveCanonicalName: vi.fn(async (name: string) => {
+      resolveCanonicalName: vi.fn((name: string) => {
         const foodId = name.replace('候选-', '');
-        return {
+        return Promise.resolve({
           foodId,
           canonicalNameZh: `食材${foodId}`,
           nutritionSnapshotId: `snapshot-${foodId}`
-        };
+        });
       }),
-      getSnapshot: vi.fn(async (id: string) => {
+      getSnapshot: vi.fn((id: string) => {
         const value = snapshots.get(id);
-        if (value === undefined) throw new Error('snapshot_not_found');
-        return value;
+        if (value === undefined) return Promise.reject(new Error('snapshot_not_found'));
+        return Promise.resolve(value);
       })
     };
     const vision = defaultVision(definitions.map(([foodId, confidence], index) => ({
@@ -603,7 +618,7 @@ describe('ingredient photo commands', () => {
       qualityStatus: 'test_fixture'
     });
     const nutrition = defaultNutrition();
-    nutrition.getSnapshot = vi.fn(async () => fixtureSnapshot);
+    nutrition.getSnapshot = vi.fn(() => Promise.resolve(fixtureSnapshot));
     const { commands } = createHarness({ nutrition, allowTestFixtures: false });
     await createAndRegisterPhoto(commands);
 
@@ -642,14 +657,20 @@ describe('ingredient photo commands', () => {
 
   test.each([
     ['canonical name resolution', (): NutritionProvider => ({
-      resolveCanonicalName: vi.fn(async () => Promise.reject(
+      resolveCanonicalName: vi.fn(() => Promise.reject(
         new Error(`nutrition lookup leaked ${EXPECTED_FILE_ID}`)
       )),
-      getSnapshot: vi.fn(async () => CHICKEN_SNAPSHOT)
+      getSnapshot: vi.fn(() => Promise.resolve(CHICKEN_SNAPSHOT))
     })],
     ['snapshot loading', (): NutritionProvider => ({
-      resolveCanonicalName: defaultNutrition().resolveCanonicalName,
-      getSnapshot: vi.fn(async () => Promise.reject(
+      resolveCanonicalName: vi.fn((name: string) => Promise.resolve(name === '鸡胸肉'
+        ? {
+            foodId: CHICKEN_SNAPSHOT.foodId,
+            canonicalNameZh: CHICKEN_SNAPSHOT.canonicalNameZh,
+            nutritionSnapshotId: CHICKEN_SNAPSHOT.id
+          }
+        : null)),
+      getSnapshot: vi.fn(() => Promise.reject(
         new Error(`snapshot provider leaked ${CHICKEN_SNAPSHOT.id}`)
       ))
     })]
@@ -672,7 +693,7 @@ describe('ingredient photo commands', () => {
   });
 
   test('replays recognition without calling vision or nutrition twice', async () => {
-    const { commands, nutrition, repository, vision } = createHarness();
+    const { commands, nutritionFixture, repository, visionFixture } = createHarness();
     await createAndRegisterPhoto(commands);
     const envelope = {
       expectedVersion: 2,
@@ -684,9 +705,9 @@ describe('ingredient photo commands', () => {
     const replay = await commands.recognizeIngredientPhoto('user-a', envelope);
 
     expect(replay).toEqual(first);
-    expect(vision.recognize).toHaveBeenCalledTimes(1);
-    expect(nutrition.resolveCanonicalName).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(nutrition).getSnapshot.mock.calls).toHaveLength(1);
+    expect(visionFixture.recognize.mock.calls).toHaveLength(1);
+    expect(nutritionFixture.resolveCanonicalName.mock.calls).toHaveLength(1);
+    expect(nutritionFixture.getSnapshot.mock.calls).toHaveLength(1);
     expect((await repository.read('user-a')).ingredientPhotoVersions).toHaveLength(3);
   });
 
@@ -696,7 +717,7 @@ describe('ingredient photo commands', () => {
       code: 'provider_unavailable'
     });
     const vision: VisionProvider = {
-      recognize: vi.fn(async () => Promise.reject(providerError))
+      recognize: vi.fn(() => Promise.reject(providerError))
     };
     const { commands, repository } = createHarness({ vision });
     await createAndRegisterPhoto(commands);
@@ -757,7 +778,7 @@ describe('ingredient photo commands', () => {
   });
 
   test('checks recognition version and identity before calling the Provider', async () => {
-    const { commands, vision } = createHarness();
+    const { commands, visionFixture } = createHarness();
     await createAndRegisterPhoto(commands);
 
     await expect(commands.recognizeIngredientPhoto('user-a', {
@@ -770,7 +791,7 @@ describe('ingredient photo commands', () => {
       idempotencyKey: 'photo-recognize-missing-001',
       payload: { photoId: 'missing-photo' }
     })).rejects.toBeInstanceOf(IngredientPhotoNotFoundError);
-    expect(vision.recognize).not.toHaveBeenCalled();
+    expect(visionFixture.recognize.mock.calls).toHaveLength(0);
   });
 
   test('atomically confirms a selected candidate and creates one inventory version', async () => {

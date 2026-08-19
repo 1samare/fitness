@@ -134,7 +134,8 @@ export class ResilientVisionProvider implements VisionProvider {
 }
 
 export class UnavailableVisionProvider implements VisionProvider {
-  public recognize(_input: { readonly privateFileId: string; readonly requestId: string }): Promise<never> {
+  public recognize(input: { readonly privateFileId: string; readonly requestId: string }): Promise<never> {
+    void input;
     return Promise.reject(new ProviderUnavailableError('vision_provider_unavailable'));
   }
 }
@@ -151,7 +152,7 @@ function callWithTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T
       },
       (error: unknown) => {
         clearTimeout(timer);
-        reject(error);
+        reject(error instanceof Error ? error : new ProviderUnavailableError('request_rejected'));
       }
     );
   });
