@@ -63,9 +63,15 @@ function stored(userId: string, photos: readonly IngredientPhotoVersion[], id: s
   return { _id: id, schemaVersion: 6, state: { ...state(photos), userId } };
 }
 
+function sortableString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
 class FakeQueryDatabase implements CloudBasePhotoCleanupQueryDatabase {
   public readonly filters: unknown[] = [];
   public readonly limits: number[] = [];
+  public readonly skips: number[] = [];
+  public readonly orders: Array<readonly [string, 'asc' | 'desc']> = [];
 
   public constructor(private readonly documents: readonly unknown[]) {}
 
@@ -78,14 +84,56 @@ class FakeQueryDatabase implements CloudBasePhotoCleanupQueryDatabase {
     return {
       where: (filter: Readonly<Record<string, unknown>>) => {
         this.filters.push(filter);
-        return {
-          limit: (limit: number) => {
-            this.limits.push(limit);
-            return {
-              get: () => Promise.resolve({ data: this.documents })
+        const makeQuery = (
+          orderBy: readonly (readonly [string, 'asc' | 'desc'])[] = [],
+          skip = 0,
+          limit: number | null = null
+        ) => ({
+          orderBy: (path: string, direction: 'asc' | 'desc') => {
+            this.orders.push([path, direction]);
+            return makeQuery([...orderBy, [path, direction]], skip, limit);
+          },
+          skip: (value: number) => {
+            this.skips.push(value);
+            return makeQuery(orderBy, value, limit);
+          },
+          limit: (value: number) => {
+            this.limits.push(value);
+            return makeQuery(orderBy, skip, value);
+          },
+          get: () => {
+            const condition = filter['state.nextPhotoCleanupAt'] as {
+              readonly operator?: unknown;
+              readonly value?: unknown;
             };
+            const getPath = (document: unknown, path: string): unknown => path.split('.').reduce(
+              (current: unknown, segment) => (
+                typeof current === 'object' && current !== null && !Array.isArray(current)
+                  ? (current as Record<string, unknown>)[segment]
+                  : undefined
+              ),
+              document
+            );
+            const filtered = this.documents.filter((document) => {
+              const pointer = getPath(document, 'state.nextPhotoCleanupAt');
+              return condition.operator === 'lte'
+                && typeof condition.value === 'string'
+                && typeof pointer === 'string'
+                && pointer <= condition.value;
+            });
+            filtered.sort((left, right) => {
+              for (const [path, direction] of orderBy) {
+                const leftValue = getPath(left, path);
+                const rightValue = getPath(right, path);
+                const compared = sortableString(leftValue).localeCompare(sortableString(rightValue));
+                if (compared !== 0) return direction === 'asc' ? compared : -compared;
+              }
+              return 0;
+            });
+            return Promise.resolve({ data: filtered.slice(skip, limit === null ? undefined : skip + limit) });
           }
-        };
+        });
+        return makeQuery();
       }
     };
   }
@@ -112,6 +160,10 @@ describe('CloudBasePhotoCleanupTargetRepository', () => {
       'state.nextPhotoCleanupAt': { operator: 'lte', value: before }
     }]);
     expect(database.limits).toEqual([50]);
+    expect(database.orders).toEqual([
+      ['state.nextPhotoCleanupAt', 'asc'],
+      ['state.userId', 'asc']
+    ]);
     expect(targets).toEqual([
       { userId: 'user-a', photoId: 'photo-a' },
       { userId: 'user-b', photoId: 'photo-z' },
@@ -165,12 +217,80 @@ describe('CloudBasePhotoCleanupTargetRepository', () => {
     expect(targets.at(-1)).toEqual({ userId: 'user-many', photoId: 'photo-49' });
   });
 
-  test('rejects due documents that do not carry a server-persisted trusted user identity', async () => {
-    const rawState = state([photo('user-a', 'photo-a', before)]);
-    const database = new FakeQueryDatabase([{ schemaVersion: 6, state: rawState }]);
+  test('isolates a corrupt due document between valid trusted-user documents', async () => {
+    const corruptState = state([photo('untrusted', 'photo-corrupt', before)]);
+    const database = new FakeQueryDatabase([
+      stored('user-a', [photo('user-a', 'photo-a', before)], 'document-a'),
+      { schemaVersion: 6, state: corruptState },
+      stored('user-z', [photo('user-z', 'photo-z', before)], 'document-z')
+    ]);
 
     await expect(new CloudBasePhotoCleanupTargetRepository(database).listDueTargets({
       before, limit: 50
-    })).rejects.toThrow();
+    })).resolves.toEqual([
+      { userId: 'user-a', photoId: 'photo-a' },
+      { userId: 'user-z', photoId: 'photo-z' }
+    ]);
+  });
+
+  test('orders before a real document limit and overfetches past corrupt rows for the global first fifty', async () => {
+    const corrupt = Array.from({ length: 50 }, (_, index) => ({
+      schemaVersion: 6,
+      state: {
+        ...state([photo(
+          'untrusted',
+          `photo-corrupt-${String(index)}`,
+          '2026-08-19T20:00:00.000Z'
+        )]),
+        userId: ''
+      }
+    }));
+    const valid = Array.from({ length: 51 }, (_, index) => {
+      const userId = `user-${String(index).padStart(2, '0')}`;
+      return stored(userId, [
+        photo(userId, `photo-b-${String(index).padStart(2, '0')}`, before),
+        ...(index === 0 ? [photo(userId, 'photo-a', before)] : [])
+      ], `document-${String(index)}`);
+    });
+    const database = new FakeQueryDatabase([...valid.reverse(), ...corrupt]);
+
+    const targets = await new CloudBasePhotoCleanupTargetRepository(database).listDueTargets({
+      before,
+      limit: 50
+    });
+
+    expect(targets).toHaveLength(50);
+    expect(targets.slice(0, 3)).toEqual([
+      { userId: 'user-00', photoId: 'photo-a' },
+      { userId: 'user-00', photoId: 'photo-b-00' },
+      { userId: 'user-01', photoId: 'photo-b-01' }
+    ]);
+    expect(database.limits).toEqual([50, 50, 50]);
+    expect(database.skips).toEqual([0, 50, 100]);
+  });
+
+  test('bounds one cleanup scan even when every leading due document is corrupt', async () => {
+    const corrupt = Array.from({ length: 300 }, (_, index) => ({
+      schemaVersion: 6,
+      state: {
+        ...state([photo(
+          'untrusted',
+          `photo-corrupt-${String(index)}`,
+          '2026-08-19T20:00:00.000Z'
+        )]),
+        userId: ''
+      }
+    }));
+    const database = new FakeQueryDatabase([
+      ...corrupt,
+      stored('user-valid', [photo('user-valid', 'photo-valid', before)], 'document-valid')
+    ]);
+
+    await expect(new CloudBasePhotoCleanupTargetRepository(database).listDueTargets({
+      before,
+      limit: 50
+    })).resolves.toEqual([]);
+    expect(database.limits).toEqual([50, 50, 50, 50, 50]);
+    expect(database.skips).toEqual([0, 50, 100, 150, 200]);
   });
 });

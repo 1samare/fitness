@@ -6,12 +6,16 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const cloudFunctionsBuildRoot = path.join(repositoryRoot, '.build', 'cloudfunctions');
 const functionAllowlist = ['planning-api', 'photo-cleanup'];
 
+function sourceDirectory(functionName) {
+  return functionName === 'planning-api' ? path.join('dist', 'deploy') : 'dist';
+}
+
 for (const functionName of functionAllowlist) {
   const sourceEntry = path.join(
     repositoryRoot,
     'cloudfunctions',
     functionName,
-    'dist',
+    sourceDirectory(functionName),
     'index.js'
   );
   await access(sourceEntry);
@@ -32,7 +36,7 @@ for (const functionName of functionAllowlist) {
     repositoryRoot,
     'cloudfunctions',
     functionName,
-    'dist',
+    sourceDirectory(functionName),
     'index.js'
   );
   const destination = path.join(cloudFunctionsBuildRoot, functionName);

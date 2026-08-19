@@ -7,7 +7,10 @@ import type {
   CloudBaseTransaction
 } from '@fitness/persistence';
 import { createMain } from './index';
-import { createRuntimePhotoCleanupHandler } from './runtime-handler';
+import {
+  createCloudBaseRuntimePrivatePhotoStorage,
+  createRuntimePhotoCleanupHandler
+} from './runtime-handler';
 
 class EmptyDocumentReference implements CloudBaseDocumentReference {
   public get(): Promise<{ readonly data?: unknown }> { return Promise.resolve({}); }
@@ -20,9 +23,15 @@ class EmptyDatabase implements CloudBaseDatabase, CloudBaseTransaction, CloudBas
   public collection() {
     return {
       doc: () => new EmptyDocumentReference(),
-      where: () => ({
-        limit: () => ({ get: () => Promise.resolve({ data: [] }) })
-      })
+      where: () => {
+        const query = {
+          orderBy: () => query,
+          skip: () => query,
+          limit: () => query,
+          get: () => Promise.resolve({ data: [] })
+        };
+        return query;
+      }
     };
   }
 
@@ -37,6 +46,20 @@ const storage: PrivatePhotoStorage = {
 };
 
 describe('photo cleanup runtime', () => {
+  test('passes the default CloudBase client numeric delete DTO through the storage boundary', async () => {
+    const storage = createCloudBaseRuntimePrivatePhotoStorage({
+      downloadFile: vi.fn(),
+      deleteFile: vi.fn().mockResolvedValue({
+        errMsg: 'deleteFile:ok',
+        fileList: [{ fileID: 'cloud://env.bucket/photo.jpg', status: 0, errMsg: 'ok' }]
+      })
+    });
+
+    await expect(storage.deletePrivateFile({
+      privateFileId: 'cloud://env.bucket/photo.jpg'
+    })).resolves.toBe('deleted');
+  });
+
   test('composes CloudBase persistence and storage boundaries without scanning when nothing is due', async () => {
     const logs: unknown[] = [];
     const handler = createRuntimePhotoCleanupHandler({

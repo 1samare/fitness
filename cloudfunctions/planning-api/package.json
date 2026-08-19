@@ -5,7 +5,7 @@
   "type": "commonjs",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && tsup --config tsup.deploy.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start:local": "tcb-ff --source=dist/index.js --target=main --logEventContext=false --logHeaderBody=false",
     "dry-run": "tcb-ff --source=dist/index.js --target=main --dry-run",

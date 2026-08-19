@@ -18,6 +18,59 @@ describe('CloudBasePrivatePhotoStorage', () => {
       .resolves.toBe('not_found');
   });
 
+  test('maps the wx-server-sdk numeric delete result without trusting errMsg text', async () => {
+    const successfulClient = {
+      downloadFile: vi.fn(),
+      deleteFile: vi.fn().mockResolvedValue({
+        errMsg: 'deleteFile:ok',
+        fileList: [{ fileID: 'cloud://env.bucket/photo.jpg', status: 0, errMsg: 'ok' }]
+      })
+    };
+    const missingClient = {
+      downloadFile: vi.fn(),
+      deleteFile: vi.fn().mockResolvedValue({
+        errMsg: 'deleteFile:ok',
+        fileList: [{
+          fileID: 'cloud://env.bucket/missing.jpg',
+          status: -503003,
+          errMsg: 'untrusted provider wording'
+        }]
+      })
+    };
+
+    await expect(new CloudBasePrivatePhotoStorage(successfulClient).deletePrivateFile({
+      privateFileId: 'cloud://env.bucket/photo.jpg'
+    })).resolves.toBe('deleted');
+    await expect(new CloudBasePrivatePhotoStorage(missingClient).deletePrivateFile({
+      privateFileId: 'cloud://env.bucket/missing.jpg'
+    })).resolves.toBe('not_found');
+  });
+
+  test('fails closed for unknown wx-server-sdk numeric deletion statuses', async () => {
+    const client = {
+      downloadFile: vi.fn(),
+      deleteFile: vi.fn().mockResolvedValue({
+        fileList: [{ fileID: 'cloud://env.bucket/photo.jpg', status: -1, errMsg: 'ok' }]
+      })
+    };
+
+    await expect(new CloudBasePrivatePhotoStorage(client).deletePrivateFile({
+      privateFileId: 'cloud://env.bucket/photo.jpg'
+    })).rejects.toMatchObject({ code: 'storage_unavailable' });
+
+    client.deleteFile.mockResolvedValue({
+      fileList: [{
+        fileID: 'cloud://env.bucket/photo.jpg',
+        code: 'UNKNOWN_LEGACY_CODE',
+        status: 0,
+        errMsg: 'ok'
+      }]
+    });
+    await expect(new CloudBasePrivatePhotoStorage(client).deletePrivateFile({
+      privateFileId: 'cloud://env.bucket/photo.jpg'
+    })).rejects.toMatchObject({ code: 'storage_unavailable' });
+  });
+
   test('accepts a PNG signature and rejects an oversized private image', async () => {
     const client = {
       downloadFile: vi.fn()

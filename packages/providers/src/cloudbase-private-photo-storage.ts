@@ -29,9 +29,9 @@ export class CloudBasePrivatePhotoStorage implements PrivatePhotoStorage {
     } catch {
       throw new StorageUnavailableError();
     }
-    const code = deletionCode(rawResponse);
-    if (code === 'SUCCESS') return 'deleted';
-    if (code === 'STORAGE_FILE_NONEXIST' || code === 'NOT_FOUND') return 'not_found';
+    const outcome = deletionOutcome(rawResponse);
+    if (outcome === 'deleted') return 'deleted';
+    if (outcome === 'not_found') return 'not_found';
     throw new StorageUnavailableError();
   }
 
@@ -59,14 +59,20 @@ function mediaTypeFromSignature(content: Uint8Array): 'image/jpeg' | 'image/png'
   return isPng ? 'image/png' : null;
 }
 
-function deletionCode(value: unknown): string | null {
+function deletionOutcome(value: unknown): 'deleted' | 'not_found' | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const fileList = (value as { readonly fileList?: unknown }).fileList;
   if (!isSingleEntryList(fileList)) return null;
   const [entry] = fileList;
   if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return null;
   const code = (entry as { readonly code?: unknown }).code;
-  return typeof code === 'string' ? code : null;
+  if (code === 'SUCCESS') return 'deleted';
+  if (code === 'STORAGE_FILE_NONEXIST' || code === 'NOT_FOUND') return 'not_found';
+  if (code !== undefined) return null;
+  const status = (entry as { readonly status?: unknown }).status;
+  if (status === 0) return 'deleted';
+  if (status === -503003) return 'not_found';
+  return null;
 }
 
 function isSingleEntryList(value: unknown): value is readonly [unknown] {

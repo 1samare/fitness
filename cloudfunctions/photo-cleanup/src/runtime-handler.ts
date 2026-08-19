@@ -7,6 +7,7 @@ import {
   CloudBasePlanningRepository,
   type CloudBaseDatabase,
   type CloudBaseDocumentReference,
+  type CloudBasePhotoCleanupQuery,
   type CloudBasePhotoCleanupQueryDatabase,
   type CloudBaseTransaction
 } from '@fitness/persistence';
@@ -44,10 +45,9 @@ interface RawTransactionCollection {
 }
 
 interface RawQuery {
+  orderBy(path: string, direction: 'asc' | 'desc'): unknown;
+  skip(value: number): unknown;
   limit(value: number): unknown;
-}
-
-interface RawLimitedQuery {
   get(): unknown;
 }
 
@@ -86,11 +86,11 @@ function isRawTransactionCollection(value: unknown): value is RawTransactionColl
 }
 
 function isRawQuery(value: unknown): value is RawQuery {
-  return isRecord(value) && typeof value.limit === 'function';
-}
-
-function isRawLimitedQuery(value: unknown): value is RawLimitedQuery {
-  return isRecord(value) && typeof value.get === 'function';
+  return isRecord(value)
+    && typeof value.orderBy === 'function'
+    && typeof value.skip === 'function'
+    && typeof value.limit === 'function'
+    && typeof value.get === 'function';
 }
 
 function isRawTransaction(value: unknown): value is RawTransaction {
@@ -143,6 +143,20 @@ function adaptTransaction(value: unknown): CloudBaseTransaction {
   };
 }
 
+function adaptPhotoCleanupQuery(value: unknown): CloudBasePhotoCleanupQuery {
+  if (!isRawQuery(value)) throw new Error('CloudBase SDK returned an invalid query');
+  return {
+    orderBy: (path, direction) => adaptPhotoCleanupQuery(value.orderBy(path, direction)),
+    skip: (offset) => adaptPhotoCleanupQuery(value.skip(offset)),
+    limit: (limit) => adaptPhotoCleanupQuery(value.limit(limit)),
+    async get() {
+      const result = await requirePromise(value.get());
+      if (!isRecord(result)) throw new Error('CloudBase SDK returned an invalid query result');
+      return result.data === undefined ? {} : { data: result.data };
+    }
+  };
+}
+
 export function adaptPhotoCleanupDatabase(
   value: unknown
 ): CloudBaseDatabase & CloudBasePhotoCleanupQueryDatabase {
@@ -158,22 +172,7 @@ export function adaptPhotoCleanupDatabase(
         doc: (id) => adaptDocumentReference(rawCollection.doc(id)),
         where(filter) {
           const rawQuery = rawCollection.where(filter);
-          if (!isRawQuery(rawQuery)) throw new Error('CloudBase SDK returned an invalid query');
-          return {
-            limit(limit) {
-              const rawLimited = rawQuery.limit(limit);
-              if (!isRawLimitedQuery(rawLimited)) {
-                throw new Error('CloudBase SDK returned an invalid limited query');
-              }
-              return {
-                async get() {
-                  const result = await requirePromise(rawLimited.get());
-                  if (!isRecord(result)) throw new Error('CloudBase SDK returned an invalid query result');
-                  return result.data === undefined ? {} : { data: result.data };
-                }
-              };
-            }
-          };
+          return adaptPhotoCleanupQuery(rawQuery);
         }
       };
     },
@@ -219,12 +218,18 @@ function defaultCloudClient(): CloudBasePrivateFileClient {
   };
 }
 
+export function createCloudBaseRuntimePrivatePhotoStorage(
+  client: CloudBasePrivateFileClient = defaultCloudClient()
+): PrivatePhotoStorage {
+  return new CloudBasePrivatePhotoStorage(client);
+}
+
 export function createDefaultRuntimePhotoCleanupHandler(): () => Promise<PhotoCleanupSummary> {
   cloud.init();
   const database = adaptPhotoCleanupDatabase(cloud.database());
   return createRuntimePhotoCleanupHandler({
     database,
-    storage: new CloudBasePrivatePhotoStorage(defaultCloudClient()),
+    storage: createCloudBaseRuntimePrivatePhotoStorage(),
     logger: cloud.logger()
   });
 }

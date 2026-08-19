@@ -78,6 +78,13 @@ describe('CloudBase cleanup deployment boundaries', () => {
 
     const buildRoot = path.join(repositoryRoot, '.build', 'cloudfunctions');
     expect(readdirSync(buildRoot).sort()).toEqual(['photo-cleanup', 'planning-api']);
+    const forbiddenFixtureSentinels = [
+      'TEST_INGREDIENT_VISION_RESPONSE',
+      'TEST_MEAL_PLANNING_NUTRITION_SNAPSHOTS',
+      'fixture-vision-request-v1',
+      'FITNESS-TEST-FIXTURE-V2',
+      'fixture-2026-08-10'
+    ];
     for (const functionName of ['photo-cleanup', 'planning-api']) {
       const directory = path.join(buildRoot, functionName);
       expect(readdirSync(directory).sort()).toEqual(['index.js', 'package.json']);
@@ -87,7 +94,11 @@ describe('CloudBase cleanup deployment boundaries', () => {
         expect(entry.endsWith('.map')).toBe(false);
         expect(entry.includes('fixture')).toBe(false);
       }
-      expect(existsSync(path.join(directory, 'index.js'))).toBe(true);
+      const entryPath = path.join(directory, 'index.js');
+      expect(existsSync(entryPath)).toBe(true);
+      const bundledSource = readFileSync(entryPath, 'utf8');
+      expect(forbiddenFixtureSentinels.filter((sentinel) => bundledSource.includes(sentinel)))
+        .toEqual([]);
     }
   }, 30_000);
 });

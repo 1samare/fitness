@@ -4,11 +4,13 @@ import { decodePlanningDocumentForCleanup } from './cloudbase-planning-repositor
 
 const COLLECTION_NAME = 'planning_user_states';
 const MAXIMUM_BATCH_SIZE = 50;
+const MAXIMUM_SCANNED_DOCUMENTS = MAXIMUM_BATCH_SIZE * 5;
 
-interface CloudBasePhotoCleanupQuery {
-  limit(value: number): {
-    get(): Promise<{ readonly data?: unknown }>;
-  };
+export interface CloudBasePhotoCleanupQuery {
+  orderBy(path: string, direction: 'asc' | 'desc'): CloudBasePhotoCleanupQuery;
+  skip(value: number): CloudBasePhotoCleanupQuery;
+  limit(value: number): CloudBasePhotoCleanupQuery;
+  get(): Promise<{ readonly data?: unknown }>;
 }
 
 interface CloudBasePhotoCleanupCollection {
@@ -26,6 +28,10 @@ function compareCodeUnits(left: string, right: string): number {
   return 0;
 }
 
+function isUnknownArray(value: unknown): value is readonly unknown[] {
+  return Array.isArray(value);
+}
+
 export class CloudBasePhotoCleanupTargetRepository implements PhotoCleanupTargetRepository {
   public constructor(private readonly database: CloudBasePhotoCleanupQueryDatabase) {}
 
@@ -35,27 +41,46 @@ export class CloudBasePhotoCleanupTargetRepository implements PhotoCleanupTarget
   }): Promise<readonly { readonly userId: string; readonly photoId: string }[]> {
     const limit = Math.max(0, Math.min(MAXIMUM_BATCH_SIZE, Math.floor(input.limit)));
     if (limit === 0) return [];
-    const response = await this.database.collection(COLLECTION_NAME)
+    const query = this.database.collection(COLLECTION_NAME)
       .where({
         'state.nextPhotoCleanupAt': this.database.command.lte(input.before)
       })
-      .limit(limit)
-      .get();
-    if (!Array.isArray(response.data)) throw new Error('CloudBase cleanup query returned invalid data');
+      .orderBy('state.nextPhotoCleanupAt', 'asc')
+      .orderBy('state.userId', 'asc');
 
-    const dueTargets = response.data.flatMap((document) => {
-      const decoded = decodePlanningDocumentForCleanup(document);
-      return latestIngredientPhotoVersions(decoded.state.ingredientPhotoVersions)
-        .filter((photo) => (
-          photo.storageStatus !== 'deleted'
-          && photo.nextCleanupAt !== null
-          && photo.nextCleanupAt <= input.before
-        ))
-        .map((photo) => ({
-          userId: decoded.userId,
-          photoId: photo.photoId,
-          nextCleanupAt: photo.nextCleanupAt
-        }));
+    const documents: unknown[] = [];
+    let offset = 0;
+    while (offset < MAXIMUM_SCANNED_DOCUMENTS) {
+      const pageLimit = Math.min(
+        MAXIMUM_BATCH_SIZE,
+        MAXIMUM_SCANNED_DOCUMENTS - offset
+      );
+      const response = await query.skip(offset).limit(pageLimit).get();
+      if (!isUnknownArray(response.data) || response.data.length > pageLimit) {
+        throw new Error('CloudBase cleanup query returned invalid data');
+      }
+      for (const document of response.data) documents.push(document);
+      if (response.data.length < pageLimit) break;
+      offset += response.data.length;
+    }
+
+    const dueTargets = documents.flatMap((document) => {
+      try {
+        const decoded = decodePlanningDocumentForCleanup(document);
+        return latestIngredientPhotoVersions(decoded.state.ingredientPhotoVersions)
+          .filter((photo) => (
+            photo.storageStatus !== 'deleted'
+            && photo.nextCleanupAt !== null
+            && photo.nextCleanupAt <= input.before
+          ))
+          .map((photo) => ({
+            userId: decoded.userId,
+            photoId: photo.photoId,
+            nextCleanupAt: photo.nextCleanupAt
+          }));
+      } catch {
+        return [];
+      }
     });
     dueTargets.sort((left, right) => (
       compareCodeUnits(left.nextCleanupAt ?? '', right.nextCleanupAt ?? '')
