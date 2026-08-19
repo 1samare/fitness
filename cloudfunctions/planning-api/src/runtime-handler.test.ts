@@ -6,7 +6,11 @@ import type {
 } from '@fitness/persistence';
 import type { PrivatePhotoStorage } from '@fitness/domain';
 import { CloudBasePlanningRepository } from '@fitness/persistence';
-import { createRuntimePlanningHandler } from './runtime-handler';
+import {
+  createProviderObservationSink,
+  createRuntimePlanningHandler,
+  type ProviderObservationLogger
+} from './runtime-handler';
 
 class FakeDocumentReference implements CloudBaseDocumentReference {
   public constructor(
@@ -450,6 +454,127 @@ describe('runtime planning handler', () => {
     expect(JSON.stringify(observations)).not.toMatch(
       /cloud:\/\/|ingredient-photos\/|cloud-vision-request-1|privateFileId/
     );
+  });
+
+  test('Provider observation sink preserves available cost and stable failure semantics', () => {
+    const entries: unknown[] = [];
+    const sink = createProviderObservationSink({
+      info: (entry) => entries.push(entry)
+    });
+
+    sink({
+      provider: 'cloudbase-ai-vision',
+      requestId: 'application-request-success',
+      attempt: 1,
+      latencyMs: 21,
+      status: 'succeeded',
+      estimatedCostUnits: 2.5
+    });
+    sink({
+      provider: 'cloudbase-ai-vision',
+      requestId: 'application-request-failure',
+      attempt: 2,
+      latencyMs: 8000,
+      status: 'failed',
+      stableErrorCode: 'provider_unavailable'
+    });
+
+    expect(entries).toEqual([
+      {
+        event: 'vision_provider_observation',
+        provider: 'cloudbase-ai-vision',
+        requestId: 'application-request-success',
+        attempt: 1,
+        latencyMs: 21,
+        status: 'succeeded',
+        stableErrorCode: null,
+        estimatedCostUnits: 2.5
+      },
+      {
+        event: 'vision_provider_observation',
+        provider: 'cloudbase-ai-vision',
+        requestId: 'application-request-failure',
+        attempt: 2,
+        latencyMs: 8000,
+        status: 'failed',
+        stableErrorCode: 'provider_unavailable',
+        estimatedCostUnits: null
+      }
+    ]);
+  });
+
+  test('default cloud entry records a sanitized structured Provider observation', async () => {
+    const database = new FakeDatabase();
+    const loggedEntries: Parameters<ProviderObservationLogger['info']>[0][] = [];
+    const info = vi.fn((entry: Parameters<ProviderObservationLogger['info']>[0]) => {
+      loggedEntries.push(entry);
+    });
+    const callFunction = vi.fn((input: unknown) => {
+      void input;
+      return Promise.resolve({
+        result: { requestId: 'provider-request-secret', candidates: [] }
+      });
+    });
+    const previousRuntimeMode = process.env.FITNESS_RUNTIME_MODE;
+    const previousStoragePrefix = process.env.CLOUDBASE_STORAGE_FILE_ID_PREFIX;
+    const previousVisionFunction = process.env.FITNESS_VISION_FUNCTION_NAME;
+    process.env.FITNESS_RUNTIME_MODE = 'cloud';
+    process.env.CLOUDBASE_STORAGE_FILE_ID_PREFIX = PHOTO_PREFIX;
+    process.env.FITNESS_VISION_FUNCTION_NAME = 'fitness-vision';
+    vi.resetModules();
+    vi.doMock('wx-server-sdk', () => ({
+      init: vi.fn(),
+      database: () => database,
+      logger: () => ({ info }),
+      callFunction,
+      downloadFile: () => Promise.resolve({
+        fileContent: Uint8Array.from([0xff, 0xd8, 0xff])
+      }),
+      deleteFile: () => Promise.resolve({ fileList: [{ code: 'SUCCESS' }] })
+    }));
+    try {
+      const runtime = await import('./runtime-handler');
+      const defaultHandler = runtime.createDefaultRuntimePlanningHandler();
+
+      const response = await runPhotoToRecognition(
+        defaultHandler,
+        PHOTO_PREFIX,
+        'default-cloud-observation-user'
+      );
+
+      expect(response).toMatchObject({
+        success: true,
+        data: { kind: 'ingredient_photo_recognized' }
+      });
+      expect(loggedEntries).toHaveLength(1);
+      const loggedEntry = loggedEntries[0];
+      if (loggedEntry === undefined) throw new Error('Expected one Provider observation');
+      expect(loggedEntries[0]).toEqual({
+        event: 'vision_provider_observation',
+        provider: 'cloudbase-ai-vision',
+        requestId: loggedEntry.requestId,
+        attempt: 1,
+        latencyMs: loggedEntry.latencyMs,
+        status: 'succeeded',
+        stableErrorCode: null,
+        estimatedCostUnits: null
+      });
+      expect(loggedEntry.requestId).toMatch(/^ingredient-photo-recognition-request-/);
+      expect(Number.isFinite(loggedEntry.latencyMs)).toBe(true);
+      const serialized = JSON.stringify(loggedEntries);
+      expect(serialized).not.toMatch(
+        /default-cloud-observation-user|provider-request-secret|cloud:\/\/|ingredient-photos\/|privateFileId|cloudPath|photoId|raw|prompt|body/
+      );
+    } finally {
+      if (previousRuntimeMode === undefined) delete process.env.FITNESS_RUNTIME_MODE;
+      else process.env.FITNESS_RUNTIME_MODE = previousRuntimeMode;
+      if (previousStoragePrefix === undefined) delete process.env.CLOUDBASE_STORAGE_FILE_ID_PREFIX;
+      else process.env.CLOUDBASE_STORAGE_FILE_ID_PREFIX = previousStoragePrefix;
+      if (previousVisionFunction === undefined) delete process.env.FITNESS_VISION_FUNCTION_NAME;
+      else process.env.FITNESS_VISION_FUNCTION_NAME = previousVisionFunction;
+      vi.doUnmock('wx-server-sdk');
+      vi.resetModules();
+    }
   });
 
   test.each([undefined, '', 'https://attacker.example/', 'cloud:///missing-bucket'])((

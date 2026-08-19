@@ -53,6 +53,19 @@ export interface RuntimeCloudClient extends CloudBasePrivateFileClient {
   }): Promise<unknown>;
 }
 
+export interface ProviderObservationLogger {
+  info(entry: {
+    readonly event: 'vision_provider_observation';
+    readonly provider: string;
+    readonly requestId: string;
+    readonly attempt: number;
+    readonly latencyMs: number;
+    readonly status: 'succeeded' | 'failed';
+    readonly stableErrorCode: 'provider_unavailable' | null;
+    readonly estimatedCostUnits: number | null;
+  }): void;
+}
+
 export type RuntimePlanningHandlerOptions = CommonRuntimeOptions & (
   | {
       readonly runtimeMode: 'cloud';
@@ -157,6 +170,23 @@ function defaultCloudClient(): RuntimeCloudClient {
 
 function validStorageFileIdPrefix(value: string | undefined): value is string {
   return value !== undefined && /^cloud:\/\/[^/\s]+\/?$/.test(value);
+}
+
+export function createProviderObservationSink(
+  logger: ProviderObservationLogger
+): (event: ProviderObservation) => void {
+  return (event) => {
+    logger.info({
+      event: 'vision_provider_observation',
+      provider: event.provider,
+      requestId: event.requestId,
+      attempt: event.attempt,
+      latencyMs: event.latencyMs,
+      status: event.status,
+      stableErrorCode: event.stableErrorCode ?? null,
+      estimatedCostUnits: event.estimatedCostUnits ?? null
+    });
+  };
 }
 
 function isIngredientPhotoAction(input: unknown): boolean {
@@ -265,6 +295,7 @@ export function createDefaultRuntimePlanningHandler() {
     environment: {
       CLOUDBASE_STORAGE_FILE_ID_PREFIX: process.env.CLOUDBASE_STORAGE_FILE_ID_PREFIX,
       FITNESS_VISION_FUNCTION_NAME: process.env.FITNESS_VISION_FUNCTION_NAME
-    }
+    },
+    observeProvider: createProviderObservationSink(cloud.logger())
   });
 }
