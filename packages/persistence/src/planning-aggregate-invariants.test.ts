@@ -457,7 +457,176 @@ function validPhotoVersion(userId: string): IngredientPhotoVersion {
   };
 }
 
+const photoCandidate = {
+  id: 'ingredient-candidate-1',
+  foodId: 'fixture-food',
+  nutritionSnapshotId: 'snapshot-fixture-food-v1',
+  canonicalNameZh: '测试食材',
+  confidence: 0.9,
+  foodState: 'raw' as const
+};
+
+function recognizedPhotoVersions(userId: string): readonly IngredientPhotoVersion[] {
+  const awaitingUpload = validPhotoVersion(userId);
+  const uploaded = {
+    ...awaitingUpload,
+    id: 'ingredient-photo-version-2',
+    revision: 2,
+    workflowStatus: 'uploaded' as const
+  };
+  return [
+    awaitingUpload,
+    uploaded,
+    {
+      ...uploaded,
+      id: 'ingredient-photo-version-3',
+      revision: 3,
+      workflowStatus: 'recognized' as const,
+      candidates: [photoCandidate]
+    }
+  ];
+}
+
+async function stateWithConfirmedPhoto(): Promise<PlanningAggregateState> {
+  const state = await createValidMealState();
+  const previousInventory = state.inventories[0];
+  if (previousInventory === undefined) throw new Error('Expected initial inventory');
+  const confirmedGrams = 125;
+  const inventory = {
+    ...previousInventory,
+    id: 'inventory-2',
+    version: 2,
+    items: previousInventory.items.map((item) => ({
+      ...item,
+      availableGrams: item.foodId === photoCandidate.foodId
+        ? item.availableGrams + confirmedGrams
+        : item.availableGrams
+    }))
+  };
+  const recognized = recognizedPhotoVersions('user-a');
+  const latest = recognized[2];
+  if (latest === undefined) throw new Error('Expected recognized photo');
+  const confirmed = {
+    ...latest,
+    id: 'ingredient-photo-version-4',
+    revision: 4,
+    workflowStatus: 'confirmed' as const,
+    confirmedCandidateId: photoCandidate.id,
+    confirmedGrams,
+    inventoryVersionId: inventory.id
+  };
+  return {
+    ...state,
+    inventories: [...state.inventories, inventory],
+    ingredientPhotoVersions: [...recognized, confirmed],
+    nextPhotoCleanupAt: confirmed.nextCleanupAt
+  };
+}
+
 describe('planning aggregate invariants', () => {
+  test('rejects ingredient photo records owned by another user', async () => {
+    const state = await createValidState();
+    expectCorrupt({
+      ...state,
+      ingredientPhotoVersions: [validPhotoVersion('user-b')],
+      nextPhotoCleanupAt: '2026-08-19T23:00:00.000Z'
+    });
+  });
+
+  test('rejects changes to immutable ingredient photo storage identity', async () => {
+    const state = await createValidState();
+    const initial = validPhotoVersion('user-a');
+    expectCorrupt({
+      ...state,
+      ingredientPhotoVersions: [initial, {
+        ...initial,
+        id: 'ingredient-photo-version-2',
+        revision: 2,
+        workflowStatus: 'uploaded',
+        expectedCloudPath: 'ingredient-photos/ingredient-photo-1/changed.jpg'
+      }],
+      nextPhotoCleanupAt: initial.nextCleanupAt
+    });
+  });
+
+  test('rejects illegal ingredient photo workflow transitions', async () => {
+    const state = await createValidState();
+    const initial = validPhotoVersion('user-a');
+    expectCorrupt({
+      ...state,
+      ingredientPhotoVersions: [initial, {
+        ...initial,
+        id: 'ingredient-photo-version-2',
+        revision: 2,
+        workflowStatus: 'recognized',
+        candidates: [photoCandidate]
+      }],
+      nextPhotoCleanupAt: initial.nextCleanupAt
+    });
+  });
+
+  test('rejects an initial photo cleanup time that is not exactly 23 hours after upload', async () => {
+    const state = await createValidState();
+    const photo = {
+      ...validPhotoVersion('user-a'),
+      deleteDueAt: '2026-08-19T22:00:00.000Z',
+      nextCleanupAt: '2026-08-19T22:00:00.000Z'
+    };
+    expectCorrupt({
+      ...state,
+      ingredientPhotoVersions: [photo],
+      nextPhotoCleanupAt: photo.nextCleanupAt
+    });
+  });
+
+  test('rejects normalized candidate mutation during confirmation', async () => {
+    const state = await stateWithConfirmedPhoto();
+    const confirmed = state.ingredientPhotoVersions[3];
+    if (confirmed === undefined) throw new Error('Expected confirmed photo');
+    expectCorrupt({
+      ...state,
+      ingredientPhotoVersions: state.ingredientPhotoVersions.map((photo) => (
+        photo.id === confirmed.id
+          ? { ...photo, candidates: [{ ...photoCandidate, canonicalNameZh: '被篡改食材' }] }
+          : photo
+      ))
+    });
+  });
+
+  test('rejects a confirmation that does not reference its recognized candidate', async () => {
+    const state = await stateWithConfirmedPhoto();
+    const confirmed = state.ingredientPhotoVersions[3];
+    if (confirmed === undefined) throw new Error('Expected confirmed photo');
+    expectCorrupt({
+      ...state,
+      ingredientPhotoVersions: state.ingredientPhotoVersions.map((photo) => (
+        photo.id === confirmed.id
+          ? { ...photo, confirmedCandidateId: 'missing-candidate' }
+          : photo
+      ))
+    });
+  });
+
+  test('rejects a confirmed inventory whose exact food delta differs from confirmed grams', async () => {
+    const state = await stateWithConfirmedPhoto();
+    const inventory = state.inventories[1];
+    if (inventory === undefined) throw new Error('Expected confirmed inventory');
+    expectCorrupt({
+      ...state,
+      inventories: state.inventories.map((value) => (
+        value.id === inventory.id
+          ? {
+              ...value,
+              items: value.items.map((item) => ({
+                ...item,
+                availableGrams: item.availableGrams - 1
+              }))
+            }
+          : value
+      ))
+    });
+  });
+
   test('rejects a next photo cleanup pointer that is not derived from latest revisions', async () => {
     const state = await createValidState();
     const corrupt = {

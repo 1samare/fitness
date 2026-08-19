@@ -262,6 +262,14 @@ function assertIngredientPhotoVersions(
     for (let index = 0; index < ordered.length; index += 1) {
       const version = ordered[index];
       if (version === undefined) corrupt();
+      if (index === 0) {
+        const uploadCreatedAt = Date.parse(version.uploadCreatedAt);
+        if (
+          !Number.isFinite(uploadCreatedAt)
+          || version.deleteDueAt !== new Date(uploadCreatedAt + 23 * 60 * 60 * 1_000).toISOString()
+          || version.nextCleanupAt !== version.deleteDueAt
+        ) corrupt();
+      }
       if (
         version.userId !== first.userId
         || version.uploadCreatedAt !== first.uploadCreatedAt
@@ -282,6 +290,8 @@ function assertIngredientPhotoVersions(
           !== (version.recognitionFailureCode === 'no_supported_candidate')
       ) corrupt();
       if (confirmed !== undefined) {
+        const confirmedGrams = version.confirmedGrams;
+        if (confirmedGrams === null) corrupt();
         const inventory = version.inventoryVersionId === null
           ? undefined
           : inventories.get(version.inventoryVersionId);
@@ -289,6 +299,31 @@ function assertIngredientPhotoVersions(
           item.foodId === confirmed.foodId
           && item.nutritionSnapshotId === confirmed.nutritionSnapshotId
         ))) corrupt();
+        const previousInventory = [...inventories.values()].find((candidate) => (
+          candidate.version === (inventory?.version ?? 0) - 1
+        ));
+        if (previousInventory === undefined) corrupt();
+        const priorAmounts = new Map(previousInventory.items.map((item) => [
+          `${item.foodId}\u0000${item.nutritionSnapshotId}`,
+          item.availableGrams
+        ]));
+        const confirmedInventoryAmounts = new Map(inventory.items.map((item) => [
+          `${item.foodId}\u0000${item.nutritionSnapshotId}`,
+          item.availableGrams
+        ]));
+        for (const [identity, priorAmount] of priorAmounts) {
+          const currentAmount = confirmedInventoryAmounts.get(identity);
+          const confirmedIdentity = `${confirmed.foodId}\u0000${confirmed.nutritionSnapshotId}`;
+          const expectedAmount = identity === confirmedIdentity
+            ? priorAmount + confirmedGrams
+            : priorAmount;
+          if (currentAmount !== expectedAmount) corrupt();
+        }
+        for (const [identity, currentAmount] of confirmedInventoryAmounts) {
+          if (priorAmounts.has(identity)) continue;
+          const confirmedIdentity = `${confirmed.foodId}\u0000${confirmed.nutritionSnapshotId}`;
+          if (identity !== confirmedIdentity || currentAmount !== confirmedGrams) corrupt();
+        }
       }
       if (version.storageStatus === 'deleted') {
         if (version.deletedAt === null || version.nextCleanupAt !== null) corrupt();
@@ -301,6 +336,18 @@ function assertIngredientPhotoVersions(
           || !workflowTransitions[previous.workflowStatus].includes(version.workflowStatus)
           || !storageTransitions[previous.storageStatus].includes(version.storageStatus)
         ) corrupt();
+        if (previous.candidates.length > 0 && (
+          previous.candidates.length !== version.candidates.length
+          || previous.candidates.some((candidate) => {
+            const current = version.candidates.find((value) => value.id === candidate.id);
+            return current === undefined
+              || current.foodId !== candidate.foodId
+              || current.nutritionSnapshotId !== candidate.nutritionSnapshotId
+              || current.canonicalNameZh !== candidate.canonicalNameZh
+              || current.confidence !== candidate.confidence
+              || current.foodState !== candidate.foodState;
+          })
+        )) corrupt();
       }
     }
   }
