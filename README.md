@@ -43,7 +43,13 @@ pnpm.cmd dev:api
 
 从小程序规划建档页的“一周餐单与执行”入口可进入 `pages/meal-execution/index`。该页支持按天锁定、从服务端备选列表结构化换菜和录入实际训练分钟。手动换菜成功后自动锁定当天。训练变更或当天完成度变化时，未受保护日可在完整生成成功后原子激活新版本；锁定或手改日只生成 stale 提示、待确认候选和结构化差异，由用户选择保留或覆盖，后台不静默覆盖。完成度事实先独立保存；Provider 失败时旧活动餐单继续可用，重算任务可显式重试，幂等重放不增长版本计数。
 
-planning API 已提供 `resolveFoodName`、`saveInventory`、`generateWeeklyMealPlan`、`setMealPlanDayLock`、`updateMealPlanDay`、`recordTrainingCompletion`、`decideMealPlanCandidate`、`retryPendingRecalculation` 和扩展后的 `getCurrentContext`。本地运行只使用显式标记的合成 `test_fixture` 餐单/营养数据；其中可执行的均衡餐单 fixture 从营养快照、食谱、每日菜单到目录均使用独立且闭合的稳定 ID、版本和来源链，不会改写原始营养 fixture 的身份或数值。生产模式不会加载 fixture，且当前没有可用的生产餐单 Provider。阶段四并未完成生产审核餐单数据及授权、阶段四能力的 CloudBase 部署、微信 IDE/真机渲染与交互验收、食材图像识别，或 LLM 有限对话；生产上线前仍须复核正式 `CN-DRI-2023` 表格。因此当前不宣称 production ready。
+planning API 已提供 `resolveFoodName`、`saveInventory`、`generateWeeklyMealPlan`、`setMealPlanDayLock`、`updateMealPlanDay`、`recordTrainingCompletion`、`decideMealPlanCandidate`、`retryPendingRecalculation`、`createIngredientPhotoUpload`、`registerIngredientPhotoUpload`、`recognizeIngredientPhoto`、`confirmIngredientCandidate` 和扩展后的 `getCurrentContext`。本地运行只使用显式标记的合成 `test_fixture` 餐单/营养数据；其中可执行的均衡餐单 fixture 从营养快照、食谱、每日菜单到目录均使用独立且闭合的稳定 ID、版本和来源链，不会改写原始营养 fixture 的身份或数值。生产部署制品不包含 fixture 或本地身份路径，且当前没有可用的生产餐单 Provider。
+
+食材拍照页只接受 JPEG/PNG 和最多 10 MiB 的对象。服务端先创建不含用户标识的随机私有路径，小程序上传后登记完整 fileID；服务端核对预期 fileID、对象签名、媒体类型和大小后才允许识别。视觉结果最多展示五个已映射到审核营养快照的名称、置信度和食物状态候选，不估算克数或营养值，也不自动选择。用户必须明确选择候选并输入正整数克数，确认事务才会同时追加不可变图片 revision 和库存版本；确认前库存、营养目标、餐单、重算任务和 outbox 均不改变，确认本身也不自动生成餐单。识别不可用时页面始终保留手动库存录入。
+
+原图在上传会话创建后 23 小时进入应用清理队列，为 24 小时上限保留调度余量；确认后私有清理时间会提前到确认时刻。独立 `photo-cleanup` 云函数每 15 分钟扫描到期目标，删除失败 15 分钟后重试，存储 `NOT_FOUND` 按幂等成功处理，未完成登记的孤儿对象仍通过创建会话时持久化的预期 fileID 清理。服务端环境只使用 `CLOUDBASE_STORAGE_FILE_ID_PREFIX` 和 `FITNESS_VISION_FUNCTION_NAME` 两个配置名称；部署、复合索引、early-v6 可信身份硬门禁、权限与回滚见 [`docs/cloudbase/phase-5-ingredient-photo-deployment.md`](docs/cloudbase/phase-5-ingredient-photo-deployment.md)。
+
+阶段五的本地固定桩、契约、进程 smoke、构建和清理证据不代表真实云端已经验收。生产审核餐单/营养数据及授权、阶段三至五能力的 CloudBase 部署、真实混元合同/备案/内容标识、双账号存储规则、定时器、复合索引、微信 IDE/真机交互和 LLM 有限对话仍未完成；生产上线前也须复核正式 `CN-DRI-2023` 表格。因此当前不宣称 production ready。
 
 ## 项目简介
 

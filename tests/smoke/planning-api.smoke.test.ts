@@ -330,6 +330,40 @@ describe('local planning API process', () => {
       expect(mealContext.data.inventory?.items).toHaveLength(28);
       expect(mealContext.data.mealPlan?.days).toHaveLength(7);
     }
+
+    const photoUpload = planningApiResponseSchema.parse(await call({
+      action: 'createIngredientPhotoUpload',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'smoke-ingredient-photo-upload-001',
+        payload: { mediaType: 'image/jpeg' }
+      }
+    }));
+    expect(photoUpload).toMatchObject({
+      success: true,
+      data: {
+        kind: 'ingredient_photo_upload_created',
+        photo: { revision: 1, workflowStatus: 'awaiting_upload' }
+      }
+    });
+    if (photoUpload.success && photoUpload.data.kind === 'ingredient_photo_upload_created') {
+      expect(photoUpload.data.cloudPath).toMatch(
+        /^ingredient-photos\/ingredient-photo-[^/]+\/ingredient-photo-upload-[^/]+\.jpg$/
+      );
+      expect(photoUpload.data.cloudPath).not.toContain('smoke-test-user');
+    }
+
+    const photoContext = planningApiResponseSchema.parse(
+      await call({ action: 'getCurrentContext' })
+    );
+    expect(photoContext).toMatchObject({
+      success: true,
+      data: {
+        kind: 'current_context',
+        latestVersions: { ingredientPhoto: 1 },
+        ingredientPhoto: { revision: 1, workflowStatus: 'awaiting_upload' }
+      }
+    });
     const authenticatedResponses = {
       profile,
       goal,
@@ -337,9 +371,12 @@ describe('local planning API process', () => {
       context,
       inventory,
       generated,
-      mealContext
+      mealContext,
+      photoUpload,
+      photoContext
     };
     expect(JSON.stringify(authenticatedResponses)).not.toContain('userId');
     expect(JSON.stringify(authenticatedResponses)).not.toContain('smoke-test-user');
+    expect(JSON.stringify(authenticatedResponses)).not.toContain('cloud://');
   });
 });
