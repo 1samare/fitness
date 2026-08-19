@@ -848,6 +848,48 @@ describe('ingredient photo commands', () => {
     }]);
   });
 
+  test('keeps an existing snapshot when confirming a newer snapshot for the same food', async () => {
+    const { commands, repository } = createHarness();
+    const candidateId = await createRegisterAndRecognize(commands);
+    await repository.transact('user-a', (state) => ({
+      nextState: {
+        ...state,
+        inventories: [{
+          kind: 'inventory_version',
+          id: 'inventory-existing-1',
+          userId: 'user-a',
+          version: 1,
+          createdAt: '2026-08-18T00:00:00.000Z',
+          items: [{
+            foodId: 'food-chicken-breast',
+            nutritionSnapshotId: 'snapshot-chicken-breast-2026-07',
+            availableGrams: 40
+          }]
+        }],
+        activeInventoryVersionId: 'inventory-existing-1'
+      },
+      result: undefined
+    }));
+
+    const result = await commands.confirmIngredientCandidate('user-a', confirmationEnvelope(
+      candidateId,
+      { expectedInventoryVersion: 1 }
+    ));
+
+    expect(result.inventory.items).toEqual([{
+      foodId: 'food-chicken-breast',
+      nutritionSnapshotId: 'snapshot-chicken-breast-2026-07',
+      availableGrams: 40
+    }, {
+      foodId: 'food-chicken-breast',
+      nutritionSnapshotId: 'snapshot-chicken-breast-2026-08',
+      availableGrams: 125
+    }]);
+    const state = await repository.read('user-a');
+    expect(state.inventories).toHaveLength(2);
+    expect(state.activeInventoryVersionId).toBe(result.inventory.id);
+  });
+
   test('requires an explicit candidate selection without loading nutrition', async () => {
     const { commands, nutrition } = createHarness();
     await createRegisterAndRecognize(commands);

@@ -291,7 +291,11 @@ function assertIngredientPhotoVersions(
       ) corrupt();
       if (confirmed !== undefined) {
         const confirmedGrams = version.confirmedGrams;
-        if (confirmedGrams === null) corrupt();
+        if (
+          confirmedGrams === null
+          || !Number.isSafeInteger(confirmedGrams)
+          || confirmedGrams <= 0
+        ) corrupt();
         const inventory = version.inventoryVersionId === null
           ? undefined
           : inventories.get(version.inventoryVersionId);
@@ -361,18 +365,25 @@ function assertIngredientPhotoVersions(
 
 function inventoryItemsByFood(inventory: InventoryVersion): Map<string, InventoryVersion['items'][number]> {
   const byFood = new Map<string, InventoryVersion['items'][number]>();
-  const snapshotIds = new Set<string>();
+  const identities = new Set<string>();
+  const ambiguousFoodIds = new Set<string>();
   for (const item of inventory.items) {
+    const identity = `${item.foodId}\u0000${item.nutritionSnapshotId}`;
     if (
-      byFood.has(item.foodId)
-      || snapshotIds.has(item.nutritionSnapshotId)
+      identities.has(identity)
       || !Number.isFinite(item.availableGrams)
       || item.availableGrams <= 0
     ) {
       corrupt();
     }
-    byFood.set(item.foodId, item);
-    snapshotIds.add(item.nutritionSnapshotId);
+    identities.add(identity);
+    if (ambiguousFoodIds.has(item.foodId)) continue;
+    if (byFood.has(item.foodId)) {
+      byFood.delete(item.foodId);
+      ambiguousFoodIds.add(item.foodId);
+    } else {
+      byFood.set(item.foodId, item);
+    }
   }
   return byFood;
 }
