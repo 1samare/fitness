@@ -401,7 +401,8 @@ describe('handlePlanningApi', () => {
         mealPlan: 0,
         mealPlanDecision: 0,
         trainingCompletion: 0,
-        recalculationJob: 0
+        recalculationJob: 0,
+        ingredientPhoto: 0
       });
       expect(current.data.dailyNutritionTargets).toHaveLength(7);
     }
