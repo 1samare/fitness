@@ -18,7 +18,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 describe('CloudBase cleanup deployment boundaries', () => {
-  test('declares only the API and timer cleanup functions with direct cleanup invocation denied', () => {
+  test('keeps the default two-function deployment trigger-free with direct cleanup invocation denied', () => {
     const config = asRecord(readJson('cloudbaserc.json'));
     const functions = config.functions;
     if (!Array.isArray(functions)) throw new Error('Expected functions');
@@ -29,29 +29,53 @@ describe('CloudBase cleanup deployment boundaries', () => {
         dir: './.build/cloudfunctions/photo-cleanup',
         runtime: 'Nodejs20.19',
         handler: 'index.main',
-        installDependency: false,
-        triggers: [{
-          name: 'photo-cleanup-every-15-minutes',
-          type: 'timer',
-          config: '0 */15 * * * * *'
-        }]
+        installDependency: false
       })
     ]);
+    for (const functionConfig of functions) {
+      expect(asRecord(functionConfig)).not.toHaveProperty('triggers');
+    }
+    expect(JSON.stringify(config)).not.toContain('disabled');
 
     const functionRules = asRecord(readJson('cloudbase/function.rules.json'));
     expect(asRecord(functionRules['planning-api']).invoke).toBe('auth != null');
     expect(asRecord(functionRules['photo-cleanup']).invoke).toBe(false);
   });
 
-  test('allows ingredient photo storage only to an authenticated creator and denies other paths', () => {
+  test('isolates timer activation in one audited config that changes only the cleanup trigger', () => {
+    const activationPath = path.join(repositoryRoot, 'cloudbaserc.photo-cleanup-timer.json');
+    expect(existsSync(activationPath)).toBe(true);
+    if (!existsSync(activationPath)) return;
+    const defaultConfig = asRecord(readJson('cloudbaserc.json'));
+    const activationConfig = asRecord(readJson('cloudbaserc.photo-cleanup-timer.json'));
+    const defaultFunctions = defaultConfig.functions;
+    const activationFunctions = activationConfig.functions;
+    if (!Array.isArray(defaultFunctions) || !Array.isArray(activationFunctions)) {
+      throw new Error('Expected function arrays');
+    }
+    expect(activationFunctions).toHaveLength(2);
+    expect(activationFunctions[0]).toEqual(defaultFunctions[0]);
+    const defaultCleanup = asRecord(defaultFunctions[1]);
+    const activationCleanup = asRecord(activationFunctions[1]);
+    const { triggers, ...activationCleanupBase } = activationCleanup;
+    expect(activationCleanupBase).toEqual(defaultCleanup);
+    expect(triggers).toEqual([{
+      name: 'photo-cleanup-every-15-minutes',
+      type: 'timer',
+      config: '0 */15 * * * * *'
+    }]);
+    expect(JSON.stringify(activationConfig)).not.toContain('disabled');
+  });
+
+  test('uses official flat storage rules scoped to authenticated creator-owned photo paths', () => {
     const storageRules = asRecord(readJson('cloudbase/storage.rules.json'));
-    const rules = asRecord(storageRules.rules);
-    const ingredientPhotos = asRecord(rules['ingredient-photos/{photoId}/{fileName}']);
-    expect(ingredientPhotos).toEqual({
-      read: 'auth != null && auth.openid == resource.creator',
-      write: 'auth != null && auth.openid == resource.creator'
+    const expectedExpression = 'auth != null && /^ingredient-photos\\//.test(resource.path) == true && resource.openid == auth.openid';
+    expect(storageRules).toEqual({
+      read: expectedExpression,
+      write: expectedExpression
     });
-    expect(rules['*']).toEqual({ read: false, write: false });
+    expect(storageRules).not.toHaveProperty('rules');
+    expect(JSON.stringify(storageRules)).not.toContain('resource.creator');
   });
 
   test('builds an explicit isolated two-function allowlist without maps, fixtures, links, or stale functions', () => {

@@ -1,12 +1,4 @@
 {
-  "rules": {
-    "ingredient-photos/{photoId}/{fileName}": {
-      "read": "auth != null && auth.openid == resource.creator",
-      "write": "auth != null && auth.openid == resource.creator"
-    },
-    "*": {
-      "read": false,
-      "write": false
-    }
-  }
+  "read": "auth != null && /^ingredient-photos\\//.test(resource.path) == true && resource.openid == auth.openid",
+  "write": "auth != null && /^ingredient-photos\\//.test(resource.path) == true && resource.openid == auth.openid"
 }

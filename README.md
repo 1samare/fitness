@@ -35,7 +35,7 @@ pnpm.cmd dev:api
 
 当前实现用一个原子命令保存身体档案、目标、一周训练计划、受影响日期的能量目标与营养目标、幂等结果和 `TrainingPlanChanged` outbox 事件；请求在响应丢失后会复用同一幂等键安全重试。独立编辑会使旧的下游活动指针失效，当前上下文只返回一致的活动版本链，同时返回各实体的历史版本计数。
 
-同周训练变更只为发生新增、移动、取消或时长变化的未来日期追加能量与营养目标版本；过去事实不改写。每个营养目标精确引用对应的每日能量目标以及 `calculation-policy-v2`、`nutrition-policy-v1`。CloudBase 聚合当前写入 schema v5；读取既有 schema v2/v3/v4 时只做结构性迁移，其中 v4 缺失的重算冲突详情会明确标记为 `legacy_unavailable`，不推断或伪造历史营养、库存、餐单、完成度事实或失败原因。
+同周训练变更只为发生新增、移动、取消或时长变化的未来日期追加能量与营养目标版本；过去事实不改写。每个营养目标精确引用对应的每日能量目标以及 `calculation-policy-v2`、`nutrition-policy-v1`。CloudBase 聚合当前写入 schema v6；读取既有 schema v2/v3/v4/v5 时只做结构性迁移，其中 v4 缺失的重算冲突详情会明确标记为 `legacy_unavailable`，v5→v6 只补空图片历史和 null 清理指针，不推断或伪造历史照片、fileID、候选、清理结果、营养、库存、餐单、完成度事实或失败原因。
 
 `nutrition-policy-v1` 由确定性 TypeScript 代码计算蛋白质、脂肪、碳水、纤维、饱和脂肪和添加糖边界，并在约束交集为空时返回结构化 `nutrition_constraints_infeasible`。食谱候选校验会从每 100 克审核快照和实际克数复算营养汇总，并把过敏原、忌口、库存、食物多样性和来源完整性作为硬约束。
 
@@ -47,7 +47,7 @@ planning API 已提供 `resolveFoodName`、`saveInventory`、`generateWeeklyMeal
 
 食材拍照页只接受 JPEG/PNG 和最多 10 MiB 的对象。服务端先创建不含用户标识的随机私有路径，小程序上传后登记完整 fileID；服务端核对预期 fileID、对象签名、媒体类型和大小后才允许识别。视觉结果最多展示五个已映射到审核营养快照的名称、置信度和食物状态候选，不估算克数或营养值，也不自动选择。用户必须明确选择候选并输入正整数克数，确认事务才会同时追加不可变图片 revision 和库存版本；确认前库存、营养目标、餐单、重算任务和 outbox 均不改变，确认本身也不自动生成餐单。识别不可用时页面始终保留手动库存录入。
 
-原图在上传会话创建后 23 小时进入应用清理队列，为 24 小时上限保留调度余量；确认后私有清理时间会提前到确认时刻。独立 `photo-cleanup` 云函数每 15 分钟扫描到期目标，删除失败 15 分钟后重试，存储 `NOT_FOUND` 按幂等成功处理，未完成登记的孤儿对象仍通过创建会话时持久化的预期 fileID 清理。服务端环境只使用 `CLOUDBASE_STORAGE_FILE_ID_PREFIX` 和 `FITNESS_VISION_FUNCTION_NAME` 两个配置名称；部署、复合索引、early-v6 可信身份硬门禁、权限与回滚见 [`docs/cloudbase/phase-5-ingredient-photo-deployment.md`](docs/cloudbase/phase-5-ingredient-photo-deployment.md)。
+原图在上传会话创建后 23 小时进入应用清理队列，为 24 小时上限保留调度余量；确认后私有清理时间会提前到确认时刻。独立 `photo-cleanup` 云函数删除失败 15 分钟后重试，存储 `NOT_FOUND` 按幂等成功处理，未完成登记的孤儿对象仍通过创建会话时持久化的预期 fileID 清理。默认 `cloudbaserc.json` 不创建定时器；只有索引、可信身份、规则/IAM 和双账号检查通过后，管理员才使用独立 `cloudbaserc.photo-cleanup-timer.json` 激活每 15 分钟任务。服务端环境只使用 `CLOUDBASE_STORAGE_FILE_ID_PREFIX` 和 `FITNESS_VISION_FUNCTION_NAME` 两个配置名称；部署、复合索引、early-v6 可信身份硬门禁、权限与回滚见 [`docs/cloudbase/phase-5-ingredient-photo-deployment.md`](docs/cloudbase/phase-5-ingredient-photo-deployment.md)。
 
 阶段五的本地固定桩、契约、进程 smoke、构建和清理证据不代表真实云端已经验收。生产审核餐单/营养数据及授权、阶段三至五能力的 CloudBase 部署、真实混元合同/备案/内容标识、双账号存储规则、定时器、复合索引、微信 IDE/真机交互和 LLM 有限对话仍未完成；生产上线前也须复核正式 `CN-DRI-2023` 表格。因此当前不宣称 production ready。
 

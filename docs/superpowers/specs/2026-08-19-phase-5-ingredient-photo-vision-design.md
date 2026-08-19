@@ -311,10 +311,12 @@ estimatedCostUnits?
 
 新增独立工作区 `cloudfunctions/photo-cleanup`，使用与 `planning-api` 一致的 Node.js 20、严格 TypeScript、tsup 单文件制品和无运行时安装部署方式。
 
-`cloudbaserc.json` 声明：
+默认 `cloudbaserc.json` 声明两个 trigger-free 函数：
 
 - `planning-api`：保持可信登录调用，超时调整为容纳两次受限视觉尝试。
-- `photo-cleanup`：定时触发，拒绝普通客户端调用，每 15 分钟执行。
+- `photo-cleanup`：拒绝普通客户端调用，但默认部署不创建定时器。
+
+根级 `cloudbaserc.photo-cleanup-timer.json` 只增加 `photo-cleanup` 的 15 分钟 timer trigger。管理员必须先验证复合索引、early-v6 可信 `state.userId` 零缺失或受控回填、存储/函数规则、IAM 和真实双账号隔离，再通过独立 activation config 启用定时器；普通构建和 dry-run 始终使用默认 trigger-free 配置。
 
 构建脚本必须为两个云函数生成 `.build/cloudfunctions/<name>` 制品，并拒绝缺少入口或 package 元数据的产物。增加 `dry-run:photo-cleanup`，验证制品能加载并在无到期目标时返回空汇总；常规测试和 dry-run 不访问实时云、存储或付费视觉服务。
 

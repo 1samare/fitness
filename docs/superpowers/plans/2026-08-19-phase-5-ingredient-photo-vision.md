@@ -1162,7 +1162,7 @@ Captured logs may contain only batch counts, stable error codes, and latency; as
 
 - [ ] **Step 3: Write failing deployment-boundary tests**
 
-Extend artifact/rules tests to require:
+审查纠错：默认 `cloudbaserc.json` 必须 trigger-free；以下 trigger 只允许出现在独立 `cloudbaserc.photo-cleanup-timer.json`，并在外部门禁通过后激活：
 
 ```json
 {
@@ -1172,7 +1172,7 @@ Extend artifact/rules tests to require:
 }
 ```
 
-Assert `cloudbase/function.rules.json` denies direct invocation of `photo-cleanup`, `cloudbase/storage.rules.json` permits read/write only when `auth != null && auth.openid == resource.creator`, and both deploy bundles exclude workspace links, source maps, fixtures, and unrelated functions.
+Assert `cloudbase/function.rules.json` denies direct invocation of `photo-cleanup`; `cloudbase/storage.rules.json` uses official flat top-level `read`/`write` keys with the exact expression `auth != null && /^ingredient-photos\\//.test(resource.path) == true && resource.openid == auth.openid`, rejects a `rules` wrapper and `resource.creator`; and both deploy bundles exclude workspace links, source maps, fixtures, and unrelated functions.
 
 - [ ] **Step 4: Run cleanup tests and verify RED**
 
@@ -1200,7 +1200,7 @@ The runtime constructs `CloudBasePlanningRepository`, `CloudBasePhotoCleanupTarg
 
 - [ ] **Step 8: Add storage/function rules and build support**
 
-Create creator-private storage rules, add the deny rule for `photo-cleanup`, and configure its 15-minute timer in root `cloudbaserc.json`. Refactor `build-cloudfunction-deploy.mjs` to package an explicit allowlist `['planning-api', 'photo-cleanup']`, each into its own `.build/cloudfunctions/<name>` directory. Add the cleanup dry-run while preserving the existing API dry-run:
+Create official flat creator-private storage rules, add the deny rule for `photo-cleanup`, keep root `cloudbaserc.json` trigger-free, and put the 15-minute timer only in root `cloudbaserc.photo-cleanup-timer.json` for post-validation activation. Refactor `build-cloudfunction-deploy.mjs` to package an explicit allowlist `['planning-api', 'photo-cleanup']`, each into its own `.build/cloudfunctions/<name>` directory. Add the cleanup dry-run while preserving the existing API dry-run:
 
 ```json
 {

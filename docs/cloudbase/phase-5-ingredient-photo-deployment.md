@@ -59,7 +59,7 @@ state.nextPhotoCleanupAt ASC, state.userId ASC
 
 发布并人工复核：
 
-- `cloudbase/storage.rules.json`：`ingredient-photos/{photoId}/{fileName}` 只允许对象创建者读写，其他路径拒绝；真实双账号必须验证 A 不能读写 B 的对象。
+- `cloudbase/storage.rules.json`：使用官方 flat top-level `read`/`write` 表达式；只有已认证、路径以 `ingredient-photos/` 开头且 `resource.openid == auth.openid` 的对象才允许读写。表达式对其他路径求值为 false；不得包裹 `rules`，也不得使用非官方 `resource.creator` 字段。真实双账号必须验证 A 不能读写 B 的对象。
 - `cloudbase/function.rules.json`：已认证用户只能调用 `planning-api`；普通客户端不能调用 `photo-cleanup`。
 - 视觉嵌套函数：只向 `planning-api` 的服务端运行身份授予调用权限，不向小程序客户端开放；函数名必须来自服务端配置白名单。
 - 数据库业务集合继续拒绝客户端直读写；用户身份只来自可信云函数上下文。
@@ -81,7 +81,7 @@ CloudBase 服务端管理员访问不受客户端存储规则替代保护。视�
 - 小程序 planning API 客户端超时：20 秒。
 - `vision-provider-policy-v1`：单次 8 秒，只对超时/传输错误重试一次；schema、鉴权和明确不可重试错误不重试。
 - 连续三个完整识别操作失败后开启温实例内熔断，60 秒后只允许一个半开探测。
-- `photo-cleanup`：每 15 分钟触发一次，云函数超时 25 秒，普通客户端调用被拒绝。
+- `photo-cleanup`：函数超时 25 秒，普通客户端调用被拒绝。默认 `cloudbaserc.json` 不含触发器；只有部署前硬门禁完成后，才使用独立 `cloudbaserc.photo-cleanup-timer.json` 激活每 15 分钟触发一次的定时器。
 - 上传会话创建时把删除目标设为 `+23h`；确认后把私有 `nextCleanupAt` 提前到确认时间。删除失败 15 分钟后重试，存储 `NOT_FOUND` 视为幂等成功。
 
 COS 按天生命周期只能作为灾难兜底，不能替代应用层“24 小时内至少发起删除”的证据。
@@ -102,21 +102,40 @@ COS 按天生命周期只能作为灾难兜底，不能替代应用层“24 小�
 1. 记录当前两个函数的版本、运行时、超时、入口、触发器和制品校验值，并在受控位置保存“部署前制品”；不要复制到仓库。
 2. 备份业务集合并完成 early-v6 可信身份硬检查。
 3. 创建并等待复合索引生效。
-4. 发布数据库、函数和 creator-private 存储规则；先保持清理定时器禁用。
+4. 发布数据库、函数和 creator-private 存储规则；使用默认 `cloudbaserc.json` 部署函数代码，此时不创建清理定时器。
 5. 配置两个服务端环境变量名对应的受控值，并授予 `planning-api` 调用嵌套视觉函数的最小权限。
-6. 从 `.build/cloudfunctions` 部署 `planning-api` 和 `photo-cleanup`，确认 Node.js 20、`index.main`、25 秒和不安装运行时依赖。
-7. 完成规则、嵌套函数、双账号和一张测试图片的受控验收后，再启用每 15 分钟定时器。
+6. 从 `.build/cloudfunctions` 部署 `planning-api` 和 `photo-cleanup`，确认 `cloudbaserc.json` 声明的 Node.js 20、`index.main`、25 秒和 `installDependency: false` 已生效。
+7. 完成规则、嵌套函数、双账号和一张测试图片的受控验收后，再用独立 activation config 启用每 15 分钟定时器。
 8. 观察一次到期清理与一次 `NOT_FOUND` 幂等收敛；日志只保留计数、延迟和稳定错误码。
 
-使用已登录且目标环境已人工核对的 CloudBase CLI 执行；命令不内嵌真实环境 ID：
+只使用组织预先安装、固定版本并完成安全审核的 CloudBase CLI；禁止通过 `npx -y` 或其他即时网络执行方式下载 CLI。管理员必须先核对登录身份和目标环境，并把 `tcb -v` 输出记录到受控发布证据；命令不内嵌真实环境 ID。运行时、入口、超时和 `installDependency` 全部以仓库 `cloudbaserc.json` 为准，不通过临时 CLI 参数覆盖：
 
 ```powershell
 pnpm.cmd build
-npx -y --package @cloudbase/cli@3.7.2 tcb fn deploy planning-api --runtime Nodejs20.19 --install-dependency false
-npx -y --package @cloudbase/cli@3.7.2 tcb fn deploy photo-cleanup --runtime Nodejs20.19 --install-dependency false
-npx -y --package @cloudbase/cli@3.7.2 tcb fn detail planning-api --json
-npx -y --package @cloudbase/cli@3.7.2 tcb fn detail photo-cleanup --json
+tcb -v
+tcb fn deploy planning-api
+tcb fn deploy photo-cleanup
+tcb fn detail planning-api
+tcb fn detail photo-cleanup
 ```
+
+上述默认部署必须保持 trigger-free。硬门禁和人工验收全部通过后，管理员才可执行以下两阶段激活流程；临时文件只用于本次受控 CLI 调用，不得提交，且 `finally` 必须恢复 canonical `cloudbaserc.json`：
+
+```powershell
+$phase5ConfigBackup = New-TemporaryFile
+Copy-Item -LiteralPath cloudbaserc.json -Destination $phase5ConfigBackup -Force
+try {
+  Copy-Item -LiteralPath cloudbaserc.photo-cleanup-timer.json -Destination cloudbaserc.json -Force
+  tcb fn deploy photo-cleanup
+  tcb fn detail photo-cleanup
+} finally {
+  Copy-Item -LiteralPath $phase5ConfigBackup -Destination cloudbaserc.json -Force
+  Remove-Item -LiteralPath $phase5ConfigBackup -Force
+}
+git diff --exit-code -- cloudbaserc.json
+```
+
+激活前后分别人工比对两个配置，确认唯一功能差异是 `photo-cleanup-every-15-minutes` 的 `0 */15 * * * * *` trigger。若目标环境已依赖一个清理定时器，不得直接用 trigger-free 默认配置覆盖该函数；必须先证明仍有已知良好的 cleanup worker 或等价受审清理路径持续运行。
 
 发布规则、环境配置、IAM 和触发器的控制台/CLI 操作必须由管理员在目标环境复核；函数代码部署成功不等于这些外部项已经生效。
 
@@ -143,12 +162,13 @@ pnpm.cmd smoke:api
 
 ## 回滚
 
-1. 先停用 `photo-cleanup` 定时器和新的图片入口，避免回滚过程中继续产生清理写入。
-2. 保留数据库与对象备份；不要删除 schema-v6 图片历史、库存版本或已存在原图。
-3. 重新部署受控保存的上一组已知良好函数制品，并恢复其配套的运行时、超时、规则、IAM 和触发器配置。
-4. 如果“上一组 planning-api 制品”早于 schema v6，必须先证明它能读取当前 v6 文档；不能证明时不得降回旧制品，应回滚到上一组已验证的 phase-5 制品或用修复版向前恢复。
-5. 不得通过改写历史库存/图片版本、移除可信 `state.userId`、反推哈希文档 ID 或放宽存储规则完成回滚。
-6. 回滚后重新执行两个 dry-run、本地 smoke、云端双账号隔离和到期对象审计，确认没有对象失去应用清理路径。
+1. 先停用新的图片入口，避免回滚期间继续创建对象；只要仍存在 retained、pending 或 failed 对象，就不得留下没有清理执行者的窗口。
+2. 整个回滚期间持续保留一个已知良好的 `photo-cleanup` worker，或先切换到等价、受审且按每个持久化 `nextCleanupAt`/`deleteDueAt` 执行的替代清理路径；验证替代路径生效前不得停旧定时器。
+3. 数据库备份不得改写或遗漏 schema-v6 图片历史和库存版本。任何原图备份或副本必须继承或缩短该对象原有删除 deadline，绝不得超过原 `nextCleanupAt`/`deleteDueAt` 后继续保留。
+4. 在清理路径持续运行的前提下，重新部署受控保存的上一组已知良好函数制品，并恢复其配套运行时、超时、规则、IAM 和必要触发器配置。
+5. 如果上一组 `planning-api` 制品早于 schema v6，必须先证明它能读取当前 v6 文档；不能证明时不得降回旧制品，应回滚到上一组已验证的 phase-5 制品或用修复版向前恢复。
+6. 不得通过改写历史库存/图片版本、移除可信 `state.userId`、反推哈希文档 ID、延长原图删除期限或放宽存储规则完成回滚。
+7. 回滚后重新执行两个 dry-run、本地 smoke、云端双账号隔离和到期对象审计，确认每个对象仍有按原 deadline 执行的应用清理路径。
 
 ## 本地不能声明已验证的事项
 
