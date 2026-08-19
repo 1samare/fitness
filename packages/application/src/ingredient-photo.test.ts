@@ -490,6 +490,7 @@ describe('ingredient photo commands', () => {
       payload: { photoId: 'photo-a' }
     });
 
+    expect(result.photo.candidates).toHaveLength(1);
     const candidate = result.photo.candidates[0];
     if (candidate === undefined) throw new Error('Expected a mapped candidate');
     expect(typeof candidate.id).toBe('string');
