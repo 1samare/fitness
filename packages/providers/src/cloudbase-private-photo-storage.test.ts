@@ -71,6 +71,24 @@ describe('CloudBasePrivatePhotoStorage', () => {
     })).rejects.toMatchObject({ code: 'storage_unavailable' });
   });
 
+  test.each([
+    { code: 'SUCCESS', status: -503003 },
+    { code: 'NOT_FOUND', status: 0 },
+    { code: 'SUCCESS', status: -1 },
+    { code: 'SUCCESS', status: 0 }
+  ])('fails closed when deletion result mixes code $code with status $status', async (entry) => {
+    const client = {
+      downloadFile: vi.fn(),
+      deleteFile: vi.fn().mockResolvedValue({
+        fileList: [{ fileID: 'cloud://env.bucket/photo.jpg', errMsg: 'provider wording', ...entry }]
+      })
+    };
+
+    await expect(new CloudBasePrivatePhotoStorage(client).deletePrivateFile({
+      privateFileId: 'cloud://env.bucket/photo.jpg'
+    })).rejects.toMatchObject({ code: 'storage_unavailable' });
+  });
+
   test('accepts a PNG signature and rejects an oversized private image', async () => {
     const client = {
       downloadFile: vi.fn()

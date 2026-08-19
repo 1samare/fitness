@@ -83,7 +83,9 @@ describe('CloudBase cleanup deployment boundaries', () => {
       'TEST_MEAL_PLANNING_NUTRITION_SNAPSHOTS',
       'fixture-vision-request-v1',
       'FITNESS-TEST-FIXTURE-V2',
-      'fixture-2026-08-10'
+      'fixture-2026-08-10',
+      'FITNESS_RUNTIME_MODE',
+      'FITNESS_LOCAL_USER_ID'
     ];
     for (const functionName of ['photo-cleanup', 'planning-api']) {
       const directory = path.join(buildRoot, functionName);

@@ -65,10 +65,15 @@ function deletionOutcome(value: unknown): 'deleted' | 'not_found' | null {
   if (!isSingleEntryList(fileList)) return null;
   const [entry] = fileList;
   if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return null;
+  const hasCode = Object.hasOwn(entry, 'code');
+  const hasStatus = Object.hasOwn(entry, 'status');
+  if (hasCode === hasStatus) return null;
   const code = (entry as { readonly code?: unknown }).code;
-  if (code === 'SUCCESS') return 'deleted';
-  if (code === 'STORAGE_FILE_NONEXIST' || code === 'NOT_FOUND') return 'not_found';
-  if (code !== undefined) return null;
+  if (hasCode) {
+    if (code === 'SUCCESS') return 'deleted';
+    if (code === 'STORAGE_FILE_NONEXIST' || code === 'NOT_FOUND') return 'not_found';
+    return null;
+  }
   const status = (entry as { readonly status?: unknown }).status;
   if (status === 0) return 'deleted';
   if (status === -503003) return 'not_found';
