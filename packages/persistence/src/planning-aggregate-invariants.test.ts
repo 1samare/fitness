@@ -661,6 +661,83 @@ describe('planning aggregate invariants', () => {
     });
   });
 
+  test('accepts a first inventory version created by confirming into an empty inventory', async () => {
+    const state = await createValidState();
+    const recognized = recognizedPhotoVersions('user-a');
+    const latest = recognized[2];
+    if (latest === undefined) throw new Error('Expected recognized photo');
+    const inventory = {
+      kind: 'inventory_version' as const,
+      id: 'inventory-confirmed-first',
+      userId: 'user-a',
+      version: 1,
+      createdAt: '2026-08-19T00:03:00.000Z',
+      items: [{
+        foodId: photoCandidate.foodId,
+        nutritionSnapshotId: photoCandidate.nutritionSnapshotId,
+        availableGrams: 125
+      }]
+    };
+    const confirmed: IngredientPhotoVersion = {
+      ...latest,
+      id: 'ingredient-photo-version-4',
+      revision: 4,
+      createdAt: inventory.createdAt,
+      workflowStatus: 'confirmed',
+      storageStatus: 'cleanup_pending',
+      confirmedCandidateId: photoCandidate.id,
+      confirmedGrams: 125,
+      inventoryVersionId: inventory.id,
+      nextCleanupAt: inventory.createdAt
+    };
+
+    expect(() => {
+      assertPlanningAggregateInvariants({
+        ...state,
+        inventories: [inventory],
+        ingredientPhotoVersions: [...recognized, confirmed],
+        activeInventoryVersionId: inventory.id,
+        nextPhotoCleanupAt: confirmed.nextCleanupAt
+      }, 'user-a');
+    }).not.toThrow();
+  });
+
+  test('rejects rewriting confirmation fields in a later photo revision', async () => {
+    const state = await stateWithConfirmedPhoto();
+    const confirmed = state.ingredientPhotoVersions[3];
+    const previousInventory = state.inventories[1];
+    if (confirmed === undefined || previousInventory === undefined) {
+      throw new Error('Expected confirmed photo and inventory');
+    }
+    const rewrittenInventory = {
+      ...previousInventory,
+      id: 'inventory-3',
+      version: 3,
+      createdAt: '2026-08-19T00:04:00.000Z',
+      items: previousInventory.items.map((item) => ({
+        ...item,
+        availableGrams: item.foodId === photoCandidate.foodId
+          ? item.availableGrams + 50
+          : item.availableGrams
+      }))
+    };
+    const rewritten: IngredientPhotoVersion = {
+      ...confirmed,
+      id: 'ingredient-photo-version-5',
+      revision: 5,
+      createdAt: rewrittenInventory.createdAt,
+      confirmedGrams: 50,
+      inventoryVersionId: rewrittenInventory.id
+    };
+
+    expectCorrupt({
+      ...state,
+      inventories: [...state.inventories, rewrittenInventory],
+      ingredientPhotoVersions: [...state.ingredientPhotoVersions, rewritten],
+      activeInventoryVersionId: rewrittenInventory.id
+    });
+  });
+
   test('rejects a next photo cleanup pointer that is not derived from latest revisions', async () => {
     const state = await createValidState();
     const corrupt = {

@@ -12,6 +12,7 @@ import {
   type GoalVersion,
   type IdempotencyRecord,
   type IngredientPhotoVersion,
+  type InventoryVersion,
   type MealPlanVersion,
   type PlanningAggregateState,
   type RecalculationJob,
@@ -170,6 +171,33 @@ function mostRecentlyCreatedIngredientPhoto(
     }
   }
   return latest;
+}
+
+function deriveMealPlanStale(input: {
+  readonly bodyProfile: BodyProfileVersion | null;
+  readonly goal: GoalVersion | null;
+  readonly trainingPlan: TrainingPlanVersion | null;
+  readonly inventory: InventoryVersion | null;
+  readonly mealPlan: MealPlanVersion | null;
+  readonly dailyNutritionTargets: readonly DailyNutritionTargetVersion[];
+}): boolean {
+  if (input.mealPlan === null) return false;
+  if (
+    input.bodyProfile === null
+    || input.goal === null
+    || input.trainingPlan === null
+    || input.inventory === null
+    || input.mealPlan.bodyProfileVersionId !== input.bodyProfile.id
+    || input.mealPlan.goalVersionId !== input.goal.id
+    || input.mealPlan.trainingPlanVersionId !== input.trainingPlan.id
+    || input.mealPlan.inventoryVersionId !== input.inventory.id
+  ) return true;
+  const currentTargetIds = input.dailyNutritionTargets.map((target) => target.id).sort();
+  const mealPlanTargetIds = input.mealPlan.days
+    .map((day) => day.dailyNutritionTargetVersionId)
+    .sort();
+  return mealPlanTargetIds.length !== currentTargetIds.length
+    || mealPlanTargetIds.some((id, index) => id !== currentTargetIds[index]);
 }
 
 function fingerprint<T>(envelope: WriteCommandEnvelope<T>): string {
@@ -964,22 +992,14 @@ export function createVersionedPlanningService(
           && !decidedCandidateIds.has(candidate.id)
         ))
         .sort((left, right) => right.version - left.version)[0] ?? null;
-      const currentTargetIds = dailyNutritionTargets.map((target) => target.id).sort();
-      const mealPlanTargetIds = mealPlan?.days
-        .map((day) => day.dailyNutritionTargetVersionId)
-        .sort() ?? [];
-      const mealPlanStale = mealPlan !== null && (
-        bodyProfile === null
-        || goal === null
-        || trainingPlan === null
-        || inventory === null
-        || mealPlan.bodyProfileVersionId !== bodyProfile.id
-        || mealPlan.goalVersionId !== goal.id
-        || mealPlan.trainingPlanVersionId !== trainingPlan.id
-        || mealPlan.inventoryVersionId !== inventory.id
-        || mealPlanTargetIds.length !== currentTargetIds.length
-        || mealPlanTargetIds.some((id, index) => id !== currentTargetIds[index])
-      );
+      const mealPlanStale = deriveMealPlanStale({
+        bodyProfile,
+        goal,
+        trainingPlan,
+        inventory,
+        mealPlan,
+        dailyNutritionTargets
+      });
       const retryableRecalculationJob = [...state.recalculationJobs]
         .reverse()
         .find((job) => (

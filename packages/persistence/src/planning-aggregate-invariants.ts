@@ -295,15 +295,16 @@ function assertIngredientPhotoVersions(
         const inventory = version.inventoryVersionId === null
           ? undefined
           : inventories.get(version.inventoryVersionId);
-        if (!inventory || !inventory.items.some((item) => (
+        if (!inventory || inventory.userId !== version.userId || !inventory.items.some((item) => (
           item.foodId === confirmed.foodId
           && item.nutritionSnapshotId === confirmed.nutritionSnapshotId
         ))) corrupt();
         const previousInventory = [...inventories.values()].find((candidate) => (
-          candidate.version === (inventory?.version ?? 0) - 1
+          candidate.userId === version.userId
+          && candidate.version === inventory.version - 1
         ));
-        if (previousInventory === undefined) corrupt();
-        const priorAmounts = new Map(previousInventory.items.map((item) => [
+        if (inventory.version > 1 && previousInventory === undefined) corrupt();
+        const priorAmounts = new Map((previousInventory?.items ?? []).map((item) => [
           `${item.foodId}\u0000${item.nutritionSnapshotId}`,
           item.availableGrams
         ]));
@@ -336,6 +337,11 @@ function assertIngredientPhotoVersions(
           || !workflowTransitions[previous.workflowStatus].includes(version.workflowStatus)
           || !storageTransitions[previous.storageStatus].includes(version.storageStatus)
         ) corrupt();
+        if (previous.workflowStatus === 'confirmed' && (
+          version.confirmedCandidateId !== previous.confirmedCandidateId
+          || version.confirmedGrams !== previous.confirmedGrams
+          || version.inventoryVersionId !== previous.inventoryVersionId
+        )) corrupt();
         if (previous.candidates.length > 0 && (
           previous.candidates.length !== version.candidates.length
           || previous.candidates.some((candidate) => {

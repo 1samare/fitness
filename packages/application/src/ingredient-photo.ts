@@ -5,6 +5,7 @@ import {
   type IdempotencyRecord,
   type IngredientPhotoMediaType,
   type IngredientPhotoVersion,
+  type InventoryVersion,
   type NormalizedIngredientCandidate,
   type NutritionProvider,
   type PlanningAggregateState,
@@ -65,6 +66,15 @@ export class StorageUnavailableError extends Error {
   }
 }
 
+export class CandidateConfirmationRequiredError extends Error {
+  public readonly code = 'candidate_confirmation_required' as const;
+
+  public constructor() {
+    super('An explicit valid ingredient candidate and gram amount are required');
+    this.name = 'CandidateConfirmationRequiredError';
+  }
+}
+
 export interface CreatedIngredientPhotoUpload {
   readonly cloudPath: string;
   readonly photo: IngredientPhotoVersion;
@@ -74,10 +84,15 @@ export interface IngredientPhotoCommandResult {
   readonly photo: IngredientPhotoVersion;
 }
 
+export interface ConfirmedIngredientCandidateResult extends IngredientPhotoCommandResult {
+  readonly inventory: InventoryVersion;
+}
+
 type IngredientPhotoOperation =
   | 'createIngredientPhotoUpload'
   | 'registerIngredientPhotoUpload'
-  | 'recognizeIngredientPhoto';
+  | 'recognizeIngredientPhoto'
+  | 'confirmIngredientCandidate';
 
 function normalizeStoragePrefix(value: string): string {
   if (!/^cloud:\/\/[^/]+/.test(value)) throw new PrivatePhotoOwnershipError();
@@ -85,9 +100,7 @@ function normalizeStoragePrefix(value: string): string {
 }
 
 function mediaExtension(mediaType: IngredientPhotoMediaType): 'jpg' | 'png' {
-  if (mediaType === 'image/jpeg') return 'jpg';
-  if (mediaType === 'image/png') return 'png';
-  throw new PrivatePhotoOwnershipError();
+  return mediaType === 'image/jpeg' ? 'jpg' : 'png';
 }
 
 function addHours(value: string, hours: number): string {
@@ -134,6 +147,18 @@ function resultPhoto(
   return result;
 }
 
+function resultConfirmation(
+  state: PlanningAggregateState,
+  resultVersionId: string
+): ConfirmedIngredientCandidateResult {
+  const photo = resultPhoto(state, resultVersionId);
+  const inventory = photo.inventoryVersionId === null
+    ? undefined
+    : state.inventories.find((value) => value.id === photo.inventoryVersionId);
+  if (inventory === undefined) throw new Error('Stored idempotency result is missing');
+  return { photo, inventory };
+}
+
 function latestPhoto(
   state: PlanningAggregateState,
   photoId: string
@@ -147,6 +172,60 @@ function latestPhoto(
 function assertExpectedRevision(expectedVersion: number, photo: IngredientPhotoVersion): void {
   if (expectedVersion !== photo.revision) {
     throw new VersionConflictError(expectedVersion, photo.revision);
+  }
+}
+
+function currentInventory(
+  state: PlanningAggregateState,
+  expectedVersion: number
+): InventoryVersion | null {
+  const actualVersion = state.inventories.length;
+  if (expectedVersion !== actualVersion) {
+    throw new VersionConflictError(expectedVersion, actualVersion);
+  }
+  if (actualVersion === 0) {
+    if (state.activeInventoryVersionId !== null) {
+      throw new Error('Stored active inventory is inconsistent');
+    }
+    return null;
+  }
+  const current = state.inventories.find((inventory) => (
+    inventory.id === state.activeInventoryVersionId
+    && inventory.version === actualVersion
+  ));
+  if (current === undefined) throw new Error('Stored active inventory is inconsistent');
+  return current;
+}
+
+function selectedCandidate(
+  photo: IngredientPhotoVersion,
+  candidateId: string
+): NormalizedIngredientCandidate {
+  if (photo.workflowStatus !== 'recognized') {
+    throw new CandidateConfirmationRequiredError();
+  }
+  const selected = photo.candidates.find((candidate) => candidate.id === candidateId);
+  if (selected === undefined) throw new CandidateConfirmationRequiredError();
+  return selected;
+}
+
+function assertSameCandidate(
+  beforeIo: NormalizedIngredientCandidate,
+  current: NormalizedIngredientCandidate
+): void {
+  if (
+    current.id !== beforeIo.id
+    || current.foodId !== beforeIo.foodId
+    || current.nutritionSnapshotId !== beforeIo.nutritionSnapshotId
+    || current.canonicalNameZh !== beforeIo.canonicalNameZh
+    || current.confidence !== beforeIo.confidence
+    || current.foodState !== beforeIo.foodState
+  ) throw new CandidateConfirmationRequiredError();
+}
+
+function assertConfirmedGrams(value: number): void {
+  if (!Number.isInteger(value) || value <= 0 || value > 1_000_000) {
+    throw new CandidateConfirmationRequiredError();
   }
 }
 
@@ -199,6 +278,13 @@ function compareCodeUnits(left: string, right: string): number {
   return 0;
 }
 
+function isAllowedNutritionQuality(
+  qualityStatus: 'reviewed' | 'test_fixture',
+  allowTestFixtures: boolean
+): boolean {
+  return qualityStatus === 'reviewed' || allowTestFixtures;
+}
+
 async function normalizeCandidate(
   dependencies: IngredientPhotoCommandDependencies,
   photoId: string,
@@ -225,10 +311,7 @@ async function normalizeCandidate(
     snapshot.id !== resolution.nutritionSnapshotId
     || snapshot.foodId !== resolution.foodId
     || snapshot.foodState !== raw.foodState
-    || (
-      snapshot.qualityStatus !== 'reviewed'
-      && !(dependencies.allowTestFixtures && snapshot.qualityStatus === 'test_fixture')
-    )
+    || !isAllowedNutritionQuality(snapshot.qualityStatus, dependencies.allowTestFixtures)
   ) return null;
   return {
     id: stableCandidateId(
@@ -266,6 +349,27 @@ async function normalizeCandidates(
       || compareCodeUnits(candidateIdentity(left), candidateIdentity(right))
     ))
     .slice(0, 5);
+}
+
+async function revalidateSelectedSnapshot(
+  dependencies: IngredientPhotoCommandDependencies,
+  selected: NormalizedIngredientCandidate
+): Promise<void> {
+  let rawSnapshot;
+  try {
+    rawSnapshot = await dependencies.nutrition.getSnapshot(selected.nutritionSnapshotId);
+  } catch {
+    throw new ProviderUnavailableError('nutrition_source_unavailable');
+  }
+  const parsed = nutritionDataSnapshotSchema.safeParse(rawSnapshot);
+  if (!parsed.success) throw new CandidateConfirmationRequiredError();
+  const snapshot = parsed.data;
+  if (
+    snapshot.id !== selected.nutritionSnapshotId
+    || snapshot.foodId !== selected.foodId
+    || snapshot.foodState !== selected.foodState
+    || !isAllowedNutritionQuality(snapshot.qualityStatus, dependencies.allowTestFixtures)
+  ) throw new CandidateConfirmationRequiredError();
 }
 
 export function createIngredientPhotoCommands(
@@ -503,6 +607,121 @@ export function createIngredientPhotoCommands(
         return {
           nextState: stateWithPhotoVersion(state, photo, record),
           result: { photo }
+        };
+      });
+    },
+
+    async confirmIngredientCandidate(
+      userId: string,
+      envelope: WriteCommandEnvelope<{
+        readonly photoId: string;
+        readonly candidateId: string;
+        readonly confirmedGrams: number;
+        readonly expectedInventoryVersion: number;
+      }>
+    ): Promise<ConfirmedIngredientCandidateResult> {
+      const expectedFingerprint = commandFingerprint(envelope);
+      const initialState = await repository.read(userId);
+      const initialReplay = findRecord(
+        initialState,
+        'confirmIngredientCandidate',
+        envelope.idempotencyKey
+      );
+      if (initialReplay !== undefined) {
+        assertReplay(initialReplay, expectedFingerprint, envelope.idempotencyKey);
+        return resultConfirmation(initialState, initialReplay.resultVersionId);
+      }
+      assertConfirmedGrams(envelope.payload.confirmedGrams);
+      const beforeIo = latestPhoto(initialState, envelope.payload.photoId);
+      assertExpectedRevision(envelope.expectedVersion, beforeIo);
+      const selectedBeforeIo = selectedCandidate(beforeIo, envelope.payload.candidateId);
+      currentInventory(initialState, envelope.payload.expectedInventoryVersion);
+      await revalidateSelectedSnapshot(dependencies, selectedBeforeIo);
+
+      return repository.transact(userId, (state) => {
+        const replay = findRecord(
+          state,
+          'confirmIngredientCandidate',
+          envelope.idempotencyKey
+        );
+        if (replay !== undefined) {
+          assertReplay(replay, expectedFingerprint, envelope.idempotencyKey);
+          return {
+            nextState: state,
+            result: resultConfirmation(state, replay.resultVersionId)
+          };
+        }
+        const currentPhoto = latestPhoto(state, envelope.payload.photoId);
+        assertExpectedRevision(envelope.expectedVersion, currentPhoto);
+        const selected = selectedCandidate(currentPhoto, envelope.payload.candidateId);
+        assertSameStorageIdentity(beforeIo, currentPhoto);
+        assertSameCandidate(selectedBeforeIo, selected);
+        const previousInventory = currentInventory(
+          state,
+          envelope.payload.expectedInventoryVersion
+        );
+        const nextItems = [...(previousInventory?.items ?? [])];
+        const existingIndex = nextItems.findIndex((item) => (
+          item.foodId === selected.foodId
+          && item.nutritionSnapshotId === selected.nutritionSnapshotId
+        ));
+        if (existingIndex >= 0) {
+          const existing = nextItems[existingIndex];
+          if (existing === undefined) throw new Error('inventory_item_missing');
+          nextItems[existingIndex] = {
+            ...existing,
+            availableGrams: existing.availableGrams + envelope.payload.confirmedGrams
+          };
+        } else {
+          nextItems.push({
+            foodId: selected.foodId,
+            nutritionSnapshotId: selected.nutritionSnapshotId,
+            availableGrams: envelope.payload.confirmedGrams
+          });
+        }
+        nextItems.sort((left, right) => compareCodeUnits(
+          `${left.foodId}:${left.nutritionSnapshotId}`,
+          `${right.foodId}:${right.nutritionSnapshotId}`
+        ));
+        const createdAt = dependencies.now();
+        const inventory: InventoryVersion = {
+          kind: 'inventory_version',
+          id: dependencies.nextId('inventory'),
+          userId,
+          version: state.inventories.length + 1,
+          createdAt,
+          items: nextItems
+        };
+        const photo: IngredientPhotoVersion = {
+          ...currentPhoto,
+          id: dependencies.nextId('ingredient-photo-version'),
+          revision: currentPhoto.revision + 1,
+          createdAt,
+          workflowStatus: 'confirmed',
+          storageStatus: 'cleanup_pending',
+          confirmedCandidateId: selected.id,
+          confirmedGrams: envelope.payload.confirmedGrams,
+          inventoryVersionId: inventory.id,
+          nextCleanupAt: createdAt,
+          lastCleanupFailureCode: null
+        };
+        const record: IdempotencyRecord = {
+          operation: 'confirmIngredientCandidate',
+          key: envelope.idempotencyKey,
+          requestFingerprint: expectedFingerprint,
+          resultVersionId: photo.id
+        };
+        const ingredientPhotoVersions = [...state.ingredientPhotoVersions, photo];
+        return {
+          nextState: {
+            ...state,
+            inventories: [...state.inventories, inventory],
+            ingredientPhotoVersions,
+            activeInventoryVersionId: inventory.id,
+            idempotencyRecords: [...state.idempotencyRecords, record],
+            nextPhotoCleanupAt: deriveNextPhotoCleanupAt(ingredientPhotoVersions)
+          },
+          result: { photo, inventory }
         };
       });
     }

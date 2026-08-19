@@ -16,7 +16,7 @@ import {
   createIngredientPhotoCommands,
   createIngredientPhotoPlanningService
 } from './ingredient-photo';
-import { VersionConflictError } from './versioned-planning';
+import { VersionConflictError, type PlanningRepository } from './versioned-planning';
 
 const NOW = '2026-08-19T00:00:00.000Z';
 const EXPECTED_FILE_ID = 'cloud://env.bucket/ingredient-photos/photo-a/upload-a.jpg';
@@ -107,7 +107,7 @@ function defaultStorage(): PrivatePhotoStorage {
 }
 
 function createHarness(options: {
-  readonly repository?: InMemoryPlanningRepository;
+  readonly repository?: PlanningRepository;
   readonly nutrition?: NutritionProvider;
   readonly vision?: VisionProvider;
   readonly storage?: PrivatePhotoStorage;
@@ -158,6 +158,40 @@ async function createAndRegisterPhoto(commands: Commands) {
     idempotencyKey: 'photo-register-001',
     payload: { photoId: 'photo-a', privateFileId: EXPECTED_FILE_ID }
   });
+}
+
+async function createRegisterAndRecognize(commands: Commands): Promise<string> {
+  await createAndRegisterPhoto(commands);
+  const result = await commands.recognizeIngredientPhoto('user-a', {
+    expectedVersion: 2,
+    idempotencyKey: 'photo-recognize-001',
+    payload: { photoId: 'photo-a' }
+  });
+  const selected = result.photo.candidates[0];
+  if (selected === undefined) throw new Error('Expected recognized candidate');
+  return selected.id;
+}
+
+function confirmationEnvelope(
+  candidateId: string,
+  overrides: {
+    readonly expectedVersion?: number;
+    readonly expectedInventoryVersion?: number;
+    readonly confirmedGrams?: number;
+    readonly idempotencyKey?: string;
+    readonly photoId?: string;
+  } = {}
+) {
+  return {
+    expectedVersion: overrides.expectedVersion ?? 3,
+    idempotencyKey: overrides.idempotencyKey ?? 'photo-confirm-001',
+    payload: {
+      photoId: overrides.photoId ?? 'photo-a',
+      candidateId,
+      confirmedGrams: overrides.confirmedGrams ?? 125,
+      expectedInventoryVersion: overrides.expectedInventoryVersion ?? 0
+    }
+  };
 }
 
 function latestPhoto(state: PlanningAggregateState, photoId = 'photo-a'): IngredientPhotoVersion {
@@ -652,7 +686,7 @@ describe('ingredient photo commands', () => {
     expect(replay).toEqual(first);
     expect(vision.recognize).toHaveBeenCalledTimes(1);
     expect(nutrition.resolveCanonicalName).toHaveBeenCalledTimes(1);
-    expect(nutrition.getSnapshot).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(nutrition).getSnapshot.mock.calls).toHaveLength(1);
     expect((await repository.read('user-a')).ingredientPhotoVersions).toHaveLength(3);
   });
 
@@ -737,5 +771,323 @@ describe('ingredient photo commands', () => {
       payload: { photoId: 'missing-photo' }
     })).rejects.toBeInstanceOf(IngredientPhotoNotFoundError);
     expect(vision.recognize).not.toHaveBeenCalled();
+  });
+
+  test('atomically confirms a selected candidate and creates one inventory version', async () => {
+    const { commands, repository, storage } = createHarness();
+    const candidateId = await createRegisterAndRecognize(commands);
+
+    const result = await commands.confirmIngredientCandidate(
+      'user-a',
+      confirmationEnvelope(candidateId)
+    );
+
+    expect(result.photo).toMatchObject({
+      workflowStatus: 'confirmed',
+      storageStatus: 'cleanup_pending',
+      confirmedCandidateId: candidateId,
+      confirmedGrams: 125,
+      inventoryVersionId: result.inventory.id,
+      nextCleanupAt: NOW
+    });
+    expect(result.inventory).toMatchObject({
+      version: 1,
+      items: [{
+        foodId: 'food-chicken-breast',
+        nutritionSnapshotId: 'snapshot-chicken-breast-2026-08',
+        availableGrams: 125
+      }]
+    });
+    const state = await repository.read('user-a');
+    expect(state.ingredientPhotoVersions).toHaveLength(4);
+    expect(state.inventories).toHaveLength(1);
+    expect(state.activeInventoryVersionId).toBe(result.inventory.id);
+    expect(vi.mocked(storage).deletePrivateFile.mock.calls).toHaveLength(0);
+  });
+
+  test('merges only the selected food snapshot grams and sorts the next inventory', async () => {
+    const { commands, repository } = createHarness();
+    const candidateId = await createRegisterAndRecognize(commands);
+    await repository.transact('user-a', (state) => ({
+      nextState: {
+        ...state,
+        inventories: [{
+          kind: 'inventory_version',
+          id: 'inventory-existing-1',
+          userId: 'user-a',
+          version: 1,
+          createdAt: '2026-08-18T00:00:00.000Z',
+          items: [{
+            foodId: 'food-chicken-breast',
+            nutritionSnapshotId: 'snapshot-chicken-breast-2026-08',
+            availableGrams: 40
+          }, {
+            foodId: 'food-apple',
+            nutritionSnapshotId: 'snapshot-apple-2026-08',
+            availableGrams: 300
+          }]
+        }],
+        activeInventoryVersionId: 'inventory-existing-1'
+      },
+      result: undefined
+    }));
+
+    const result = await commands.confirmIngredientCandidate('user-a', confirmationEnvelope(
+      candidateId,
+      { expectedInventoryVersion: 1 }
+    ));
+
+    expect(result.inventory.items).toEqual([{
+      foodId: 'food-apple',
+      nutritionSnapshotId: 'snapshot-apple-2026-08',
+      availableGrams: 300
+    }, {
+      foodId: 'food-chicken-breast',
+      nutritionSnapshotId: 'snapshot-chicken-breast-2026-08',
+      availableGrams: 165
+    }]);
+  });
+
+  test('requires an explicit candidate selection without loading nutrition', async () => {
+    const { commands, nutrition } = createHarness();
+    await createRegisterAndRecognize(commands);
+    const callsBeforeConfirmation = vi.mocked(nutrition).getSnapshot.mock.calls.length;
+
+    await expect(commands.confirmIngredientCandidate(
+      'user-a',
+      confirmationEnvelope('')
+    )).rejects.toMatchObject({ code: 'candidate_confirmation_required' });
+    expect(vi.mocked(nutrition).getSnapshot.mock.calls).toHaveLength(callsBeforeConfirmation);
+  });
+
+  test('rejects a candidate selected from another photo', async () => {
+    const { commands, nutrition } = createHarness({
+      ids: [
+        'photo-a', 'upload-a', 'photo-a-version-1', 'photo-a-version-2',
+        'photo-a-recognition-request', 'photo-a-version-3',
+        'photo-b', 'upload-b', 'photo-b-version-1', 'photo-b-version-2',
+        'photo-b-recognition-request', 'photo-b-version-3'
+      ]
+    });
+    await createRegisterAndRecognize(commands);
+    await commands.createIngredientPhotoUpload('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'photo-create-002',
+      payload: { mediaType: 'image/jpeg' }
+    });
+    await commands.registerIngredientPhotoUpload('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'photo-register-002',
+      payload: {
+        photoId: 'photo-b',
+        privateFileId: 'cloud://env.bucket/ingredient-photos/photo-b/upload-b.jpg'
+      }
+    });
+    const second = await commands.recognizeIngredientPhoto('user-a', {
+      expectedVersion: 2,
+      idempotencyKey: 'photo-recognize-002',
+      payload: { photoId: 'photo-b' }
+    });
+    const foreignCandidate = second.photo.candidates[0];
+    if (foreignCandidate === undefined) throw new Error('Expected second photo candidate');
+    const callsBeforeConfirmation = vi.mocked(nutrition).getSnapshot.mock.calls.length;
+
+    await expect(commands.confirmIngredientCandidate(
+      'user-a',
+      confirmationEnvelope(foreignCandidate.id)
+    )).rejects.toMatchObject({ code: 'candidate_confirmation_required' });
+    expect(vi.mocked(nutrition).getSnapshot.mock.calls).toHaveLength(callsBeforeConfirmation);
+  });
+
+  test.each([0, 12.5])('rejects impossible confirmed gram value %s inside the application boundary', async (confirmedGrams) => {
+    const { commands, nutrition } = createHarness();
+    const candidateId = await createRegisterAndRecognize(commands);
+    const callsBeforeConfirmation = vi.mocked(nutrition).getSnapshot.mock.calls.length;
+
+    await expect(commands.confirmIngredientCandidate('user-a', confirmationEnvelope(
+      candidateId,
+      { confirmedGrams }
+    ))).rejects.toMatchObject({ code: 'candidate_confirmation_required' });
+    expect(vi.mocked(nutrition).getSnapshot.mock.calls).toHaveLength(callsBeforeConfirmation);
+  });
+
+  test('rejects stale photo and inventory versions before loading nutrition', async () => {
+    const { commands, nutrition } = createHarness();
+    const candidateId = await createRegisterAndRecognize(commands);
+    const callsBeforeConfirmation = vi.mocked(nutrition).getSnapshot.mock.calls.length;
+
+    await expect(commands.confirmIngredientCandidate('user-a', confirmationEnvelope(
+      candidateId,
+      { expectedVersion: 2, idempotencyKey: 'photo-confirm-stale-photo' }
+    ))).rejects.toEqual(new VersionConflictError(2, 3));
+    await expect(commands.confirmIngredientCandidate('user-a', confirmationEnvelope(
+      candidateId,
+      { expectedInventoryVersion: 1, idempotencyKey: 'photo-confirm-stale-inventory' }
+    ))).rejects.toEqual(new VersionConflictError(1, 0));
+    expect(vi.mocked(nutrition).getSnapshot.mock.calls).toHaveLength(callsBeforeConfirmation);
+  });
+
+  test('does not reveal another user photo through confirmation', async () => {
+    const { commands, nutrition } = createHarness();
+    const candidateId = await createRegisterAndRecognize(commands);
+    const callsBeforeConfirmation = vi.mocked(nutrition).getSnapshot.mock.calls.length;
+
+    await expect(commands.confirmIngredientCandidate(
+      'user-b',
+      confirmationEnvelope(candidateId)
+    )).rejects.toBeInstanceOf(IngredientPhotoNotFoundError);
+    expect(vi.mocked(nutrition).getSnapshot.mock.calls).toHaveLength(callsBeforeConfirmation);
+  });
+
+  test('rejects nutrition snapshot identity drift without changing state', async () => {
+    const nutrition = defaultNutrition();
+    const { commands, repository } = createHarness({ nutrition });
+    const candidateId = await createRegisterAndRecognize(commands);
+    const before = await repository.read('user-a');
+    vi.mocked(nutrition).getSnapshot.mockResolvedValue({
+      ...CHICKEN_SNAPSHOT,
+      foodId: 'food-drifted'
+    });
+
+    await expect(commands.confirmIngredientCandidate(
+      'user-a',
+      confirmationEnvelope(candidateId)
+    )).rejects.toMatchObject({ code: 'candidate_confirmation_required' });
+    expect(await repository.read('user-a')).toEqual(before);
+  });
+
+  test('rejects a test-fixture snapshot during confirmation when fixture mode is disabled', async () => {
+    const nutrition = defaultNutrition();
+    const { commands, repository } = createHarness({
+      nutrition,
+      allowTestFixtures: false
+    });
+    const candidateId = await createRegisterAndRecognize(commands);
+    const before = await repository.read('user-a');
+    vi.mocked(nutrition).getSnapshot.mockResolvedValue(snapshot({
+      id: CHICKEN_SNAPSHOT.id,
+      foodId: CHICKEN_SNAPSHOT.foodId,
+      canonicalNameZh: CHICKEN_SNAPSHOT.canonicalNameZh,
+      qualityStatus: 'test_fixture'
+    }));
+
+    await expect(commands.confirmIngredientCandidate(
+      'user-a',
+      confirmationEnvelope(candidateId)
+    )).rejects.toMatchObject({ code: 'candidate_confirmation_required' });
+    expect(await repository.read('user-a')).toEqual(before);
+  });
+
+  test('rechecks the current inventory version after snapshot I/O', async () => {
+    const repository = new InMemoryPlanningRepository();
+    const nutrition = defaultNutrition();
+    const originalGetSnapshot = nutrition.getSnapshot.bind(nutrition);
+    let snapshotLoads = 0;
+    nutrition.getSnapshot = vi.fn(async (snapshotId: string) => {
+      snapshotLoads += 1;
+      if (snapshotLoads === 2) {
+        await repository.transact('user-a', (state) => ({
+          nextState: {
+            ...state,
+            inventories: [{
+              kind: 'inventory_version',
+              id: 'concurrent-inventory-1',
+              userId: 'user-a',
+              version: 1,
+              createdAt: '2026-08-19T00:01:00.000Z',
+              items: [{
+                foodId: 'food-apple',
+                nutritionSnapshotId: 'snapshot-apple-2026-08',
+                availableGrams: 300
+              }]
+            }],
+            activeInventoryVersionId: 'concurrent-inventory-1'
+          },
+          result: undefined
+        }));
+      }
+      return originalGetSnapshot(snapshotId);
+    });
+    const { commands } = createHarness({ repository, nutrition });
+    const candidateId = await createRegisterAndRecognize(commands);
+
+    await expect(commands.confirmIngredientCandidate(
+      'user-a',
+      confirmationEnvelope(candidateId)
+    )).rejects.toEqual(new VersionConflictError(0, 1));
+    const state = await repository.read('user-a');
+    expect(state.ingredientPhotoVersions).toHaveLength(3);
+    expect(state.inventories).toHaveLength(1);
+    expect(state.idempotencyRecords.some((record) => (
+      record.operation === 'confirmIngredientCandidate'
+    ))).toBe(false);
+  });
+
+  test('sanitizes nutrition Provider failure during confirmation', async () => {
+    const nutrition = defaultNutrition();
+    const { commands } = createHarness({ nutrition });
+    const candidateId = await createRegisterAndRecognize(commands);
+    const privateDetail = `snapshot failed for ${CHICKEN_SNAPSHOT.id}`;
+    vi.mocked(nutrition).getSnapshot.mockRejectedValue(new Error(privateDetail));
+
+    const error = await captureError(() => commands.confirmIngredientCandidate(
+      'user-a',
+      confirmationEnvelope(candidateId)
+    ));
+
+    expect(error).toMatchObject({
+      code: 'provider_unavailable',
+      reason: 'nutrition_source_unavailable'
+    });
+    expect(errorText(error)).not.toContain(privateDetail);
+    expect(errorText(error)).not.toContain(CHICKEN_SNAPSHOT.id);
+  });
+
+  test('leaves photo and inventory versions unchanged when repository commit fails', async () => {
+    const base = new InMemoryPlanningRepository();
+    const commitError = new Error('repository_commit_failed');
+    let failCommit = false;
+    const repository: PlanningRepository = {
+      read: (userId) => base.read(userId),
+      transact: async <TResult>(userId: string, operation: Parameters<PlanningRepository['transact']>[1]) => {
+        if (!failCommit) return base.transact(userId, operation) as Promise<TResult>;
+        operation(await base.read(userId));
+        throw commitError;
+      }
+    };
+    const { commands } = createHarness({ repository });
+    const candidateId = await createRegisterAndRecognize(commands);
+    const before = await base.read('user-a');
+    failCommit = true;
+
+    await expect(commands.confirmIngredientCandidate(
+      'user-a',
+      confirmationEnvelope(candidateId)
+    )).rejects.toBe(commitError);
+    const after = await base.read('user-a');
+    expect(after.ingredientPhotoVersions).toEqual(before.ingredientPhotoVersions);
+    expect(after.inventories).toEqual(before.inventories);
+  });
+
+  test('replays confirmation without a second snapshot load or version pair', async () => {
+    const { commands, nutrition, repository } = createHarness();
+    const candidateId = await createRegisterAndRecognize(commands);
+    const envelope = confirmationEnvelope(candidateId);
+
+    const first = await commands.confirmIngredientCandidate('user-a', envelope);
+    const replay = await commands.confirmIngredientCandidate('user-a', envelope);
+    await expect(commands.confirmIngredientCandidate('user-a', confirmationEnvelope(
+      candidateId,
+      { confirmedGrams: 126 }
+    ))).rejects.toMatchObject({ code: 'idempotency_key_reused' });
+
+    expect(replay).toEqual(first);
+    expect(vi.mocked(nutrition).getSnapshot.mock.calls).toHaveLength(2);
+    const state = await repository.read('user-a');
+    expect(state.ingredientPhotoVersions).toHaveLength(4);
+    expect(state.inventories).toHaveLength(1);
+    expect(state.idempotencyRecords.filter((record) => (
+      record.operation === 'confirmIngredientCandidate'
+    ))).toHaveLength(1);
   });
 });
