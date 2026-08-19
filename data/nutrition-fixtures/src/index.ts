@@ -17,6 +17,16 @@ const FIXTURE_METADATA = {
   qualityStatus: 'test_fixture'
 } as const;
 
+export const TEST_INGREDIENT_VISION_RESPONSE = Object.freeze({
+  requestId: 'fixture-vision-request-v1',
+  candidates: Object.freeze([{
+    providerCandidateId: 'fixture-vision-rice-cooked-v1',
+    name: '测试米饭',
+    confidence: 0.97,
+    foodState: 'cooked' as const
+  }])
+});
+
 export const TEST_FOOD_KEYS = [
   'rice', 'oats', 'sweet-potato', 'corn',
   'broccoli', 'spinach', 'carrot', 'tomato', 'mushroom', 'cabbage',

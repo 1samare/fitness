@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {
   CandidateDiffUnavailableError,
+  CandidateConfirmationRequiredError,
   CandidateNotPendingError,
+  IngredientPhotoNotFoundError,
   IdempotencyKeyReuseError,
   InvalidGoalError,
   InvalidTrainingPlanError,
@@ -9,15 +11,18 @@ import {
   PastFactImmutableError,
   PastTrainingChangeError,
   PlanningPrerequisiteError,
+  PrivatePhotoOwnershipError,
   ProviderUnavailableError,
   NutritionConstraintsInfeasibleError,
   RecipeNotSelectableError,
+  StorageUnavailableError,
   TrainingDateOutsideGoalPeriodError,
   UnknownTrainingSessionError,
   VersionConflictError,
   type createMealPlanGenerationService,
   type createMealPlanEditingService,
   type createMealPlanRecalculationService,
+  type createIngredientPhotoPlanningService,
   createVersionedPlanningService,
   previewDailyEnergy
 } from '@fitness/application';
@@ -60,6 +65,10 @@ const knownActions = new Set([
   'recordTrainingCompletion',
   'decideMealPlanCandidate',
   'retryPendingRecalculation',
+  'createIngredientPhotoUpload',
+  'registerIngredientPhotoUpload',
+  'recognizeIngredientPhoto',
+  'confirmIngredientCandidate',
   'getCurrentContext'
 ]);
 
@@ -76,6 +85,10 @@ const authenticatedActions = new Set([
   'recordTrainingCompletion',
   'decideMealPlanCandidate',
   'retryPendingRecalculation',
+  'createIngredientPhotoUpload',
+  'registerIngredientPhotoUpload',
+  'recognizeIngredientPhoto',
+  'confirmIngredientCandidate',
   'getCurrentContext'
 ]);
 
@@ -90,7 +103,8 @@ export type VersionedPlanningService =
   | ReturnType<typeof createVersionedPlanningService>
   | ReturnType<typeof createMealPlanGenerationService>
   | ReturnType<typeof createMealPlanEditingService>
-  | ReturnType<typeof createMealPlanRecalculationService>;
+  | ReturnType<typeof createMealPlanRecalculationService>
+  | ReturnType<typeof createIngredientPhotoPlanningService>;
 
 export interface TrustedRequestContext {
   readonly userId: string;
@@ -537,6 +551,60 @@ async function executeAuthenticatedAction(
       }
     };
   }
+  if (request.action === 'createIngredientPhotoUpload') {
+    if (!('createIngredientPhotoUpload' in service)) {
+      throw new ProviderUnavailableError('vision_provider_unavailable');
+    }
+    const result = await service.createIngredientPhotoUpload(context.userId, request.payload);
+    return {
+      success: true,
+      data: {
+        kind: 'ingredient_photo_upload_created',
+        photo: publicIngredientPhoto(result.photo),
+        cloudPath: result.cloudPath
+      }
+    };
+  }
+  if (request.action === 'registerIngredientPhotoUpload') {
+    if (!('registerIngredientPhotoUpload' in service)) {
+      throw new ProviderUnavailableError('vision_provider_unavailable');
+    }
+    const result = await service.registerIngredientPhotoUpload(context.userId, request.payload);
+    return {
+      success: true,
+      data: {
+        kind: 'ingredient_photo_upload_registered',
+        photo: publicIngredientPhoto(result.photo)
+      }
+    };
+  }
+  if (request.action === 'recognizeIngredientPhoto') {
+    if (!('recognizeIngredientPhoto' in service)) {
+      throw new ProviderUnavailableError('vision_provider_unavailable');
+    }
+    const result = await service.recognizeIngredientPhoto(context.userId, request.payload);
+    return {
+      success: true,
+      data: {
+        kind: 'ingredient_photo_recognized',
+        photo: publicIngredientPhoto(result.photo)
+      }
+    };
+  }
+  if (request.action === 'confirmIngredientCandidate') {
+    if (!('confirmIngredientCandidate' in service)) {
+      throw new ProviderUnavailableError('vision_provider_unavailable');
+    }
+    const result = await service.confirmIngredientCandidate(context.userId, request.payload);
+    return {
+      success: true,
+      data: {
+        kind: 'ingredient_candidate_confirmed',
+        photo: publicIngredientPhoto(result.photo),
+        inventory: publicInventory(result.inventory)
+      }
+    };
+  }
   const current = await service.getCurrentContext(context.userId);
   return { success: true, data: currentContextResponse(current) };
 }
@@ -631,7 +699,25 @@ async function handlePlanningApiResult(
       return errorResponse(error.code, '训练会话缺少已审核的 MET 映射。');
     }
     if (error instanceof ProviderUnavailableError) {
-      return errorResponse(error.code, '营养数据暂时不可用。');
+      return errorResponse(
+        error.code,
+        error.reason === 'vision_provider_unavailable'
+          ? '图片识别暂时不可用，请手动录入。'
+          : '营养数据暂时不可用。'
+      );
+    }
+    if (error instanceof StorageUnavailableError) {
+      return errorResponse(error.code, '图片存储暂时不可用，请重新选择图片。');
+    }
+    if (
+      error instanceof IngredientPhotoNotFoundError
+      || error instanceof PrivatePhotoOwnershipError
+      || error instanceof CandidateConfirmationRequiredError
+    ) {
+      return errorResponse(
+        'candidate_confirmation_required',
+        '图片会话或候选不可用，请重新选择图片。'
+      );
     }
     if (error instanceof RecipeNotSelectableError) {
       return errorResponse(error.code, '请选择当前上下文提供的备选菜品。');

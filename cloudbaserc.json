@@ -7,7 +7,7 @@
       "dir": "./.build/cloudfunctions/planning-api",
       "runtime": "Nodejs20.19",
       "handler": "index.main",
-      "timeout": 5,
+      "timeout": 25,
       "installDependency": false
     }
   ]

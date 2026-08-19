@@ -4,6 +4,7 @@ import type {
   CloudBaseDocumentReference,
   CloudBaseTransaction
 } from '@fitness/persistence';
+import type { PrivatePhotoStorage } from '@fitness/domain';
 import { CloudBasePlanningRepository } from '@fitness/persistence';
 import { createRuntimePlanningHandler } from './runtime-handler';
 
@@ -80,6 +81,50 @@ const completeSetup = {
     }
   }
 } as const;
+
+const PHOTO_PREFIX = 'cloud://runtime-photo.bucket/';
+
+const fakeLocalPhotoStorage: PrivatePhotoStorage = {
+  inspectPrivateFile: () => Promise.resolve({ mediaType: 'image/jpeg', sizeBytes: 3 }),
+  deletePrivateFile: () => Promise.resolve('deleted')
+};
+
+async function runPhotoToRecognition(
+  runtime: ReturnType<typeof createRuntimePlanningHandler>,
+  prefix = PHOTO_PREFIX,
+  userId = 'runtime-photo-user'
+) {
+  const context = { userId } as const;
+  const created = await runtime({
+    action: 'createIngredientPhotoUpload',
+    payload: {
+      expectedVersion: 0,
+      idempotencyKey: `${userId}-create`,
+      payload: { mediaType: 'image/jpeg' }
+    }
+  }, context);
+  if (!created.success || created.data.kind !== 'ingredient_photo_upload_created') return created;
+  const registered = await runtime({
+    action: 'registerIngredientPhotoUpload',
+    payload: {
+      expectedVersion: 1,
+      idempotencyKey: `${userId}-register`,
+      payload: {
+        photoId: created.data.photo.photoId,
+        privateFileId: `${prefix}${created.data.cloudPath}`
+      }
+    }
+  }, context);
+  if (!registered.success) return registered;
+  return runtime({
+    action: 'recognizeIngredientPhoto',
+    payload: {
+      expectedVersion: 2,
+      idempotencyKey: `${userId}-recognize`,
+      payload: { photoId: created.data.photo.photoId }
+    }
+  }, context);
+}
 
 describe('runtime planning handler', () => {
   test('uses CloudBase persistence in cloud mode across cold starts', async () => {
@@ -292,5 +337,207 @@ describe('runtime planning handler', () => {
     });
     expect(JSON.stringify(recorded)).not.toContain('userId');
     expect(JSON.stringify(recorded)).not.toContain('wx-openid-completion');
+  });
+
+  test('fixture vision is available only in explicit local mode', async () => {
+    const runtime = createRuntimePlanningHandler({
+      runtimeMode: 'local',
+      environment: { CLOUDBASE_STORAGE_FILE_ID_PREFIX: PHOTO_PREFIX },
+      storage: fakeLocalPhotoStorage,
+      now: () => '2026-08-19T00:00:00.000Z'
+    });
+
+    const response = await runPhotoToRecognition(runtime);
+
+    expect(response).toMatchObject({
+      success: true,
+      data: {
+        kind: 'ingredient_photo_recognized',
+        photo: {
+          workflowStatus: 'recognized',
+          candidates: [{ canonicalNameZh: '测试米饭', confidence: 0.97 }]
+        }
+      }
+    });
+  });
+
+  test('cloud mode fails closed without a configured vision function', async () => {
+    const callFunction = vi.fn();
+    const runtime = createRuntimePlanningHandler({
+      runtimeMode: 'cloud',
+      database: new FakeDatabase(),
+      cloud: {
+        callFunction,
+        downloadFile: () => Promise.resolve({
+          fileContent: Uint8Array.from([0xff, 0xd8, 0xff])
+        }),
+        deleteFile: () => Promise.resolve({ fileList: [{ code: 'SUCCESS' }] })
+      },
+      environment: { CLOUDBASE_STORAGE_FILE_ID_PREFIX: PHOTO_PREFIX },
+      now: () => '2026-08-19T00:00:00.000Z'
+    });
+
+    const response = await runPhotoToRecognition(runtime, PHOTO_PREFIX, 'cloud-no-vision');
+
+    expect(response).toEqual({
+      success: false,
+      error: {
+        code: 'provider_unavailable',
+        message: '图片识别暂时不可用，请手动录入。'
+      }
+    });
+    expect(callFunction).not.toHaveBeenCalled();
+  });
+
+  test('cloud mode uses only validated server vision and private-storage configuration', async () => {
+    const observations: unknown[] = [];
+    const callFunction = vi.fn((input: {
+      readonly name: string;
+      readonly data: { readonly privateFileId: string };
+    }) => {
+      void input;
+      return Promise.resolve({
+        result: { requestId: 'cloud-vision-request-1', candidates: [] }
+      });
+    });
+    const downloadFile = vi.fn(() => Promise.resolve({
+      fileContent: Uint8Array.from([0xff, 0xd8, 0xff])
+    }));
+    const runtime = createRuntimePlanningHandler({
+      runtimeMode: 'cloud',
+      database: new FakeDatabase(),
+      cloud: {
+        callFunction,
+        downloadFile,
+        deleteFile: () => Promise.resolve({ fileList: [{ code: 'SUCCESS' }] })
+      },
+      environment: {
+        CLOUDBASE_STORAGE_FILE_ID_PREFIX: PHOTO_PREFIX,
+        FITNESS_VISION_FUNCTION_NAME: 'fitness-vision'
+      },
+      observeProvider: (event) => observations.push(event),
+      now: () => '2026-08-19T00:00:00.000Z',
+      nextId: (() => {
+        let sequence = 0;
+        return (prefix: string) => `${prefix}-${String(++sequence)}`;
+      })()
+    });
+
+    const response = await runPhotoToRecognition(runtime, PHOTO_PREFIX, 'cloud-configured');
+
+    expect(response).toMatchObject({
+      success: true,
+      data: {
+        kind: 'ingredient_photo_recognized',
+        photo: { workflowStatus: 'recognition_failed', candidates: [] }
+      }
+    });
+    expect(downloadFile).toHaveBeenCalledTimes(1);
+    expect(callFunction).toHaveBeenCalledTimes(1);
+    const cloudCall = callFunction.mock.calls[0]?.[0];
+    if (cloudCall === undefined) throw new Error('Expected one configured cloud vision call');
+    expect(cloudCall.name).toBe('fitness-vision');
+    expect(cloudCall.data.privateFileId).toMatch(
+      /^cloud:\/\/runtime-photo\.bucket\/ingredient-photos\/ingredient-photo-\d+\/ingredient-photo-upload-\d+\.jpg$/
+    );
+    expect(observations).toEqual([
+      expect.objectContaining({
+        provider: 'cloudbase-ai-vision',
+        attempt: 1,
+        status: 'succeeded'
+      })
+    ]);
+    expect(JSON.stringify(observations)).not.toMatch(
+      /cloud:\/\/|ingredient-photos\/|cloud-vision-request-1|privateFileId/
+    );
+  });
+
+  test.each([undefined, '', 'https://attacker.example/', 'cloud:///missing-bucket'])((
+    'create upload fails closed for missing or invalid storage prefix %s'
+  ), async (prefix) => {
+    const runtime = createRuntimePlanningHandler({
+      runtimeMode: 'cloud',
+      database: new FakeDatabase(),
+      cloud: {
+        callFunction: vi.fn(),
+        downloadFile: vi.fn(),
+        deleteFile: vi.fn()
+      },
+      environment: prefix === undefined
+        ? {}
+        : { CLOUDBASE_STORAGE_FILE_ID_PREFIX: prefix }
+    });
+
+    const response = await runtime({
+      action: 'createIngredientPhotoUpload',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'invalid-prefix-config',
+        payload: { mediaType: 'image/jpeg' }
+      }
+    }, { userId: 'cloud-invalid-prefix' });
+
+    expect(response).toEqual({
+      success: false,
+      error: { code: 'storage_unavailable', message: '图片存储暂时不可用，请重新选择图片。' }
+    });
+  });
+
+  test('invalid cloud photo configuration never bypasses authentication or strict parsing', async () => {
+    const runtime = createRuntimePlanningHandler({
+      runtimeMode: 'cloud',
+      database: new FakeDatabase(),
+      cloud: {
+        callFunction: vi.fn(),
+        downloadFile: vi.fn(),
+        deleteFile: vi.fn()
+      },
+      environment: {}
+    });
+    const request = {
+      action: 'createIngredientPhotoUpload',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'invalid-config-auth-order',
+        payload: { mediaType: 'image/jpeg' }
+      }
+    } as const;
+
+    await expect(runtime(request)).resolves.toMatchObject({
+      success: false,
+      error: { code: 'unauthenticated' }
+    });
+    await expect(runtime({ ...request, userId: 'attacker' }, { userId: 'trusted-user' }))
+      .resolves.toMatchObject({
+        success: false,
+        error: { code: 'invalid_request' }
+      });
+  });
+
+  test('an invalid cloud vision function name fails closed without invoking arbitrary functions', async () => {
+    const callFunction = vi.fn();
+    const runtime = createRuntimePlanningHandler({
+      runtimeMode: 'cloud',
+      database: new FakeDatabase(),
+      cloud: {
+        callFunction,
+        downloadFile: () => Promise.resolve({
+          fileContent: Uint8Array.from([0xff, 0xd8, 0xff])
+        }),
+        deleteFile: () => Promise.resolve({ fileList: [{ code: 'SUCCESS' }] })
+      },
+      environment: {
+        CLOUDBASE_STORAGE_FILE_ID_PREFIX: PHOTO_PREFIX,
+        FITNESS_VISION_FUNCTION_NAME: 'attacker/function/name'
+      }
+    });
+
+    const response = await runPhotoToRecognition(runtime, PHOTO_PREFIX, 'cloud-invalid-vision');
+
+    expect(response).toMatchObject({
+      success: false,
+      error: { code: 'provider_unavailable' }
+    });
+    expect(callFunction).not.toHaveBeenCalled();
   });
 });

@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createIngredientPhotoPlanningService,
   createMealPlanEditingService,
   createMealPlanRecalculationService,
   createVersionedPlanningService
 } from '@fitness/application';
+import type { PrivatePhotoStorage, VisionProvider } from '@fitness/domain';
 import {
   TEST_DAILY_MENU_CATALOG,
   TEST_DAILY_MENU_TEMPLATES,
+  TEST_MEAL_PLANNING_DAILY_MENU_CATALOG,
+  TEST_MEAL_PLANNING_DAILY_MENU_TEMPLATES,
+  TEST_MEAL_PLANNING_NUTRITION_SNAPSHOTS,
+  TEST_MEAL_PLANNING_RECIPE_TEMPLATES,
   TEST_NUTRITION_SNAPSHOTS,
   TEST_RECIPE_TEMPLATES
 } from '@fitness/nutrition-fixtures';
@@ -152,6 +158,102 @@ function createCompletionHarness() {
     }
   };
 }
+
+const PHOTO_FILE_ID_PREFIX = 'cloud://photo-test.bucket/';
+
+function createPhotoHarness(options: {
+  readonly storage?: PrivatePhotoStorage;
+  readonly vision?: VisionProvider;
+} = {}) {
+  const repository = new InMemoryPlanningRepository();
+  let sequence = 0;
+  const nutrition = new ReviewedNutritionCache({
+    mode: 'test',
+    snapshots: TEST_MEAL_PLANNING_NUTRITION_SNAPSHOTS
+  });
+  const storage: PrivatePhotoStorage = options.storage ?? {
+    inspectPrivateFile: () => Promise.resolve({ mediaType: 'image/jpeg', sizeBytes: 3 }),
+    deletePrivateFile: () => Promise.resolve('deleted')
+  };
+  const vision: VisionProvider = options.vision ?? {
+    recognize: () => Promise.resolve({
+      providerRequestId: 'provider-request-private-sentinel',
+      candidates: [{
+        providerCandidateId: 'provider-candidate-private-sentinel',
+        name: '测试米饭',
+        confidence: 0.97,
+        foodState: 'cooked'
+      }]
+    })
+  };
+  const handler = createPlanningApiHandler(createIngredientPhotoPlanningService({
+    repository,
+    providers: {
+      nutrition,
+      recipes: new StaticRecipeTemplateProvider({
+        mode: 'test',
+        templates: TEST_MEAL_PLANNING_RECIPE_TEMPLATES
+      }),
+      menus: new StaticDailyMenuCatalogProvider({
+        mode: 'test',
+        catalog: TEST_MEAL_PLANNING_DAILY_MENU_CATALOG,
+        menus: TEST_MEAL_PLANNING_DAILY_MENU_TEMPLATES
+      }),
+      allowTestFixtures: true
+    },
+    nutrition,
+    vision,
+    storage,
+    storageFileIdPrefix: PHOTO_FILE_ID_PREFIX,
+    allowTestFixtures: true,
+    now: () => '2026-08-19T00:00:00.000Z',
+    nextId: (prefix) => `${prefix}-${String(++sequence)}`
+  }));
+  return { handler, repository };
+}
+
+const photoRequests = {
+  createIngredientPhotoUpload: {
+    action: 'createIngredientPhotoUpload',
+    payload: {
+      expectedVersion: 0,
+      idempotencyKey: 'photo-create-handler-001',
+      payload: { mediaType: 'image/jpeg' }
+    }
+  },
+  registerIngredientPhotoUpload: {
+    action: 'registerIngredientPhotoUpload',
+    payload: {
+      expectedVersion: 1,
+      idempotencyKey: 'photo-register-handler-001',
+      payload: {
+        photoId: 'ingredient-photo-1',
+        privateFileId: `${PHOTO_FILE_ID_PREFIX}ingredient-photos/photo/upload.jpg`
+      }
+    }
+  },
+  recognizeIngredientPhoto: {
+    action: 'recognizeIngredientPhoto',
+    payload: {
+      expectedVersion: 2,
+      idempotencyKey: 'photo-recognize-handler-001',
+      payload: { photoId: 'ingredient-photo-1' }
+    }
+  },
+  confirmIngredientCandidate: {
+    action: 'confirmIngredientCandidate',
+    payload: {
+      expectedVersion: 3,
+      idempotencyKey: 'photo-confirm-handler-001',
+      payload: {
+        photoId: 'ingredient-photo-1',
+        candidateId: 'candidate-1',
+        confirmedGrams: 100,
+        expectedInventoryVersion: 0
+      }
+    }
+  }
+} as const;
 
 function withoutMealDisplaySnapshots(
   state: Awaited<ReturnType<InMemoryPlanningRepository['read']>>
@@ -1345,5 +1447,307 @@ describe('handlePlanningApi', () => {
     }, { userId: 'trusted-user-a' });
     expect(candidate.success).toBe(false);
     if (!candidate.success) expect(candidate.error.code).toBe('candidate_not_pending');
+  });
+});
+
+describe('ingredient photo planning API', () => {
+  it.each(Object.entries(photoRequests))(
+    '%s requires trusted CloudBase identity',
+    async (_action, request) => {
+      const { handler } = createPhotoHarness();
+      await expect(handler(request)).resolves.toEqual({
+        success: false,
+        error: { code: 'unauthenticated', message: '需要可信的微信用户身份。' }
+      });
+    }
+  );
+
+  it.each([
+    {
+      label: 'client user identity',
+      request: { ...photoRequests.createIngredientPhotoUpload, userId: 'attacker-user' }
+    },
+    {
+      label: 'client URL',
+      request: {
+        ...photoRequests.createIngredientPhotoUpload,
+        payload: {
+          ...photoRequests.createIngredientPhotoUpload.payload,
+          payload: {
+            ...photoRequests.createIngredientPhotoUpload.payload.payload,
+            url: 'https://private.example/photo.jpg'
+          }
+        }
+      }
+    },
+    {
+      label: 'client cloud path',
+      request: {
+        ...photoRequests.createIngredientPhotoUpload,
+        payload: {
+          ...photoRequests.createIngredientPhotoUpload.payload,
+          payload: {
+            ...photoRequests.createIngredientPhotoUpload.payload.payload,
+            cloudPath: 'ingredient-photos/attacker/chosen.jpg'
+          }
+        }
+      }
+    },
+    {
+      label: 'client nutrition fields',
+      request: {
+        ...photoRequests.recognizeIngredientPhoto,
+        payload: {
+          ...photoRequests.recognizeIngredientPhoto.payload,
+          payload: {
+            ...photoRequests.recognizeIngredientPhoto.payload.payload,
+            nutritionSnapshotId: 'snapshot-attacker',
+            energyKcal: 999
+          }
+        }
+      }
+    },
+    {
+      label: 'grams before confirmation',
+      request: {
+        ...photoRequests.recognizeIngredientPhoto,
+        payload: {
+          ...photoRequests.recognizeIngredientPhoto.payload,
+          payload: {
+            ...photoRequests.recognizeIngredientPhoto.payload.payload,
+            confirmedGrams: 100
+          }
+        }
+      }
+    }
+  ])('rejects $label outside the strict command schema', async ({ request }) => {
+    const { handler } = createPhotoHarness();
+    const response = await handler(request, { userId: 'trusted-user-a' });
+    expect(response.success).toBe(false);
+    if (!response.success) expect(response.error.code).toBe('invalid_request');
+  });
+
+  it('maps the full photo timeline field by field without private storage or provider identity', async () => {
+    const { handler, repository } = createPhotoHarness();
+    const context = { userId: 'trusted-user-a' } as const;
+    const created = await handler(photoRequests.createIngredientPhotoUpload, context);
+    if (!created.success || created.data.kind !== 'ingredient_photo_upload_created') {
+      throw new Error('Expected a created upload session');
+    }
+    const privateFileId = `${PHOTO_FILE_ID_PREFIX}${created.data.cloudPath}`;
+    const registered = await handler({
+      action: 'registerIngredientPhotoUpload',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'photo-register-handler-timeline',
+        payload: { photoId: created.data.photo.photoId, privateFileId }
+      }
+    }, context);
+    expect(registered).toMatchObject({
+      success: true,
+      data: { kind: 'ingredient_photo_upload_registered', photo: { revision: 2 } }
+    });
+    const recognized = await handler({
+      action: 'recognizeIngredientPhoto',
+      payload: {
+        expectedVersion: 2,
+        idempotencyKey: 'photo-recognize-handler-timeline',
+        payload: { photoId: created.data.photo.photoId }
+      }
+    }, context);
+    expect(recognized).toMatchObject({
+      success: true,
+      data: {
+        kind: 'ingredient_photo_recognized',
+        photo: {
+          revision: 3,
+          workflowStatus: 'recognized',
+          candidates: [{
+            foodId: 'fixture-rice',
+            canonicalNameZh: '测试米饭',
+            confidence: 0.97,
+            foodState: 'cooked'
+          }]
+        }
+      }
+    });
+    if (!recognized.success || recognized.data.kind !== 'ingredient_photo_recognized') {
+      throw new Error('Expected a recognized photo');
+    }
+    const candidateId = recognized.data.photo.candidates[0]?.id;
+    if (candidateId === undefined) throw new Error('Expected one public candidate');
+    const confirmed = await handler({
+      action: 'confirmIngredientCandidate',
+      payload: {
+        expectedVersion: 3,
+        idempotencyKey: 'photo-confirm-handler-timeline',
+        payload: {
+          photoId: created.data.photo.photoId,
+          candidateId,
+          confirmedGrams: 125,
+          expectedInventoryVersion: 0
+        }
+      }
+    }, context);
+    expect(confirmed).toMatchObject({
+      success: true,
+      data: {
+        kind: 'ingredient_candidate_confirmed',
+        photo: { revision: 4, workflowStatus: 'confirmed', confirmedCandidateId: candidateId },
+        inventory: { version: 1, items: [{ availableGrams: 125 }] }
+      }
+    });
+    expect(created.data.cloudPath).toMatch(
+      /^ingredient-photos\/ingredient-photo-\d+\/ingredient-photo-upload-\d+\.jpg$/
+    );
+    const serialized = JSON.stringify([registered, recognized, confirmed]);
+    for (const privateSentinel of [
+      'trusted-user-a',
+      privateFileId,
+      'cloud://',
+      'ingredient-photos/',
+      'provider-request-private-sentinel',
+      'provider-candidate-private-sentinel',
+      'confirmedGrams',
+      'expectedPrivateFileId',
+      'expectedCloudPath'
+    ]) expect(serialized).not.toContain(privateSentinel);
+    expect((await repository.read('trusted-user-a')).ingredientPhotoVersions).toHaveLength(4);
+  });
+
+  it('maps photo ownership and missing-photo failures to one non-probing public error', async () => {
+    const { handler } = createPhotoHarness();
+    const context = { userId: 'trusted-user-a' } as const;
+    const missing = await handler(photoRequests.recognizeIngredientPhoto, context);
+    expect(missing).toEqual({
+      success: false,
+      error: {
+        code: 'candidate_confirmation_required',
+        message: '图片会话或候选不可用，请重新选择图片。'
+      }
+    });
+    const created = await handler(photoRequests.createIngredientPhotoUpload, context);
+    if (!created.success || created.data.kind !== 'ingredient_photo_upload_created') {
+      throw new Error('Expected a created upload session');
+    }
+    const mismatch = await handler({
+      action: 'registerIngredientPhotoUpload',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'photo-register-handler-mismatch',
+        payload: {
+          photoId: created.data.photo.photoId,
+          privateFileId: 'cloud://attacker.bucket/ingredient-photos/private.jpg'
+        }
+      }
+    }, context);
+    expect(mismatch).toEqual(missing);
+    expect(JSON.stringify(mismatch)).not.toContain('attacker.bucket');
+  });
+
+  it('maps storage, vision, stale revision, and confirmation failures without raw messages', async () => {
+    const storageFailure = createPhotoHarness({
+      storage: {
+        inspectPrivateFile: () => Promise.reject(new Error('RAW_STORAGE_SECRET')),
+        deletePrivateFile: () => Promise.resolve('deleted')
+      }
+    });
+    const context = { userId: 'trusted-user-a' } as const;
+    const storageCreated = await storageFailure.handler(
+      photoRequests.createIngredientPhotoUpload,
+      context
+    );
+    if (!storageCreated.success || storageCreated.data.kind !== 'ingredient_photo_upload_created') {
+      throw new Error('Expected a created upload session');
+    }
+    const storageResponse = await storageFailure.handler({
+      action: 'registerIngredientPhotoUpload',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'photo-register-handler-storage-failure',
+        payload: {
+          photoId: storageCreated.data.photo.photoId,
+          privateFileId: `${PHOTO_FILE_ID_PREFIX}${storageCreated.data.cloudPath}`
+        }
+      }
+    }, context);
+    expect(storageResponse).toEqual({
+      success: false,
+      error: { code: 'storage_unavailable', message: '图片存储暂时不可用，请重新选择图片。' }
+    });
+
+    const visionFailure = createPhotoHarness({
+      vision: { recognize: () => Promise.reject(new Error('RAW_PROVIDER_SECRET')) }
+    });
+    const visionCreated = await visionFailure.handler(
+      photoRequests.createIngredientPhotoUpload,
+      context
+    );
+    if (!visionCreated.success || visionCreated.data.kind !== 'ingredient_photo_upload_created') {
+      throw new Error('Expected a created upload session');
+    }
+    await visionFailure.handler({
+      action: 'registerIngredientPhotoUpload',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'photo-register-handler-provider-failure',
+        payload: {
+          photoId: visionCreated.data.photo.photoId,
+          privateFileId: `${PHOTO_FILE_ID_PREFIX}${visionCreated.data.cloudPath}`
+        }
+      }
+    }, context);
+    const providerResponse = await visionFailure.handler({
+      action: 'recognizeIngredientPhoto',
+      payload: {
+        expectedVersion: 2,
+        idempotencyKey: 'photo-recognize-handler-provider-failure',
+        payload: { photoId: visionCreated.data.photo.photoId }
+      }
+    }, context);
+    expect(providerResponse).toEqual({
+      success: false,
+      error: { code: 'provider_unavailable', message: '图片识别暂时不可用，请手动录入。' }
+    });
+
+    const stale = await visionFailure.handler({
+      action: 'recognizeIngredientPhoto',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'photo-recognize-handler-stale',
+        payload: { photoId: visionCreated.data.photo.photoId }
+      }
+    }, context);
+    expect(stale).toEqual({
+      success: false,
+      error: { code: 'version_conflict', message: '数据已被更新，请刷新后重试。' }
+    });
+
+    const confirmation = await visionFailure.handler({
+      action: 'confirmIngredientCandidate',
+      payload: {
+        expectedVersion: 2,
+        idempotencyKey: 'photo-confirm-handler-required',
+        payload: {
+          photoId: visionCreated.data.photo.photoId,
+          candidateId: 'not-recognized',
+          confirmedGrams: 100,
+          expectedInventoryVersion: 0
+        }
+      }
+    }, context);
+    expect(confirmation).toEqual({
+      success: false,
+      error: {
+        code: 'candidate_confirmation_required',
+        message: '图片会话或候选不可用，请重新选择图片。'
+      }
+    });
+    expect(JSON.stringify([
+      storageResponse,
+      providerResponse,
+      stale,
+      confirmation
+    ])).not.toMatch(/RAW_STORAGE_SECRET|RAW_PROVIDER_SECRET/);
   });
 });

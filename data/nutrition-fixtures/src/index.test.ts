@@ -3,7 +3,8 @@ import {
   dailyMenuCatalogVersionSchema,
   dailyMenuTemplateVersionSchema,
   nutritionDataSnapshotSchema,
-  recipeTemplateVersionSchema
+  recipeTemplateVersionSchema,
+  visionProviderResponseSchema
 } from '@fitness/contracts';
 
 async function fixtures() {
@@ -46,6 +47,23 @@ async function balancedFixtures() {
 }
 
 describe('nutrition test fixtures', () => {
+  it('provides a deterministic raw vision response without nutrition or quantity claims', async () => {
+    const module: Record<string, unknown> = await import('./index').catch(() => ({}));
+    const fixture = visionProviderResponseSchema.parse(module.TEST_INGREDIENT_VISION_RESPONSE);
+    expect(fixture).toEqual({
+      requestId: 'fixture-vision-request-v1',
+      candidates: [{
+        providerCandidateId: 'fixture-vision-rice-cooked-v1',
+        name: '测试米饭',
+        confidence: 0.97,
+        foodState: 'cooked'
+      }]
+    });
+    expect(JSON.stringify(fixture)).not.toMatch(
+      /grams|energy|protein|fat|carbohydrate|nutritionSnapshotId|foodId|userId/
+    );
+  });
+
   it('contains exactly 28 traceable non-production snapshots across all core groups', async () => {
     const { snapshots } = await fixtures();
     const parsed = snapshots.map((snapshot) => nutritionDataSnapshotSchema.parse(snapshot));
