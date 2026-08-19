@@ -149,7 +149,8 @@ export type PlanningWriteOperation =
   | 'createIngredientPhotoUpload'
   | 'registerIngredientPhotoUpload'
   | 'recognizeIngredientPhoto'
-  | 'confirmIngredientCandidate';
+  | 'confirmIngredientCandidate'
+  | 'cleanupIngredientPhoto';
 
 type SingleResultIdempotencyRecord<TOperation extends PlanningWriteOperation> = {
   readonly operation: TOperation;
@@ -173,6 +174,7 @@ export type IdempotencyRecord =
   | SingleResultIdempotencyRecord<'registerIngredientPhotoUpload'>
   | SingleResultIdempotencyRecord<'recognizeIngredientPhoto'>
   | SingleResultIdempotencyRecord<'confirmIngredientCandidate'>
+  | SingleResultIdempotencyRecord<'cleanupIngredientPhoto'>
   | {
       readonly operation: 'completePlanningSetup';
       readonly key: string;

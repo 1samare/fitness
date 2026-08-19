@@ -9,6 +9,21 @@
       "handler": "index.main",
       "timeout": 25,
       "installDependency": false
+    },
+    {
+      "name": "photo-cleanup",
+      "dir": "./.build/cloudfunctions/photo-cleanup",
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "timeout": 25,
+      "installDependency": false,
+      "triggers": [
+        {
+          "name": "photo-cleanup-every-15-minutes",
+          "type": "timer",
+          "config": "0 */15 * * * * *"
+        }
+      ]
     }
   ]
 }

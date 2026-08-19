@@ -189,6 +189,7 @@ function assertIdempotencyResult(
     || record.operation === 'registerIngredientPhotoUpload'
     || record.operation === 'recognizeIngredientPhoto'
     || record.operation === 'confirmIngredientCandidate'
+    || record.operation === 'cleanupIngredientPhoto'
   ) {
     if (!entityIds.ingredientPhotos.has(record.resultVersionId)) corrupt();
     return;

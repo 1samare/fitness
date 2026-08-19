@@ -1,0 +1,23 @@
+{
+  "name": "@fitness/photo-cleanup",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dry-run": "tcb-ff --source=dist/index.js --target=main --dry-run"
+  },
+  "dependencies": {
+    "@fitness/application": "workspace:*",
+    "@fitness/domain": "workspace:*",
+    "@fitness/persistence": "workspace:*",
+    "@fitness/providers": "workspace:*",
+    "wx-server-sdk": "^4.0.2"
+  },
+  "devDependencies": {
+    "@cloudbase/functions-framework": "^1.6.0",
+    "tsup": "^8.5.0"
+  }
+}

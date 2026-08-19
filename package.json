@@ -14,6 +14,7 @@
     "build:miniprogram:local": "node scripts/build-miniprogram.mjs --api-mode=local",
     "dev:api": "node scripts/start-local-api.mjs",
     "dry-run:api": "pnpm --filter @fitness/planning-api build && pnpm --filter @fitness/planning-api dry-run",
+    "dry-run:photo-cleanup": "pnpm --filter @fitness/photo-cleanup build && pnpm --filter @fitness/photo-cleanup dry-run",
     "lint": "eslint .",
     "open:miniprogram": "pnpm build:miniprogram:local && powershell -ExecutionPolicy Bypass -File scripts/open-miniprogram.ps1",
     "smoke:api": "pnpm --filter @fitness/planning-api build && vitest run --config vitest.smoke.config.ts",

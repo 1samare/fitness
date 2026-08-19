@@ -786,7 +786,8 @@ const idempotencyRecordSchema = z.discriminatedUnion('operation', [
   singleResultIdempotencyRecordSchema('createIngredientPhotoUpload'),
   singleResultIdempotencyRecordSchema('registerIngredientPhotoUpload'),
   singleResultIdempotencyRecordSchema('recognizeIngredientPhoto'),
-  singleResultIdempotencyRecordSchema('confirmIngredientCandidate')
+  singleResultIdempotencyRecordSchema('confirmIngredientCandidate'),
+  singleResultIdempotencyRecordSchema('cleanupIngredientPhoto')
 ]);
 
 export const planningAggregateStateSchema = z.object({

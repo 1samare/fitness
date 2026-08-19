@@ -1,0 +1,12 @@
+{
+  "rules": {
+    "ingredient-photos/{photoId}/{fileName}": {
+      "read": "auth != null && auth.openid == resource.creator",
+      "write": "auth != null && auth.openid == resource.creator"
+    },
+    "*": {
+      "read": false,
+      "write": false
+    }
+  }
+}

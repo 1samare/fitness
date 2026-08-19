@@ -56,7 +56,7 @@ export interface CloudBaseDatabase extends CloudBaseTransaction {
 
 interface StoredPlanningDocument {
   readonly schemaVersion: 6;
-  readonly state: PlanningAggregateState;
+  readonly state: PlanningAggregateState & { readonly userId: string };
 }
 
 const phase4Empty = {
@@ -101,7 +101,7 @@ function migrateV4RecalculationConflictDetails(
   };
 }
 
-function decodeDocument(value: unknown, userId: string): PlanningAggregateState {
+export function decodePlanningDocument(value: unknown, userId: string): PlanningAggregateState {
   if (
     !isRecord(value)
     || (value.schemaVersion !== 2
@@ -113,23 +113,47 @@ function decodeDocument(value: unknown, userId: string): PlanningAggregateState 
   ) {
     throw new CorruptPlanningStateError();
   }
+  const persistedUserId = value.state.userId;
+  if (persistedUserId !== undefined && persistedUserId !== userId) {
+    throw new CorruptPlanningStateError();
+  }
+  const storedState = { ...value.state };
+  delete storedState.userId;
   const candidateState = value.schemaVersion === 2
-    ? { ...value.state, dailyNutritionTargets: [], ...phase4Empty, ...phase5Empty }
+    ? { ...storedState, dailyNutritionTargets: [], ...phase4Empty, ...phase5Empty }
     : value.schemaVersion === 3
-      ? { ...value.state, ...phase4Empty, ...phase5Empty }
+      ? { ...storedState, ...phase4Empty, ...phase5Empty }
       : value.schemaVersion === 4
-        ? { ...migrateV4RecalculationConflictDetails(value.state), ...phase5Empty }
+        ? { ...migrateV4RecalculationConflictDetails(storedState), ...phase5Empty }
         : value.schemaVersion === 5
-          ? { ...value.state, ...phase5Empty }
-          : value.state;
+          ? { ...storedState, ...phase5Empty }
+          : storedState;
   return parseAndAssertPlanningState(candidateState, userId);
+}
+
+export function decodePlanningDocumentForCleanup(value: unknown): {
+  readonly userId: string;
+  readonly state: PlanningAggregateState;
+} {
+  if (
+    !isRecord(value)
+    || value.schemaVersion !== 6
+    || !isRecord(value.state)
+    || typeof value.state.userId !== 'string'
+    || value.state.userId.length === 0
+  ) throw new CorruptPlanningStateError();
+  const userId = value.state.userId;
+  return { userId, state: decodePlanningDocument(value, userId) };
 }
 
 function encodeDocument(
   state: PlanningAggregateState,
   userId: string
 ): StoredPlanningDocument {
-  return { schemaVersion: 6, state: parseAndAssertPlanningState(state, userId) };
+  return {
+    schemaVersion: 6,
+    state: { ...parseAndAssertPlanningState(state, userId), userId }
+  };
 }
 
 export class CloudBasePlanningRepository implements PlanningRepository {
@@ -146,7 +170,7 @@ export class CloudBasePlanningRepository implements PlanningRepository {
       .get();
     return result.data === undefined
       ? createEmptyState()
-      : decodeDocument(result.data, userId);
+      : decodePlanningDocument(result.data, userId);
   }
 
   public async transact<TResult>(
@@ -162,7 +186,7 @@ export class CloudBasePlanningRepository implements PlanningRepository {
       const stored = await reference.get();
       const current = stored.data === undefined
         ? createEmptyState()
-        : decodeDocument(stored.data, userId);
+        : decodePlanningDocument(stored.data, userId);
       const { nextState, result } = operation(current);
       await reference.set({ data: encodeDocument(nextState, userId) });
       return result;
