@@ -1,4 +1,8 @@
-import type { PlanningApiResponse, PublicIngredientPhoto } from '@fitness/contracts';
+import type {
+  PlanningApiRequest,
+  PlanningApiResponse,
+  PublicIngredientPhoto
+} from '@fitness/contracts';
 import { planningApiClient } from '../../services/planning-api';
 import {
   buildConfirmIngredientCommand,
@@ -63,6 +67,7 @@ interface PageActions {
 }
 
 let selectedLocalFile: SelectedLocalFile | null = null;
+let photoContextRefreshRequired = false;
 
 const photoActions: readonly IngredientPhotoAction[] = [
   'createIngredientPhotoUpload',
@@ -117,6 +122,30 @@ function responseError(response: PlanningApiResponse): string {
   return response.success
     ? '照片服务返回了不匹配的结果，请重新选择图片。'
     : response.error.message;
+}
+
+async function callWithSingleReplay(
+  request: PlanningApiRequest
+): Promise<PlanningApiResponse> {
+  try {
+    return await planningApiClient.call(request);
+  } catch {
+    return planningApiClient.call(request);
+  }
+}
+
+async function readLatestPhotoVersions(): Promise<{
+  readonly ingredientPhoto: number;
+  readonly inventory: number;
+}> {
+  const response = await planningApiClient.call({ action: 'getCurrentContext' });
+  if (!response.success || response.data.kind !== 'current_context') {
+    throw new Error(responseError(response));
+  }
+  return {
+    ingredientPhoto: response.data.latestVersions.ingredientPhoto,
+    inventory: response.data.latestVersions.inventory
+  };
 }
 
 function mediaTypeFromPath(path: string): 'image/jpeg' | 'image/png' | undefined {
@@ -218,6 +247,7 @@ Page<PageData, PageActions>({
         this.setData({ errorMessage: responseError(response), statusMessage: '' });
         return;
       }
+      photoContextRefreshRequired = false;
       const photo = response.data.ingredientPhoto;
       const common = {
         latestIngredientPhotoVersion: response.data.latestVersions.ingredientPhoto,
@@ -277,6 +307,32 @@ Page<PageData, PageActions>({
 
   async onChoosePhoto() {
     if (this.data.choosing || this.data.uploading) return;
+    if (photoContextRefreshRequired) {
+      this.setData({
+        choosing: true,
+        errorMessage: '',
+        statusMessage: '正在同步最新照片状态…'
+      });
+      try {
+        const latestVersions = await readLatestPhotoVersions();
+        this.setData({
+          latestIngredientPhotoVersion: latestVersions.ingredientPhoto,
+          expectedInventoryVersion: latestVersions.inventory,
+          statusMessage: ''
+        });
+        photoContextRefreshRequired = false;
+      } catch (error: unknown) {
+        this.setData({
+          errorMessage: error instanceof Error
+            ? error.message
+            : '无法同步最新照片状态，请稍后重试。',
+          statusMessage: ''
+        });
+        return;
+      } finally {
+        this.setData({ choosing: false });
+      }
+    }
     clearAllPending();
     selectedLocalFile = null;
     this.setData({
@@ -328,11 +384,12 @@ Page<PageData, PageActions>({
         expectedInventoryVersion: null,
         confirmedGrams: null
       });
-      const created = await planningApiClient.call(buildCreateIngredientPhotoUploadCommand({
+      const createRequest = buildCreateIngredientPhotoUploadCommand({
         mediaType: localFile.mediaType,
         expectedVersion: createPending.expectedVersion,
         idempotencyKey: createPending.idempotencyKey
-      }));
+      });
+      const created = await callWithSingleReplay(createRequest);
       const createdPhoto = photoFromResponse(created, 'ingredient_photo_upload_created');
       if (createdPhoto === undefined || !created.success || created.data.kind !== 'ingredient_photo_upload_created') {
         throw new Error(responseError(created));
@@ -351,18 +408,20 @@ Page<PageData, PageActions>({
         confirmedGrams: null
       });
       this.setData({ statusMessage: '正在登记并校验私有图片…' });
-      const registered = await planningApiClient.call(buildRegisterIngredientPhotoUploadCommand({
+      const registerRequest = buildRegisterIngredientPhotoUploadCommand({
         photoId: createdPhoto.photoId,
         privateFileId,
         photoRevision: registerPending.expectedVersion,
         idempotencyKey: registerPending.idempotencyKey
-      }));
+      });
+      const registered = await callWithSingleReplay(registerRequest);
       const registeredPhoto = photoFromResponse(
         registered,
         'ingredient_photo_upload_registered'
       );
       if (registeredPhoto === undefined) throw new Error(responseError(registered));
       clearPending('registerIngredientPhotoUpload');
+      photoContextRefreshRequired = false;
       this.setData({
         photoId: registeredPhoto.photoId,
         photoRevision: registeredPhoto.revision,
@@ -371,6 +430,7 @@ Page<PageData, PageActions>({
         statusMessage: '图片已登记。请单独发起识别。'
       });
     } catch (error: unknown) {
+      photoContextRefreshRequired = true;
       this.setData({
         canUpload: false,
         canRecognize: false,

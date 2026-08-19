@@ -53,7 +53,7 @@ describe('pending ingredient photo commands', () => {
       .toBeUndefined();
   });
 
-  test('persists grams only for submitted confirmation and reuses the exact key and grams', () => {
+  test('persists grams only for submitted confirmation and reuses an identical command', () => {
     const nextKey = vi.fn(() => 'photo-confirm-001');
     const submitted = {
       action: 'confirmIngredientCandidate' as const,
@@ -70,7 +70,7 @@ describe('pending ingredient photo commands', () => {
       JSON.parse(JSON.stringify(first.pending))
     );
     const retry = selectPendingIngredientPhotoCommand({
-      command: { ...submitted, expectedVersion: 8, expectedInventoryVersion: 9 },
+      command: submitted,
       pending: restored,
       nextKey
     });
@@ -80,6 +80,35 @@ describe('pending ingredient photo commands', () => {
     expect(retry.pending.idempotencyKey).toBe('photo-confirm-001');
     expect(retry.pending.confirmedGrams).toBe(125);
     expect(nextKey).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    ['photo revision', { expectedVersion: 8 }],
+    ['inventory version', { expectedInventoryVersion: 9 }]
+  ] as const)('creates a new key when the %s changes', (_label, changedVersion) => {
+    const submitted = {
+      action: 'confirmIngredientCandidate' as const,
+      expectedVersion: 3,
+      photoId: 'photo-a',
+      candidateId: 'candidate-a',
+      expectedInventoryVersion: 4,
+      confirmedGrams: 125
+    };
+    const first = selectPendingIngredientPhotoCommand({
+      command: submitted,
+      pending: undefined,
+      nextKey: () => 'photo-confirm-001'
+    });
+
+    const changed = selectPendingIngredientPhotoCommand({
+      command: { ...submitted, ...changedVersion },
+      pending: first.pending,
+      nextKey: () => 'photo-confirm-002'
+    });
+
+    expect(changed.reused).toBe(false);
+    expect(changed.pending.idempotencyKey).toBe('photo-confirm-002');
+    expect(changed.pending).toMatchObject(changedVersion);
   });
 
   test('creates a new confirmation when the user explicitly submits different grams', () => {

@@ -108,8 +108,10 @@ function sameLogicalCommand(
   command: PendingIngredientPhotoDraft
 ): boolean {
   return pending.action === command.action
+    && pending.expectedVersion === command.expectedVersion
     && pending.photoId === command.photoId
     && pending.candidateId === command.candidateId
+    && pending.expectedInventoryVersion === command.expectedInventoryVersion
     && pending.confirmedGrams === command.confirmedGrams;
 }
 

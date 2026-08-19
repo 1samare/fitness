@@ -1,6 +1,7 @@
 import {
   planningApiResponseSchema,
   type PlanningApiRequest,
+  type PlanningApiResponse,
   type PublicIngredientPhoto
 } from '@fitness/contracts';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -24,7 +25,11 @@ interface PageInstance extends PageOptions {
 }
 
 const calls: PlanningApiRequest[] = [];
-const responses: unknown[] = [];
+const responses: (
+  | PlanningApiResponse
+  | Promise<PlanningApiResponse>
+  | (() => Promise<PlanningApiResponse>)
+)[] = [];
 const storage = new Map<string, unknown>();
 const uploads: { readonly cloudPath: string; readonly filePath: string }[] = [];
 const redirects: string[] = [];
@@ -40,7 +45,13 @@ vi.mock('../../services/planning-api', () => ({
     call(request: PlanningApiRequest) {
       calls.push(request);
       const response = responses.shift();
-      return (response instanceof Promise ? response : Promise.resolve(response))
+      if (response === undefined) {
+        return Promise.reject(new Error(`Missing response for ${request.action}`));
+      }
+      const outcome: Promise<PlanningApiResponse> = typeof response === 'function'
+        ? response()
+        : response instanceof Promise ? response : Promise.resolve(response);
+      return outcome
         .then((value) => planningApiResponseSchema.parse(value));
     }
   }
@@ -77,7 +88,7 @@ function pageInstance(): PageInstance {
   };
 }
 
-function currentContextResponse(ingredientPhoto: PublicIngredientPhoto) {
+function currentContextResponse(ingredientPhoto: PublicIngredientPhoto): PlanningApiResponse {
   return {
     success: true,
     data: {
@@ -108,7 +119,7 @@ function currentContextResponse(ingredientPhoto: PublicIngredientPhoto) {
         ingredientPhoto: 1
       }
     }
-  } as const;
+  };
 }
 
 beforeEach(async () => {
@@ -217,7 +228,7 @@ describe('ingredient photo page controller', () => {
     });
     page.onCandidateChange.call(page, { detail: { value: 'candidate-a' } });
     page.onGramsInput.call(page, { detail: { value: '125' } });
-    responses.push(Promise.reject(new Error('response lost')));
+    responses.push(() => Promise.reject(new Error('response lost')));
 
     await page.onConfirmCandidate.call(page);
 
@@ -249,6 +260,133 @@ describe('ingredient photo page controller', () => {
     expect(storage.size).toBe(0);
     expect(page.data.successMessage).toContain('库存');
     expect(page.data.successMessage).toContain('餐单与营养目标尚未自动变更');
+  });
+
+  test('replays a response-lost create once with the exact redacted pending key', async () => {
+    const page = pageInstance();
+    await page.onChoosePhoto.call(page);
+    responses.push(
+      () => {
+        expect(JSON.stringify([...storage.values()])).not.toMatch(
+          /local-private-photo|cloud:\/\/sensitive|ingredient-photos\/random|审核鸡胸肉|confidence/
+        );
+        return Promise.reject(new Error('create response lost'));
+      },
+      { success: true, data: {
+        kind: 'ingredient_photo_upload_created',
+        photo: publicPhoto('awaiting_upload', 1),
+        cloudPath: 'ingredient-photos/random/photo.jpg'
+      } },
+      { success: true, data: {
+        kind: 'ingredient_photo_upload_registered', photo: publicPhoto('uploaded', 2)
+      } }
+    );
+
+    await page.onUploadPhoto.call(page);
+
+    const createCalls = calls.filter((request) => request.action === 'createIngredientPhotoUpload');
+    expect(createCalls).toHaveLength(2);
+    expect(createCalls[1]).toEqual(createCalls[0]);
+    expect(page.data.canRecognize).toBe(true);
+    const serialized = JSON.stringify([...storage.values()]);
+    expect(serialized).not.toMatch(/local-private-photo|cloud:\/\/sensitive|ingredient-photos\/random/);
+  });
+
+  test('replays a response-lost register once while the fileID remains local', async () => {
+    const page = pageInstance();
+    await page.onChoosePhoto.call(page);
+    responses.push(
+      { success: true, data: {
+        kind: 'ingredient_photo_upload_created',
+        photo: publicPhoto('awaiting_upload', 1),
+        cloudPath: 'ingredient-photos/random/photo.jpg'
+      } },
+      () => {
+        expect(JSON.stringify([...storage.values()])).not.toMatch(
+          /local-private-photo|cloud:\/\/sensitive|ingredient-photos\/random|审核鸡胸肉|confidence/
+        );
+        return Promise.reject(new Error('register response lost'));
+      },
+      { success: true, data: {
+        kind: 'ingredient_photo_upload_registered', photo: publicPhoto('uploaded', 2)
+      } }
+    );
+
+    await page.onUploadPhoto.call(page);
+
+    const registerCalls = calls.filter(
+      (request) => request.action === 'registerIngredientPhotoUpload'
+    );
+    expect(registerCalls).toHaveLength(2);
+    expect(registerCalls[1]).toEqual(registerCalls[0]);
+    expect(page.data.canRecognize).toBe(true);
+    expect(JSON.stringify([...storage.values()])).not.toContain('cloud://sensitive');
+  });
+
+  test('refreshes logical photo count after bounded create recovery fails', async () => {
+    const page = pageInstance();
+    await page.onChoosePhoto.call(page);
+    responses.push(
+      () => Promise.reject(new Error('first create response lost')),
+      () => Promise.reject(new Error('create replay response lost'))
+    );
+
+    await page.onUploadPhoto.call(page);
+
+    expect(calls.map((request) => request.action)).toEqual([
+      'createIngredientPhotoUpload', 'createIngredientPhotoUpload'
+    ]);
+    expect(calls[1]).toEqual(calls[0]);
+    expect(page.data.localPreviewPath).toBe('');
+    expect(JSON.stringify([...storage.values()])).not.toMatch(
+      /local-private-photo|cloud:\/\/sensitive|ingredient-photos\/random/
+    );
+
+    responses.push(currentContextResponse(publicPhoto('awaiting_upload', 1)));
+    await page.onChoosePhoto.call(page);
+    responses.push(
+      { success: true, data: {
+        kind: 'ingredient_photo_upload_created',
+        photo: publicPhoto('awaiting_upload', 1),
+        cloudPath: 'ingredient-photos/random/second.jpg'
+      } },
+      { success: true, data: {
+        kind: 'ingredient_photo_upload_registered', photo: publicPhoto('uploaded', 2)
+      } }
+    );
+    await page.onUploadPhoto.call(page);
+
+    expect(calls.map((request) => request.action)).toEqual([
+      'createIngredientPhotoUpload', 'createIngredientPhotoUpload',
+      'getCurrentContext', 'createIngredientPhotoUpload',
+      'registerIngredientPhotoUpload'
+    ]);
+    expect(calls[3]).toMatchObject({
+      action: 'createIngredientPhotoUpload',
+      payload: { expectedVersion: 1 }
+    });
+  });
+
+  test('does not allow another private selection until failed recovery can refresh context', async () => {
+    const page = pageInstance();
+    await page.onChoosePhoto.call(page);
+    responses.push(
+      () => Promise.reject(new Error('first create response lost')),
+      () => Promise.reject(new Error('create replay response lost'))
+    );
+    await page.onUploadPhoto.call(page);
+
+    responses.push(() => Promise.reject(new Error('context unavailable')));
+    await page.onChoosePhoto.call(page);
+
+    expect(calls.map((request) => request.action)).toEqual([
+      'createIngredientPhotoUpload', 'createIngredientPhotoUpload', 'getCurrentContext'
+    ]);
+    expect(page.data.localPreviewPath).toBe('');
+    expect(page.data.errorMessage).toContain('context unavailable');
+    expect(JSON.stringify([...storage.values()])).not.toMatch(
+      /local-private-photo|cloud:\/\/sensitive|ingredient-photos\/random/
+    );
   });
 
   test('keeps recognition retry available when no supported candidate is returned', async () => {
