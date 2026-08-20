@@ -1,4 +1,5 @@
 export * from './business-time';
+export * from './assistant-conversation';
 export * from './idempotency-fingerprint';
 export * from './ingredient-photo';
 export * from './ingredient-photo-cleanup';
