@@ -4,6 +4,7 @@ import { InMemoryPlanningRepository } from '@fitness/persistence';
 import {
   PLANNING_AGGREGATE_MAX_UTF8_BYTES,
   assertPlanningAggregateCapacity,
+  assertPlanningAggregateCapacityTransition,
   planningAggregateUtf8Bytes
 } from './planning-aggregate-capacity';
 
@@ -46,25 +47,29 @@ describe('planning aggregate capacity', () => {
       }
     } satisfies PlanningAggregateState;
     const messageOverhead = planningAggregateUtf8Bytes(atLimit) - baseBytes;
+    const atLimitMessage = atLimit.assistantConversation.recentMessages[0];
+    if (atLimitMessage === undefined) throw new Error('Expected capacity message');
     const exact = {
       ...atLimit,
       assistantConversation: {
         ...atLimit.assistantConversation,
         recentMessages: [{
-          ...atLimit.assistantConversation.recentMessages[0]!,
+          ...atLimitMessage,
           content: 'a'.repeat(
             PLANNING_AGGREGATE_MAX_UTF8_BYTES - baseBytes - messageOverhead
           )
         }]
       }
     } satisfies PlanningAggregateState;
+    const exactMessage = exact.assistantConversation.recentMessages[0];
+    if (exactMessage === undefined) throw new Error('Expected exact capacity message');
     const over = {
       ...exact,
       assistantConversation: {
         ...exact.assistantConversation,
         recentMessages: [{
-          ...exact.assistantConversation.recentMessages[0]!,
-          content: `${exact.assistantConversation.recentMessages[0]!.content}a`
+          ...exactMessage,
+          content: `${exactMessage.content}a`
         }]
       }
     } satisfies PlanningAggregateState;
@@ -74,5 +79,56 @@ describe('planning aggregate capacity', () => {
     expect(() => assertPlanningAggregateCapacity(over)).toThrowError(expect.objectContaining({
       code: 'account_capacity_exceeded'
     }));
+  });
+
+  test('allows an oversized legacy state to add only its pending deletion marker', async () => {
+    const empty = await new InMemoryPlanningRepository().read('user-a');
+    const legacy = {
+      ...empty,
+      assistantConversation: {
+        ...empty.assistantConversation,
+        recentMessages: [{
+          turnId: 'legacy-large-turn',
+          role: 'user' as const,
+          content: 'a'.repeat(PLANNING_AGGREGATE_MAX_UTF8_BYTES),
+          createdAt: '2026-08-20T00:00:00.000Z'
+        }]
+      }
+    } satisfies PlanningAggregateState;
+    const pending = {
+      ...legacy,
+      accountDeletion: {
+        status: 'pending' as const,
+        idempotencyKey: 'delete-account-legacy-001',
+        requestFingerprint: `v2:sha256:${'a'.repeat(64)}`,
+        snapshotToken: 'b'.repeat(64),
+        requestedAt: '2026-08-20T01:00:00.000Z',
+        privateFileIds: []
+      }
+    };
+
+    expect(() => assertPlanningAggregateCapacityTransition(legacy, pending)).not.toThrow();
+    expect(() => assertPlanningAggregateCapacityTransition(legacy, {
+      ...pending,
+      bodyProfiles: [{
+        kind: 'body_profile_version',
+        id: 'unexpected-profile',
+        userId: 'user-a',
+        version: 1,
+        createdAt: '2026-08-20T01:00:00.000Z',
+        payload: {
+          ageYears: 30,
+          sexCode: 0,
+          heightCm: 175,
+          weightKg: 70,
+          healthScopeConfirmed: true,
+          nonTrainingActivity: 'light',
+          allergens: [],
+          avoidFoods: [],
+          dietPreferences: [],
+          businessTimezone: 'Asia/Shanghai'
+        }
+      }]
+    })).toThrowError(expect.objectContaining({ code: 'account_capacity_exceeded' }));
   });
 });

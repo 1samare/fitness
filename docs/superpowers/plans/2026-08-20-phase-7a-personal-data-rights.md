@@ -355,7 +355,7 @@ export function createPersonalDataService(input: {
 
 Also produce `PersonalDataSnapshotConflictError` (`personal_data_snapshot_conflict`) and reuse `IdempotencyKeyReuseError` for a different command under the same key.
 
-- [ ] **Step 1: Write RED tests for snapshots and explicit export whitelist**
+- [x] **Step 1: Write RED tests for snapshots and explicit export whitelist**
 
 Cover stable SHA-256 for the same normalized state, token changes after a business-state change, token unchanged by `accountDeletion`, an absent account summary with null token/zero active versions, a pending summary exposing only `deletionStatus: 'pending'`, over-budget `admin_recovery_required`, stale export rejection, and a recursive banned-key assertion:
 
@@ -384,7 +384,7 @@ it('exports only public user-facing records', async () => {
 
 The projector must list every exported scalar explicitly. Body profile exports age, sex label, height, weight, health-scope confirmation, non-training activity, allergens, avoided foods, preferences, and timezone. Goals export goal, optional target weight, effective and target dates. Training exports week/timezone and session date/code/duration as JSON strings. Deterministic targets export business date, policy versions, estimate status, kcal/macros/fiber ranges, and structured unsupported/infeasible codes. Inventory/meal exports user-visible food/dish names, grams, locks, manual-modification flags, totals, target differences, decisions, and reviewed source-version references—not supplier IDs. Photo exports visible AI-assisted candidate names/confidence/state plus confirmation name/grams/status/timestamps, never file metadata. Assistant exports only visible user/assistant messages and marks assistant messages `ai_assisted`. The top-level provenance deduplicates/sorts calculation, nutrition, meal-generation, and reviewed-data version references.
 
-- [ ] **Step 2: Write RED tests for the complete deletion state machine**
+- [x] **Step 2: Write RED tests for the complete deletion state machine**
 
 Cover:
 
@@ -411,7 +411,7 @@ expect(retained).toMatchObject({ accountDeletion: { status: 'pending' } });
 expect(retained?.bodyProfiles).toHaveLength(1);
 ```
 
-- [ ] **Step 3: Run focused tests and confirm RED**
+- [x] **Step 3: Run focused tests and confirm RED**
 
 Run:
 
@@ -421,11 +421,11 @@ pnpm.cmd test -- packages/application/src/personal-data.test.ts packages/applica
 
 Expected: FAIL because the service and public projectors do not exist.
 
-- [ ] **Step 4: Implement normalized snapshots and public projectors**
+- [x] **Step 4: Implement normalized snapshots and public projectors**
 
 Normalize by destructuring away `accountDeletion`, canonicalize recursively by sorted object keys while preserving array order, then hash UTF-8 canonical JSON with SHA-256. Do not serialize the aggregate wholesale anywhere in the export code. Freeze the notice string as a literal and use exhaustive projector functions for each record category. `exportedAt` is metadata and does not affect the snapshot token. `getPersonalDataSummary` uses `readExisting`, returns zero/null fields for absence, returns the pending marker only as the enum `pending`, and flags pre-v8 oversized aggregates for the documented administrator recovery flow. Oversized legacy data may still be deleted; regular export fails explicitly rather than trimming history.
 
-- [ ] **Step 5: Implement the three-phase deletion transition**
+- [x] **Step 5: Implement the three-phase deletion transition**
 
 Implement exactly:
 
@@ -467,7 +467,7 @@ await repository.deleteExisting(userId, (current) => {
 
 Before Phase 1, `readExisting === null` returns `account_already_absent`. If Phase 3 observes a missing document, return `account_already_absent`. Do not catch storage errors; retaining the pending aggregate is the retry mechanism.
 
-- [ ] **Step 6: Run focused tests, then all application tests**
+- [x] **Step 6: Run focused tests, then all application tests**
 
 Run:
 
@@ -479,7 +479,7 @@ pnpm.cmd --filter @fitness/application typecheck
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add packages/application

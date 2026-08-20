@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   PersonalDataDocumentNotFoundError,
-  assertPlanningAggregateCapacity,
+  assertPlanningAggregateCapacityTransition,
   type PersonalDataRepository
 } from '@fitness/application';
 import {
@@ -188,7 +188,6 @@ function encodeDocument(
   state: PlanningAggregateState,
   userId: string
 ): StoredPlanningDocument {
-  assertPlanningAggregateCapacity(state);
   return {
     schemaVersion: 8,
     state: { ...parseAndAssertPlanningState(state, userId), userId }
@@ -237,6 +236,7 @@ export class CloudBasePlanningRepository implements PersonalDataRepository {
         ? createEmptyState()
         : decodePlanningDocument(stored.data, userId);
       const { nextState, result } = operation(current);
+      assertPlanningAggregateCapacityTransition(current, nextState);
       await reference.set({ data: encodeDocument(nextState, userId) });
       return result;
     });

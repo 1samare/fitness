@@ -8,6 +8,8 @@ export * from './meal-plan-editing';
 export * from './meal-plan-generation';
 export * from './meal-plan-recalculation';
 export * from './personal-data-repository';
+export * from './personal-data-export';
+export * from './personal-data';
 export * from './planning-aggregate-capacity';
 export * from './preview-daily-energy';
 export * from './planning-errors';

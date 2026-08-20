@@ -1,6 +1,6 @@
 import {
   PersonalDataDocumentNotFoundError,
-  assertPlanningAggregateCapacity,
+  assertPlanningAggregateCapacityTransition,
   type PersonalDataRepository
 } from '@fitness/application';
 import {
@@ -62,7 +62,7 @@ export class InMemoryPlanningRepository implements PersonalDataRepository {
     return this.serialize(userId, () => {
       const current = copyState(this.states.get(userId) ?? emptyState);
       const { nextState, result } = operation(current);
-      assertPlanningAggregateCapacity(nextState);
+      assertPlanningAggregateCapacityTransition(current, nextState);
       const validated = parseAndAssertPlanningState(nextState, userId);
       this.states.set(userId, copyState(validated));
       return result;
