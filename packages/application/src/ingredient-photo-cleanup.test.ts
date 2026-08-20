@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import {
   deriveNextPhotoCleanupAt,
+  emptyAssistantConversationState,
   type IngredientPhotoVersion,
   type InventoryVersion,
   type PlanningAggregateState,
@@ -14,6 +15,7 @@ const dueAt = '2026-08-19T23:00:00.000Z';
 
 function emptyState(): PlanningAggregateState {
   return {
+    assistantConversation: emptyAssistantConversationState(),
     bodyProfiles: [],
     goals: [],
     trainingPlans: [],

@@ -524,6 +524,93 @@ async function stateWithConfirmedPhoto(): Promise<PlanningAggregateState> {
 }
 
 describe('planning aggregate invariants', () => {
+  test('rejects assistant pending and receipt state for the same request', async () => {
+    const state = await createValidState();
+    const requestFingerprint = `v2:sha256:${'a'.repeat(64)}`;
+    expectCorrupt({
+      ...state,
+      assistantConversation: {
+        ...state.assistantConversation,
+        version: 1,
+        pendingTurn: {
+          status: 'received',
+          turnId: 'assistant-turn-0001',
+          idempotencyKey: 'assistant-request-0001',
+          requestFingerprint,
+          expectedVersion: 0,
+          message: '把训练移到明天',
+          startedAt: '2026-08-20T00:00:00.000Z'
+        },
+        recentReceipts: [{
+          turnId: 'assistant-turn-0001',
+          idempotencyKey: 'assistant-request-0001',
+          requestFingerprint,
+          conversationVersion: 1,
+          completedAt: '2026-08-20T00:00:01.000Z',
+          result: {
+            kind: 'request_rejected',
+            reason: 'unsupported_request',
+            message: '仅支持移动训练日、换菜和调整份量。'
+          }
+        }]
+      }
+    });
+  });
+
+  test('rejects duplicate or future assistant receipt versions', async () => {
+    const state = await createValidState();
+    const first = {
+      turnId: 'assistant-turn-0001',
+      idempotencyKey: 'assistant-request-0001',
+      requestFingerprint: `v2:sha256:${'b'.repeat(64)}`,
+      conversationVersion: 1,
+      completedAt: '2026-08-20T00:00:01.000Z',
+      result: {
+        kind: 'request_rejected' as const,
+        reason: 'unsupported_request' as const,
+        message: '仅支持移动训练日、换菜和调整份量。'
+      }
+    };
+    expectCorrupt({
+      ...state,
+      assistantConversation: {
+        ...state.assistantConversation,
+        version: 1,
+        recentReceipts: [first, {
+          ...first,
+          turnId: 'assistant-turn-0002',
+          idempotencyKey: 'assistant-request-0002',
+          requestFingerprint: `v2:sha256:${'c'.repeat(64)}`
+        }]
+      }
+    });
+    expectCorrupt({
+      ...state,
+      assistantConversation: {
+        ...state.assistantConversation,
+        version: 1,
+        recentReceipts: [{ ...first, conversationVersion: 2 }]
+      }
+    });
+  });
+
+  test('rejects unsorted, duplicate, or oversized locked meal dates in assistant summary', async () => {
+    const state = await createValidState();
+    for (const lockedMealDates of [
+      ['2026-08-11', '2026-08-10'],
+      ['2026-08-10', '2026-08-10'],
+      Array.from({ length: 8 }, (_, index) => `2026-08-${String(10 + index).padStart(2, '0')}`)
+    ]) {
+      expectCorrupt({
+        ...state,
+        assistantConversation: {
+          ...state.assistantConversation,
+          summary: { ...state.assistantConversation.summary, lockedMealDates }
+        }
+      });
+    }
+  });
+
   test('rejects ingredient photo records owned by another user', async () => {
     const state = await createValidState();
     expectCorrupt({

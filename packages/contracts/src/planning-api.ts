@@ -6,6 +6,7 @@ import {
   storedIngredientPhotoVersionSchema,
   publicIngredientPhotoSchema
 } from './ingredient-photo';
+import { assistantConversationStateSchema } from './assistant-api';
 
 const policyMetadataSchema = z.object({
   policyVersion: z.literal('calculation-policy-v2'),
@@ -791,6 +792,7 @@ const idempotencyRecordSchema = z.discriminatedUnion('operation', [
 ]);
 
 export const planningAggregateStateSchema = z.object({
+  assistantConversation: assistantConversationStateSchema,
   bodyProfiles: z.array(storedBodyProfileVersionSchema),
   goals: z.array(storedGoalVersionSchema),
   trainingPlans: z.array(storedTrainingPlanVersionSchema),

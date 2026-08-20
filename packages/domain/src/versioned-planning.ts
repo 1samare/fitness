@@ -14,6 +14,7 @@ import type {
   RecalculationJob,
   TrainingCompletionEvent
 } from './meal-planning';
+import type { AssistantConversationState } from './assistant-conversation';
 
 export interface BodyProfilePayload {
   readonly ageYears: number;
@@ -189,6 +190,7 @@ export type IdempotencyRecord =
     };
 
 export interface PlanningAggregateState {
+  readonly assistantConversation: AssistantConversationState;
   readonly bodyProfiles: readonly BodyProfileVersion[];
   readonly goals: readonly GoalVersion[];
   readonly trainingPlans: readonly TrainingPlanVersion[];

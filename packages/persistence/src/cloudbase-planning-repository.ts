@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { PlanningRepository } from '@fitness/application';
-import type { PlanningAggregateState } from '@fitness/domain';
+import {
+  emptyAssistantConversationState,
+  type PlanningAggregateState
+} from '@fitness/domain';
 import {
   CorruptPlanningStateError,
   parseAndAssertPlanningState
@@ -12,6 +15,7 @@ const collectionName = 'planning_user_states';
 
 function createEmptyState(): PlanningAggregateState {
   return {
+    assistantConversation: emptyAssistantConversationState(),
     bodyProfiles: [],
     goals: [],
     trainingPlans: [],
@@ -55,7 +59,7 @@ export interface CloudBaseDatabase extends CloudBaseTransaction {
 }
 
 interface StoredPlanningDocument {
-  readonly schemaVersion: 6;
+  readonly schemaVersion: 7;
   readonly state: PlanningAggregateState & { readonly userId: string };
 }
 
@@ -73,6 +77,10 @@ const phase4Empty = {
 const phase5Empty = {
   ingredientPhotoVersions: [],
   nextPhotoCleanupAt: null
+} as const;
+
+const phase6Empty = {
+  assistantConversation: emptyAssistantConversationState()
 } as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -108,7 +116,8 @@ export function decodePlanningDocument(value: unknown, userId: string): Planning
       && value.schemaVersion !== 3
       && value.schemaVersion !== 4
       && value.schemaVersion !== 5
-      && value.schemaVersion !== 6)
+      && value.schemaVersion !== 6
+      && value.schemaVersion !== 7)
     || !isRecord(value.state)
   ) {
     throw new CorruptPlanningStateError();
@@ -120,14 +129,16 @@ export function decodePlanningDocument(value: unknown, userId: string): Planning
   const storedState = { ...value.state };
   delete storedState.userId;
   const candidateState = value.schemaVersion === 2
-    ? { ...storedState, dailyNutritionTargets: [], ...phase4Empty, ...phase5Empty }
+    ? { ...storedState, dailyNutritionTargets: [], ...phase4Empty, ...phase5Empty, ...phase6Empty }
     : value.schemaVersion === 3
-      ? { ...storedState, ...phase4Empty, ...phase5Empty }
+      ? { ...storedState, ...phase4Empty, ...phase5Empty, ...phase6Empty }
       : value.schemaVersion === 4
-        ? { ...migrateV4RecalculationConflictDetails(storedState), ...phase5Empty }
+        ? { ...migrateV4RecalculationConflictDetails(storedState), ...phase5Empty, ...phase6Empty }
         : value.schemaVersion === 5
-          ? { ...storedState, ...phase5Empty }
-          : storedState;
+          ? { ...storedState, ...phase5Empty, ...phase6Empty }
+          : value.schemaVersion === 6
+            ? { ...storedState, ...phase6Empty }
+            : storedState;
   return parseAndAssertPlanningState(candidateState, userId);
 }
 
@@ -137,7 +148,7 @@ export function decodePlanningDocumentForCleanup(value: unknown): {
 } {
   if (
     !isRecord(value)
-    || value.schemaVersion !== 6
+    || (value.schemaVersion !== 6 && value.schemaVersion !== 7)
     || !isRecord(value.state)
     || typeof value.state.userId !== 'string'
     || value.state.userId.length === 0
@@ -151,7 +162,7 @@ function encodeDocument(
   userId: string
 ): StoredPlanningDocument {
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     state: { ...parseAndAssertPlanningState(state, userId), userId }
   };
 }

@@ -47,7 +47,9 @@ function photo(
   };
 }
 
-function state(photos: readonly IngredientPhotoVersion[]): PlanningAggregateState {
+function state(
+  photos: readonly IngredientPhotoVersion[]
+): Omit<PlanningAggregateState, 'assistantConversation'> {
   return {
     bodyProfiles: [], goals: [], trainingPlans: [], dailyEnergyTargets: [],
     dailyNutritionTargets: [], inventories: [], mealPlans: [], mealPlanTargetDiffs: [],

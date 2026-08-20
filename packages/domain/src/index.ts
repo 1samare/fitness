@@ -1,3 +1,4 @@
+export * from './assistant-conversation';
 export * from './daily-energy';
 export * from './food-nutrition';
 export * from './ingredient-photo';

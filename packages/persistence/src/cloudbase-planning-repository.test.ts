@@ -3,7 +3,10 @@ import {
   createVersionedPlanningService,
   type PlanningRepository
 } from '@fitness/application';
-import type { PlanningAggregateState } from '@fitness/domain';
+import {
+  emptyAssistantConversationState,
+  type PlanningAggregateState
+} from '@fitness/domain';
 import {
   CloudBasePlanningRepository,
   CorruptPlanningStateError,
@@ -310,6 +313,78 @@ function corruptPhase4State(
 }
 
 describe('CloudBasePlanningRepository', () => {
+  test('migrates schema v6 to an empty assistant conversation without inventing history', async () => {
+    const database = new FakeDatabase();
+    const repository = new CloudBasePlanningRepository(database);
+    const state = await createPhase4State(new InMemoryPlanningRepository());
+    const documentKey = `planning_user_states/${repository.documentIdForUser('user-a')}`;
+    const legacyState = structuredClone(state) as unknown as Record<string, unknown>;
+    delete legacyState.assistantConversation;
+    const stored = { schemaVersion: 6, state: legacyState };
+    const before = structuredClone(stored);
+    database.documents.set(documentKey, stored);
+
+    const migrated = await repository.read('user-a');
+
+    expect(migrated.assistantConversation).toEqual(emptyAssistantConversationState());
+    expect(database.documents.get(documentKey)).toEqual(before);
+    await repository.transact('user-a', (current) => ({
+      nextState: current,
+      result: undefined
+    }));
+    expect(database.documents.get(documentKey)).toMatchObject({ schemaVersion: 7 });
+  });
+
+  test('round-trips a bounded schema-v7 assistant conversation', async () => {
+    const database = new FakeDatabase();
+    const repository = new CloudBasePlanningRepository(database);
+    const conversation: PlanningAggregateState['assistantConversation'] = {
+      version: 1,
+      recentMessages: [{
+        turnId: 'assistant-turn-0001',
+        role: 'user',
+        content: '把训练移到明天',
+        createdAt: '2026-08-20T00:00:00.000Z'
+      }, {
+        turnId: 'assistant-turn-0001',
+        role: 'assistant',
+        content: '请使用 YYYY-MM-DD 补充原日期和目标日期。',
+        createdAt: '2026-08-20T00:00:01.000Z'
+      }],
+      summary: {
+        activeWeekStartDate: null,
+        trainingPlanVersion: 0,
+        mealPlanVersion: 0,
+        lockedMealDates: [],
+        pendingClarification: null
+      },
+      pendingTurn: null,
+      recentReceipts: [{
+        turnId: 'assistant-turn-0001',
+        idempotencyKey: 'assistant-request-0001',
+        requestFingerprint: `v2:sha256:${'d'.repeat(64)}`,
+        conversationVersion: 1,
+        completedAt: '2026-08-20T00:00:01.000Z',
+        result: {
+          kind: 'request_rejected',
+          reason: 'unsupported_request',
+          message: '仅支持移动训练日、换菜和调整份量。'
+        }
+      }]
+    };
+    await repository.transact('user-a', (state) => ({
+      nextState: {
+        ...state,
+        assistantConversation: conversation
+      },
+      result: undefined
+    }));
+
+    const restored = await new CloudBasePlanningRepository(database).read('user-a');
+
+    expect(restored.assistantConversation).toEqual(conversation);
+  });
+
   test('migrates schema v5 without inventing photo facts', async () => {
     const database = new FakeDatabase();
     const repository = new CloudBasePlanningRepository(database);
@@ -371,7 +446,7 @@ describe('CloudBasePlanningRepository', () => {
     });
     expect(database.documents.get(documentKey)).toEqual(legacyDocument);
     await repository.transact('user-a', (state) => ({ nextState: state, result: undefined }));
-    expect(database.documents.get(documentKey)).toMatchObject({ schemaVersion: 6 });
+    expect(database.documents.get(documentKey)).toMatchObject({ schemaVersion: 7 });
   });
 
   test.each([
@@ -453,7 +528,7 @@ describe('CloudBasePlanningRepository', () => {
     expect(database.documents).toHaveLength(1);
     expect(database.requestedKeys.join('|')).not.toContain('wx-openid-sensitive');
     expect([...database.documents.values()][0]).toEqual(expect.objectContaining({
-      schemaVersion: 6
+      schemaVersion: 7
     }));
   });
 
@@ -492,7 +567,7 @@ describe('CloudBasePlanningRepository', () => {
     );
     await repository.transact('wx-openid-a', (state) => ({ nextState: state, result: undefined }));
     const migrated = database.documents.get(documentKey);
-    expect(isRecord(migrated) ? migrated.schemaVersion : undefined).toBe(6);
+    expect(isRecord(migrated) ? migrated.schemaVersion : undefined).toBe(7);
     expect(isRecord(migrated) && isRecord(migrated.state)
       ? migrated.state.dailyNutritionTargets
       : undefined).toEqual([]);
@@ -624,7 +699,7 @@ describe('CloudBasePlanningRepository', () => {
     );
   });
 
-  test.each([1, 7])(
+  test.each([1, 8])(
     'rejects schema version %s without attempting an implicit migration',
     async (schemaVersion) => {
     const database = new FakeDatabase();

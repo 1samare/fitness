@@ -200,7 +200,7 @@ describe('planning API contracts', () => {
     }).success).toBe(false);
   });
 
-  it('accepts a complete schema-v4 planning aggregate state', () => {
+  it('accepts a complete schema-v7 planning aggregate state', () => {
     const mealDates = [
       '2026-08-17',
       '2026-08-18',
@@ -251,6 +251,19 @@ describe('planning API contracts', () => {
     };
     const requestFingerprint = `v2:sha256:${'a'.repeat(64)}`;
     const v4State = {
+      assistantConversation: {
+        version: 0,
+        recentMessages: [],
+        summary: {
+          activeWeekStartDate: null,
+          trainingPlanVersion: 0,
+          mealPlanVersion: 0,
+          lockedMealDates: [],
+          pendingClarification: null
+        },
+        pendingTurn: null,
+        recentReceipts: []
+      },
       bodyProfiles: [],
       goals: [],
       trainingPlans: [],

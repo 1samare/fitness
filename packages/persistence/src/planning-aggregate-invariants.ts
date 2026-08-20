@@ -112,6 +112,44 @@ function assertSortedUniqueDates(dates: readonly string[]): void {
   }
 }
 
+function assertAssistantConversation(
+  conversation: PlanningAggregateState['assistantConversation']
+): void {
+  assertSortedUniqueDates(conversation.summary.lockedMealDates);
+  if (conversation.summary.lockedMealDates.length > 7) corrupt();
+
+  const receiptTurnIds = conversation.recentReceipts.map((receipt) => receipt.turnId);
+  const receiptKeys = conversation.recentReceipts.map((receipt) => receipt.idempotencyKey);
+  const receiptFingerprints = conversation.recentReceipts.map(
+    (receipt) => receipt.requestFingerprint
+  );
+  const receiptVersions = conversation.recentReceipts.map(
+    (receipt) => receipt.conversationVersion
+  );
+  assertUnique(receiptTurnIds);
+  assertUnique(receiptKeys);
+  assertUnique(receiptFingerprints);
+  assertUnique(receiptVersions.map(String));
+  for (let index = 0; index < receiptVersions.length; index += 1) {
+    const version = receiptVersions[index];
+    const previous = receiptVersions[index - 1];
+    if (
+      version === undefined
+      || version > conversation.version
+      || (previous !== undefined && version <= previous)
+    ) corrupt();
+  }
+
+  const pending = conversation.pendingTurn;
+  if (pending === null) return;
+  if (
+    pending.expectedVersion !== conversation.version
+    || receiptTurnIds.includes(pending.turnId)
+    || receiptKeys.includes(pending.idempotencyKey)
+    || receiptFingerprints.includes(pending.requestFingerprint)
+  ) corrupt();
+}
+
 function assertEventDates(event: TrainingPlanChangedEvent): void {
   assertSortedUniqueDates(event.affectedDates);
 }
@@ -609,6 +647,7 @@ export function assertPlanningAggregateInvariants(
   state: PlanningAggregateState,
   userId: string
 ): void {
+  assertAssistantConversation(state.assistantConversation);
   const ownedRecords = [
     ...state.bodyProfiles,
     ...state.goals,

@@ -1,8 +1,12 @@
 import type { PlanningRepository } from '@fitness/application';
-import type { PlanningAggregateState } from '@fitness/domain';
+import {
+  emptyAssistantConversationState,
+  type PlanningAggregateState
+} from '@fitness/domain';
 import { parseAndAssertPlanningState } from './planning-aggregate-invariants';
 
 const emptyState: PlanningAggregateState = {
+  assistantConversation: emptyAssistantConversationState(),
   bodyProfiles: [],
   goals: [],
   trainingPlans: [],
