@@ -149,6 +149,8 @@ const latestPlanningVersionsSchema = setupPlanningVersionsSchema.extend({
   ingredientPhoto: z.number().int().nonnegative()
 }).strict();
 
+const personalDataSnapshotTokenSchema = z.string().regex(/^[a-f0-9]{64}$/);
+
 export const planningApiRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('health') }).strict(),
   z.object({
@@ -233,6 +235,19 @@ export const planningApiRequestSchema = z.discriminatedUnion('action', [
       confirmedGrams: z.number().int().positive().max(1_000_000),
       expectedInventoryVersion: z.number().int().nonnegative()
     }).strict())
+  }).strict(),
+  z.object({ action: z.literal('getPersonalDataSummary') }).strict(),
+  z.object({
+    action: z.literal('exportPersonalData'),
+    snapshotToken: personalDataSnapshotTokenSchema
+  }).strict(),
+  z.object({
+    action: z.literal('deleteAccount'),
+    payload: z.object({
+      snapshotToken: personalDataSnapshotTokenSchema,
+      idempotencyKey: idempotencyKeySchema,
+      confirmation: z.literal('DELETE_MY_ACCOUNT')
+    }).strict()
   }).strict(),
   z.object({ action: z.literal('getCurrentContext') }).strict()
 ]);
@@ -841,6 +856,94 @@ export const planningAggregateStateSchema = z.object({
   nextPhotoCleanupAt: z.iso.datetime().nullable()
 }).strict();
 
+const personalDataActiveVersionsSchema = z.object({
+  bodyProfile: z.number().int().nonnegative(),
+  goal: z.number().int().nonnegative(),
+  trainingPlan: z.number().int().nonnegative(),
+  inventory: z.number().int().nonnegative(),
+  mealPlan: z.number().int().nonnegative()
+}).strict();
+
+const personalDataCountsSchema = z.object({
+  bodyProfileVersions: z.number().int().nonnegative(),
+  goalVersions: z.number().int().nonnegative(),
+  trainingPlanVersions: z.number().int().nonnegative(),
+  dailyTargetVersions: z.number().int().nonnegative(),
+  inventoryVersions: z.number().int().nonnegative(),
+  mealPlanVersions: z.number().int().nonnegative(),
+  ingredientPhotoRecords: z.number().int().nonnegative(),
+  assistantMessages: z.number().int().nonnegative()
+}).strict();
+
+const personalDataSummarySchema = z.object({
+  kind: z.literal('personal_data_summary'),
+  dataExists: z.boolean(),
+  snapshotToken: personalDataSnapshotTokenSchema.nullable(),
+  deletionStatus: z.enum(['none', 'pending']),
+  capacityStatus: z.enum(['within_limit', 'admin_recovery_required']),
+  activeVersions: personalDataActiveVersionsSchema,
+  counts: personalDataCountsSchema
+}).strict().refine((value) => (
+  value.dataExists ? value.snapshotToken !== null : value.snapshotToken === null
+));
+
+const bannedPersonalDataKey = /^(userId|openid|_id|expectedCloudPath|expectedPrivateFileId|privateFileId|providerRequestId|idempotencyRecords|accountDeletion|requestFingerprint|nextPhotoCleanupAt)$/i;
+const personalDataRecordValueSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+  z.array(z.string())
+]);
+const personalDataRecordSchema = z.object({
+  category: z.enum([
+    'body_profile',
+    'fitness_goal',
+    'training_plan',
+    'daily_energy_target',
+    'daily_nutrition_target',
+    'inventory',
+    'meal_plan',
+    'meal_plan_target_diff',
+    'meal_plan_decision',
+    'training_completion',
+    'ingredient_photo_confirmation',
+    'assistant_message'
+  ]),
+  contentOrigin: z.enum(['user', 'ai_assisted', 'deterministic']),
+  recordVersion: z.number().int().positive().nullable(),
+  recordedAt: z.iso.datetime().nullable(),
+  data: z.record(
+    z.string().refine((key) => !bannedPersonalDataKey.test(key)),
+    personalDataRecordValueSchema
+  )
+}).strict();
+
+const personalDataExportSchema = z.object({
+  kind: z.literal('personal_data_export'),
+  schemaVersion: z.literal('personal-data-export-v1'),
+  snapshotToken: personalDataSnapshotTokenSchema,
+  exportedAt: z.iso.datetime(),
+  notice: z.literal(
+    '包含 AI 辅助生成内容与确定性估算；仅供健康成年人健身规划参考，不构成医疗建议。'
+  ),
+  provenance: z.object({
+    policyVersions: z.array(z.string()),
+    reviewedDataVersionReferences: z.array(z.string())
+  }).strict(),
+  records: z.array(personalDataRecordSchema)
+}).strict();
+
+const accountDeletedSchema = z.object({
+  kind: z.literal('account_deleted'),
+  deletedPrivateFileCount: z.number().int().nonnegative()
+}).strict();
+
+const accountAlreadyAbsentSchema = z.object({
+  kind: z.literal('account_already_absent'),
+  deletedPrivateFileCount: z.literal(0)
+}).strict();
+
 const successfulDataSchema = z.discriminatedUnion('kind', [
   healthDataSchema,
   supportedDataSchema,
@@ -874,6 +977,10 @@ const successfulDataSchema = z.discriminatedUnion('kind', [
     photo: publicIngredientPhotoSchema,
     inventory: inventoryVersionSchema
   }).strict(),
+  personalDataSummarySchema,
+  personalDataExportSchema,
+  accountDeletedSchema,
+  accountAlreadyAbsentSchema,
   currentContextSchema
 ]);
 
@@ -898,6 +1005,9 @@ const standardApiErrorCodeSchema = z.enum([
     'candidate_diff_unavailable',
     'storage_unavailable',
     'candidate_confirmation_required',
+    'account_deletion_pending',
+    'personal_data_snapshot_conflict',
+    'account_capacity_exceeded',
     'internal_error'
   ]);
 

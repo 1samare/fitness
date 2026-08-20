@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
+  AccountCapacityExceededError,
+  AccountDeletionPendingError,
   CandidateDiffUnavailableError,
   CandidateConfirmationRequiredError,
   CandidateNotPendingError,
@@ -14,15 +16,19 @@ import {
   PrivatePhotoOwnershipError,
   ProviderUnavailableError,
   NutritionConstraintsInfeasibleError,
+  PersonalDataSnapshotConflictError,
   RecipeNotSelectableError,
   StorageUnavailableError,
   TrainingDateOutsideGoalPeriodError,
   UnknownTrainingSessionError,
   VersionConflictError,
+  createAccountDeletionGuardedRepository,
+  createPersonalDataService,
   type createMealPlanGenerationService,
   type createMealPlanEditingService,
   type createMealPlanRecalculationService,
   type createIngredientPhotoPlanningService,
+  type PersonalDataService,
   createVersionedPlanningService,
   previewDailyEnergy
 } from '@fitness/application';
@@ -44,6 +50,7 @@ import type {
   MealPlanTargetDiff,
   MealPlanVersion,
   MealPlanDecision,
+  PrivatePhotoStorage,
   RecalculationJob,
   TrainingCompletionEvent,
   TrainingPlanVersion
@@ -70,6 +77,9 @@ const knownActions = new Set([
   'registerIngredientPhotoUpload',
   'recognizeIngredientPhoto',
   'confirmIngredientCandidate',
+  'getPersonalDataSummary',
+  'exportPersonalData',
+  'deleteAccount',
   'getCurrentContext'
 ]);
 
@@ -91,15 +101,29 @@ const authenticatedActions = new Set([
   'registerIngredientPhotoUpload',
   'recognizeIngredientPhoto',
   'confirmIngredientCandidate',
+  'getPersonalDataSummary',
+  'exportPersonalData',
+  'deleteAccount',
   'getCurrentContext'
 ]);
 
-const repository = new InMemoryPlanningRepository();
-const planningService = createVersionedPlanningService({
-  repository,
-  now: () => new Date().toISOString(),
+const rawRepository = new InMemoryPlanningRepository();
+const guardedRepository = createAccountDeletionGuardedRepository(rawRepository);
+const defaultNow = () => new Date().toISOString();
+const defaultPrivatePhotoStorage: PrivatePhotoStorage = {
+  inspectPrivateFile: () => Promise.reject(new Error('Private photo storage is unavailable')),
+  deletePrivateFile: () => Promise.resolve('not_found')
+};
+const defaultPlanningService = createVersionedPlanningService({
+  repository: guardedRepository,
+  now: defaultNow,
   nextId: (prefix) => `${prefix}-${randomUUID()}`
 });
+const planningService = Object.assign(defaultPlanningService, createPersonalDataService({
+  repository: rawRepository,
+  storage: defaultPrivatePhotoStorage,
+  now: defaultNow
+}));
 
 export type VersionedPlanningService =
   | ReturnType<typeof createVersionedPlanningService>
@@ -108,12 +132,23 @@ export type VersionedPlanningService =
   | ReturnType<typeof createMealPlanRecalculationService>
   | ReturnType<typeof createIngredientPhotoPlanningService>;
 
+export type PlanningApiService = VersionedPlanningService & Pick<
+  PersonalDataService,
+  'getPersonalDataSummary' | 'exportPersonalData' | 'deleteAccount'
+>;
+
+type HandlerPlanningService = VersionedPlanningService | PlanningApiService;
+
 export interface TrustedRequestContext {
   readonly userId: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasStableErrorCode(value: unknown, code: string): boolean {
+  return isRecord(value) && value.code === code;
 }
 
 function isRecalculationJob(value: unknown): value is RecalculationJob {
@@ -400,14 +435,41 @@ function publicWeeklyMealConflicts(
   return conflicts.map((conflict): PublicWeeklyMealConflict => ({ ...conflict }));
 }
 
+function hasPersonalDataService(service: HandlerPlanningService): service is PlanningApiService {
+  return 'getPersonalDataSummary' in service
+    && 'exportPersonalData' in service
+    && 'deleteAccount' in service;
+}
+
 async function executeAuthenticatedAction(
   request: Exclude<
     ReturnType<typeof planningApiRequestSchema.parse>,
     { action: 'health' | 'previewDailyEnergy' }
   >,
   context: TrustedRequestContext,
-  service: VersionedPlanningService
+  service: HandlerPlanningService
 ): Promise<PlanningApiResponse> {
+  if (request.action === 'getPersonalDataSummary') {
+    if (!hasPersonalDataService(service)) throw new Error('Personal data service is unavailable');
+    return {
+      success: true,
+      data: await service.getPersonalDataSummary(context.userId)
+    };
+  }
+  if (request.action === 'exportPersonalData') {
+    if (!hasPersonalDataService(service)) throw new Error('Personal data service is unavailable');
+    return planningApiResponseSchema.parse({
+      success: true,
+      data: await service.exportPersonalData(context.userId, request.snapshotToken)
+    });
+  }
+  if (request.action === 'deleteAccount') {
+    if (!hasPersonalDataService(service)) throw new Error('Personal data service is unavailable');
+    return {
+      success: true,
+      data: await service.deleteAccount(context.userId, request.payload)
+    };
+  }
   if (request.action === 'saveBodyProfile') {
     const version = await service.saveBodyProfile(context.userId, request.payload);
     return { success: true, data: { kind: 'body_profile_saved', version: publicBodyProfile(version) } };
@@ -624,7 +686,7 @@ async function executeAuthenticatedAction(
 async function handlePlanningApiResult(
   input: unknown,
   context: TrustedRequestContext | undefined,
-  service: VersionedPlanningService
+  service: HandlerPlanningService
 ): Promise<PlanningApiResponse> {
   if (isRecord(input) && typeof input.action === 'string' && !knownActions.has(input.action)) {
     return errorResponse('unknown_action', '不支持的操作。');
@@ -680,6 +742,18 @@ async function handlePlanningApiResult(
     if (context === undefined) return errorResponse('unauthenticated', '需要可信的微信用户身份。');
     return await executeAuthenticatedAction(parsed.data, context, service);
   } catch (error: unknown) {
+    if (error instanceof AccountDeletionPendingError) {
+      return errorResponse(
+        'account_deletion_pending',
+        '账户正在删除，请重试删除操作或联系隐私支持。'
+      );
+    }
+    if (error instanceof PersonalDataSnapshotConflictError) {
+      return errorResponse(error.code, '个人数据已变化，请刷新摘要后重试。');
+    }
+    if (error instanceof AccountCapacityExceededError) {
+      return errorResponse(error.code, '个人数据量超出自助处理范围，请联系隐私支持。');
+    }
     if (error instanceof VersionConflictError) {
       return errorResponse(error.code, '数据已被更新，请刷新后重试。');
     }
@@ -718,8 +792,13 @@ async function handlePlanningApiResult(
           : '营养数据暂时不可用。'
       );
     }
-    if (error instanceof StorageUnavailableError) {
-      return errorResponse(error.code, '图片存储暂时不可用，请重新选择图片。');
+    if (error instanceof StorageUnavailableError || hasStableErrorCode(error, 'storage_unavailable')) {
+      return errorResponse(
+        'storage_unavailable',
+        parsed.data.action === 'deleteAccount'
+          ? '账户删除暂未完成，请使用同一删除请求重试。'
+          : '图片存储暂时不可用，请重新选择图片。'
+      );
     }
     if (
       error instanceof IngredientPhotoNotFoundError
@@ -754,7 +833,7 @@ async function handlePlanningApiResult(
   }
 }
 
-export function createPlanningApiHandler(service: VersionedPlanningService) {
+export function createPlanningApiHandler(service: HandlerPlanningService) {
   return async (
     input: unknown,
     context?: TrustedRequestContext

@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import * as cloud from 'wx-server-sdk';
 import {
+  createAccountDeletionGuardedRepository,
   createIngredientPhotoPlanningService,
+  createPersonalDataService,
   type MealPlanningProviders
 } from '@fitness/application';
 import { planningApiRequestSchema, type PlanningApiResponse } from '@fitness/contracts';
@@ -131,7 +133,8 @@ export function createCloudRuntimeMealPlanningProviders(): MealPlanningProviders
 export function createCloudRuntimePlanningHandler(
   options: CloudRuntimePlanningHandlerOptions
 ): (input: unknown, context?: TrustedRequestContext) => Promise<PlanningApiResponse> {
-  const repository = new CloudBasePlanningRepository(options.database);
+  const rawRepository = new CloudBasePlanningRepository(options.database);
+  const repository = createAccountDeletionGuardedRepository(rawRepository);
   const providers = createCloudRuntimeMealPlanningProviders();
   const storagePrefix = options.environment?.CLOUDBASE_STORAGE_FILE_ID_PREFIX;
   const storageConfigurationValid = validStorageFileIdPrefix(storagePrefix);
@@ -159,7 +162,8 @@ export function createCloudRuntimePlanningHandler(
       vision = new UnavailableVisionProvider();
     }
   }
-  const service = createIngredientPhotoPlanningService({
+  const now = options.now ?? (() => new Date().toISOString());
+  const planning = createIngredientPhotoPlanningService({
     repository,
     providers,
     nutrition: providers.nutrition,
@@ -167,9 +171,14 @@ export function createCloudRuntimePlanningHandler(
     storage,
     storageFileIdPrefix: safeStoragePrefix,
     allowTestFixtures: false,
-    now: options.now ?? (() => new Date().toISOString()),
+    now,
     nextId: options.nextId ?? ((prefix) => `${prefix}-${randomUUID()}`)
   });
+  const service = Object.assign(planning, createPersonalDataService({
+    repository: rawRepository,
+    storage,
+    now
+  }));
   const handler = createPlanningApiHandler(service);
   return async (input, context) => {
     if (!storageConfigurationValid && isIngredientPhotoAction(input)) {

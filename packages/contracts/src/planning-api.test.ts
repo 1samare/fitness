@@ -996,4 +996,118 @@ describe('planning API contracts', () => {
       userId: 'attacker-selected-user'
     })).toThrow();
   });
+
+  it('accepts only strict authenticated personal-data requests', () => {
+    const token = 'a'.repeat(64);
+    const requests = [{ action: 'getPersonalDataSummary' }, {
+      action: 'exportPersonalData',
+      snapshotToken: token
+    }, {
+      action: 'deleteAccount',
+      payload: {
+        snapshotToken: token,
+        idempotencyKey: 'delete-account-contract-001',
+        confirmation: 'DELETE_MY_ACCOUNT'
+      }
+    }] as const;
+
+    for (const request of requests) {
+      expect(planningApiRequestSchema.parse(request)).toEqual(request);
+      expect(() => planningApiRequestSchema.parse({ ...request, userId: 'attacker' })).toThrow();
+      expect(() => planningApiRequestSchema.parse({ ...request, unexpected: true })).toThrow();
+    }
+    expect(() => planningApiRequestSchema.parse({ action: 'exportPersonalData' })).toThrow();
+    expect(() => planningApiRequestSchema.parse({
+      action: 'exportPersonalData', snapshotToken: 'A'.repeat(64)
+    })).toThrow();
+    expect(() => planningApiRequestSchema.parse({
+      action: 'exportPersonalData', snapshotToken: 'a'.repeat(65)
+    })).toThrow();
+    expect(() => planningApiRequestSchema.parse({
+      action: 'deleteAccount',
+      payload: {
+        snapshotToken: token,
+        idempotencyKey: 'short',
+        confirmation: 'DELETE_MY_ACCOUNT'
+      }
+    })).toThrow();
+    expect(() => planningApiRequestSchema.parse({
+      action: 'deleteAccount',
+      payload: {
+        snapshotToken: token,
+        idempotencyKey: 'delete-account-contract-002',
+        confirmation: 'delete my account'
+      }
+    })).toThrow();
+  });
+
+  it('accepts public personal-data responses and recursively rejects internal keys', () => {
+    const token = 'b'.repeat(64);
+    const summary = {
+      success: true,
+      data: {
+        kind: 'personal_data_summary',
+        dataExists: true,
+        snapshotToken: token,
+        deletionStatus: 'none',
+        capacityStatus: 'within_limit',
+        activeVersions: { bodyProfile: 1, goal: 1, trainingPlan: 1, inventory: 0, mealPlan: 0 },
+        counts: {
+          bodyProfileVersions: 1,
+          goalVersions: 1,
+          trainingPlanVersions: 1,
+          dailyTargetVersions: 14,
+          inventoryVersions: 0,
+          mealPlanVersions: 0,
+          ingredientPhotoRecords: 0,
+          assistantMessages: 0
+        }
+      }
+    } as const;
+    const exported = {
+      success: true,
+      data: {
+        kind: 'personal_data_export',
+        schemaVersion: 'personal-data-export-v1',
+        snapshotToken: token,
+        exportedAt: '2026-08-20T00:00:00.000Z',
+        notice: '包含 AI 辅助生成内容与确定性估算；仅供健康成年人健身规划参考，不构成医疗建议。',
+        provenance: {
+          policyVersions: ['calculation-policy-v2'],
+          reviewedDataVersionReferences: []
+        },
+        records: [{
+          category: 'body_profile',
+          contentOrigin: 'user',
+          recordVersion: 1,
+          recordedAt: '2026-08-20T00:00:00.000Z',
+          data: { ageYears: 30 }
+        }]
+      }
+    } as const;
+
+    expect(planningApiResponseSchema.parse(summary)).toEqual(summary);
+    expect(planningApiResponseSchema.parse(exported)).toEqual(exported);
+    expect(planningApiResponseSchema.parse({
+      success: true,
+      data: { kind: 'account_deleted', deletedPrivateFileCount: 1 }
+    })).toEqual({
+      success: true,
+      data: { kind: 'account_deleted', deletedPrivateFileCount: 1 }
+    });
+    expect(() => planningApiResponseSchema.parse({
+      ...exported,
+      data: {
+        ...exported.data,
+        records: [{
+          ...exported.data.records[0],
+          data: { ageYears: 30, userId: 'private-user' }
+        }]
+      }
+    })).toThrow();
+    expect(() => planningApiResponseSchema.parse({
+      ...summary,
+      data: { ...summary.data, requestFingerprint: 'private' }
+    })).toThrow();
+  });
 });

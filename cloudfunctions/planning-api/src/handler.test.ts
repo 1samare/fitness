@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createAccountDeletionGuardedRepository,
   createIngredientPhotoPlanningService,
   createMealPlanEditingService,
   createMealPlanRecalculationService,
+  createPersonalDataService,
   createVersionedPlanningService
 } from '@fitness/application';
 import type { PrivatePhotoStorage, VisionProvider } from '@fitness/domain';
@@ -85,6 +87,30 @@ function createHarness() {
     now: () => '2026-08-07T00:00:00.000Z',
     nextId: (prefix) => `${prefix}-${String(++sequence)}`
   }));
+}
+
+function createPersonalDataHarness() {
+  const rawRepository = new InMemoryPlanningRepository();
+  const repository = createAccountDeletionGuardedRepository(rawRepository);
+  let sequence = 0;
+  const now = () => '2026-08-20T00:00:00.000Z';
+  const planning = createVersionedPlanningService({
+    repository,
+    now,
+    nextId: (prefix) => `${prefix}-${String(++sequence)}`
+  });
+  const personalData = createPersonalDataService({
+    repository: rawRepository,
+    storage: {
+      inspectPrivateFile: () => Promise.reject(new Error('unused')),
+      deletePrivateFile: () => Promise.resolve('not_found')
+    },
+    now
+  });
+  return {
+    handler: createPlanningApiHandler(Object.assign(planning, personalData)),
+    rawRepository
+  };
 }
 
 function createMealHarness() {
@@ -1769,5 +1795,97 @@ describe('ingredient photo planning API', () => {
       stale,
       confirmation
     ])).not.toMatch(/RAW_STORAGE_SECRET|RAW_PROVIDER_SECRET/);
+  });
+
+  it('requires trusted identity and routes personal-data summary, export, and deletion', async () => {
+    const { handler } = createPersonalDataHarness();
+    const context = { userId: 'personal-user-a' } as const;
+    for (const request of [{ action: 'getPersonalDataSummary' }, {
+      action: 'exportPersonalData', snapshotToken: 'a'.repeat(64)
+    }, {
+      action: 'deleteAccount',
+      payload: {
+        snapshotToken: 'a'.repeat(64),
+        idempotencyKey: 'delete-account-handler-001',
+        confirmation: 'DELETE_MY_ACCOUNT'
+      }
+    }]) {
+      await expect(handler(request)).resolves.toEqual({
+        success: false,
+        error: { code: 'unauthenticated', message: '需要可信的微信用户身份。' }
+      });
+    }
+
+    await handler(profileWrite, context);
+    const summary = await handler({ action: 'getPersonalDataSummary' }, context);
+    expect(summary).toMatchObject({
+      success: true,
+      data: { kind: 'personal_data_summary', dataExists: true }
+    });
+    if (!summary.success || summary.data.kind !== 'personal_data_summary') {
+      throw new Error('Expected personal-data summary');
+    }
+    const token = summary.data.snapshotToken;
+    if (token === null) throw new Error('Expected personal-data snapshot');
+    await expect(handler({ action: 'exportPersonalData', snapshotToken: token }, context))
+      .resolves.toMatchObject({
+        success: true,
+        data: { kind: 'personal_data_export', snapshotToken: token }
+      });
+    await expect(handler({
+      action: 'deleteAccount',
+      payload: {
+        snapshotToken: token,
+        idempotencyKey: 'delete-account-handler-002',
+        confirmation: 'DELETE_MY_ACCOUNT'
+      }
+    }, context)).resolves.toEqual({
+      success: true,
+      data: { kind: 'account_deleted', deletedPrivateFileCount: 0 }
+    });
+  });
+
+  it('maps pending deletion and stale snapshots to fixed safe errors', async () => {
+    const { handler, rawRepository } = createPersonalDataHarness();
+    const context = { userId: 'pending-user' } as const;
+    await handler(profileWrite, context);
+    const summary = await handler({ action: 'getPersonalDataSummary' }, context);
+    if (
+      !summary.success
+      || summary.data.kind !== 'personal_data_summary'
+      || summary.data.snapshotToken === null
+    ) throw new Error('Expected personal-data summary');
+    const token = summary.data.snapshotToken;
+
+    await expect(handler({ action: 'exportPersonalData', snapshotToken: '0'.repeat(64) }, context))
+      .resolves.toEqual({
+        success: false,
+        error: {
+          code: 'personal_data_snapshot_conflict',
+          message: '个人数据已变化，请刷新摘要后重试。'
+        }
+      });
+
+    await rawRepository.transact(context.userId, (state) => ({
+      nextState: {
+        ...state,
+        accountDeletion: {
+          status: 'pending',
+          idempotencyKey: 'delete-account-pending-001',
+          requestFingerprint: `v2:sha256:${'d'.repeat(64)}`,
+          snapshotToken: token,
+          requestedAt: '2026-08-20T00:00:00.000Z',
+          privateFileIds: []
+        }
+      },
+      result: undefined
+    }));
+    await expect(handler({ action: 'getCurrentContext' }, context)).resolves.toEqual({
+      success: false,
+      error: {
+        code: 'account_deletion_pending',
+        message: '账户正在删除，请重试删除操作或联系隐私支持。'
+      }
+    });
   });
 });

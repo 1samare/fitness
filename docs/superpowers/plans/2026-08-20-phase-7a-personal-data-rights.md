@@ -519,13 +519,13 @@ git commit -m "feat: add personal data export and account deletion"
 
 - Produces success kinds `personal_data_summary`, `personal_data_export`, `account_deleted`, and `account_already_absent` plus stable errors `account_deletion_pending`, `personal_data_snapshot_conflict`, and `account_capacity_exceeded`.
 
-- [ ] **Step 1: Add RED contract tests**
+- [x] **Step 1: Add RED contract tests**
 
 Assert the three requests parse, every request rejects `userId` and extra keys, export rejects a missing/oversized/non-hex token, delete rejects wrong confirmation or idempotency key, and response schemas recursively reject a banned internal key.
 
 Use `z.string().regex(/^[a-f0-9]{64}$/)` for snapshot tokens and the existing idempotency constraints for delete keys.
 
-- [ ] **Step 2: Add RED handler/runtime tests**
+- [x] **Step 2: Add RED handler/runtime tests**
 
 Add tests that each action requires trusted context, identity A cannot read/export/delete B, normal planning maps pending deletion to the fixed safe message, stale snapshots map without internals, and cloud composition passes the raw repository only to `createPersonalDataService`:
 
@@ -543,7 +543,7 @@ expect(await handler({ action: 'getCurrentContext' }, { userId: 'pending-user' }
   });
 ```
 
-- [ ] **Step 3: Run focused tests and confirm RED**
+- [x] **Step 3: Run focused tests and confirm RED**
 
 Run:
 
@@ -553,7 +553,7 @@ pnpm.cmd test -- packages/contracts/src/planning-api.test.ts cloudfunctions/plan
 
 Expected: FAIL because new actions, response kinds, error mappings, and composed services are missing.
 
-- [ ] **Step 4: Implement contracts and handler routing**
+- [x] **Step 4: Implement contracts and handler routing**
 
 Add all three actions to both `knownActions` and `authenticatedActions`. Extend the handler service type with:
 
@@ -566,7 +566,7 @@ type PlanningApiService = VersionedPlanningService & Pick<
 
 Route each parsed action and validate the final response through `planningApiResponseSchema`. Error responses expose only stable code and fixed Chinese message.
 
-- [ ] **Step 5: Compose raw and guarded repositories**
+- [x] **Step 5: Compose raw and guarded repositories**
 
 In local and cloud runtimes:
 
@@ -584,7 +584,7 @@ const service = Object.assign(planning, personalData);
 
 For the local runtime, use a deterministic in-memory `PrivatePhotoStorage` that returns `not_found`; this is not production fixture data and only completes local deletion semantics.
 
-- [ ] **Step 6: Run API tests and cross-user E2E**
+- [x] **Step 6: Run API tests and cross-user E2E**
 
 Run:
 
@@ -596,7 +596,7 @@ pnpm.cmd --filter @fitness/planning-api typecheck
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add packages/contracts cloudfunctions/planning-api tests/e2e/personal-data-workflow.test.ts

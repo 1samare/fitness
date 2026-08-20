@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import {
+  createAccountDeletionGuardedRepository,
   createIngredientPhotoPlanningService,
+  createPersonalDataService,
   type MealPlanningProviders
 } from '@fitness/application';
 import type { PlanningApiResponse } from '@fitness/contracts';
@@ -97,7 +99,7 @@ function lazyLocalVisionProvider() {
 function unavailablePrivatePhotoStorage(): PrivatePhotoStorage {
   return {
     inspectPrivateFile: () => Promise.reject(new Error('private photo storage unavailable')),
-    deletePrivateFile: () => Promise.reject(new Error('private photo storage unavailable'))
+    deletePrivateFile: () => Promise.resolve('not_found')
   };
 }
 
@@ -112,17 +114,25 @@ function createLocalRuntimePlanningHandler(
   const storagePrefix = options.environment?.CLOUDBASE_STORAGE_FILE_ID_PREFIX
     ?? LOCAL_STORAGE_FILE_ID_PREFIX;
   const storage = options.storage ?? unavailablePrivatePhotoStorage();
-  const service = createIngredientPhotoPlanningService({
-    repository: new InMemoryPlanningRepository(),
+  const rawRepository = new InMemoryPlanningRepository();
+  const repository = createAccountDeletionGuardedRepository(rawRepository);
+  const now = options.now ?? (() => new Date().toISOString());
+  const planning = createIngredientPhotoPlanningService({
+    repository,
     providers,
     nutrition: providers.nutrition,
     vision: lazyLocalVisionProvider(),
     storage,
     storageFileIdPrefix: storagePrefix,
     allowTestFixtures: true,
-    now: options.now ?? (() => new Date().toISOString()),
+    now,
     nextId: options.nextId ?? ((prefix) => `${prefix}-${randomUUID()}`)
   });
+  const service = Object.assign(planning, createPersonalDataService({
+    repository: rawRepository,
+    storage,
+    now
+  }));
   return createPlanningApiHandler(service);
 }
 

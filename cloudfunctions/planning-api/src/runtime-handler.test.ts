@@ -669,4 +669,80 @@ describe('runtime planning handler', () => {
     });
     expect(callFunction).not.toHaveBeenCalled();
   });
+
+  test('local composition gives raw storage only to deletion and guards normal planning while pending', async () => {
+    const deletePrivateFile = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('storage temporarily unavailable'), {
+        code: 'storage_unavailable'
+      }))
+      .mockResolvedValue('not_found');
+    const storage: PrivatePhotoStorage = {
+      inspectPrivateFile: () => Promise.resolve({ mediaType: 'image/jpeg', sizeBytes: 3 }),
+      deletePrivateFile
+    };
+    let sequence = 0;
+    const runtime = createRuntimePlanningHandler({
+      runtimeMode: 'local',
+      storage,
+      now: () => '2026-08-20T00:00:00.000Z',
+      nextId: (prefix) => `${prefix}-${String(++sequence)}`
+    });
+    const context = { userId: 'local-personal-user' } as const;
+    await runtime(writeProfile, context);
+    const created = await runtime({
+      action: 'createIngredientPhotoUpload',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'personal-local-photo-create-001',
+        payload: { mediaType: 'image/jpeg' }
+      }
+    }, context);
+    if (!created.success || created.data.kind !== 'ingredient_photo_upload_created') {
+      throw new Error('Expected local personal photo upload');
+    }
+    await runtime({
+      action: 'registerIngredientPhotoUpload',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'personal-local-photo-register-001',
+        payload: {
+          photoId: created.data.photo.photoId,
+          privateFileId: `cloud://local-fixture.bucket/${created.data.cloudPath}`
+        }
+      }
+    }, context);
+    const summary = await runtime({ action: 'getPersonalDataSummary' }, context);
+    if (
+      !summary.success
+      || summary.data.kind !== 'personal_data_summary'
+      || summary.data.snapshotToken === null
+    ) throw new Error('Expected local personal-data summary');
+    const command = {
+      action: 'deleteAccount',
+      payload: {
+        snapshotToken: summary.data.snapshotToken,
+        idempotencyKey: 'delete-account-local-runtime-001',
+        confirmation: 'DELETE_MY_ACCOUNT'
+      }
+    } as const;
+
+    await expect(runtime(command, context)).resolves.toMatchObject({
+      success: false,
+      error: {
+        code: 'storage_unavailable',
+        message: '账户删除暂未完成，请使用同一删除请求重试。'
+      }
+    });
+    await expect(runtime({ action: 'getCurrentContext' }, context)).resolves.toEqual({
+      success: false,
+      error: {
+        code: 'account_deletion_pending',
+        message: '账户正在删除，请重试删除操作或联系隐私支持。'
+      }
+    });
+    await expect(runtime(command, context)).resolves.toMatchObject({
+      success: true,
+      data: { kind: 'account_deleted' }
+    });
+  });
 });
