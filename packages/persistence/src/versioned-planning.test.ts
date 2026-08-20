@@ -459,6 +459,7 @@ describe('versioned planning service', () => {
 
   test('rolls back every initial setup record when goal validation fails', async () => {
     const { repository, service } = createHarness('2026-08-07T00:00:00.000Z');
+    const stateBefore = await repository.read('user-a');
     const command = planningSetup({
       goal: {
         goal: 'fat_loss',
@@ -471,28 +472,7 @@ describe('versioned planning service', () => {
     await expect(service.completePlanningSetup('user-a', command))
       .rejects.toBeInstanceOf(InvalidGoalError);
 
-    expect(await repository.read('user-a')).toEqual({
-      bodyProfiles: [],
-      goals: [],
-      trainingPlans: [],
-      dailyEnergyTargets: [],
-      dailyNutritionTargets: [],
-      inventories: [],
-      mealPlans: [],
-      mealPlanTargetDiffs: [],
-      mealPlanDecisions: [],
-      trainingCompletionEvents: [],
-      recalculationJobs: [],
-      ingredientPhotoVersions: [],
-      outboxEvents: [],
-      idempotencyRecords: [],
-      activeBodyProfileVersionId: null,
-      activeGoalVersionId: null,
-      activeTrainingPlanVersionId: null,
-      activeInventoryVersionId: null,
-      activeMealPlanVersionId: null,
-      nextPhotoCleanupAt: null
-    });
+    expect(await repository.read('user-a')).toEqual(stateBefore);
   });
 
   test('replays the complete setup with identical IDs and no duplicate records', async () => {
