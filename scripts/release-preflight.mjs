@@ -236,9 +236,27 @@ export function formatReleasePreflightReport(report) {
   return report.checks.map((check) => `${check.name}: ${check.detail}`).join('\n');
 }
 
+export function cloudBaseCliVersionCommand(platform) {
+  if (platform === 'win32') {
+    return {
+      executable: 'cmd.exe',
+      args: [
+        '/d',
+        '/s',
+        '/c',
+        'npx.cmd -y --package @cloudbase/cli@3.7.2 tcb --version'
+      ]
+    };
+  }
+  return {
+    executable: 'npx',
+    args: ['-y', '--package', '@cloudbase/cli@3.7.2', 'tcb', '--version']
+  };
+}
+
 async function cliVersion() {
-  const executable = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-  const result = await execFileAsync(executable, ['exec', 'tcb', '--version'], {
+  const command = cloudBaseCliVersionCommand(process.platform);
+  const result = await execFileAsync(command.executable, command.args, {
     windowsHide: true,
     timeout: 10_000
   });

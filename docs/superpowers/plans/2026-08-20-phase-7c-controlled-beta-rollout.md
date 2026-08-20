@@ -39,7 +39,7 @@
 - Consumes: Phase 7A/7B code, `release:dataset`, `release:preflight`, real public operator/contact/notice values, and a dedicated target environment.
 - Produces: passing dataset and preflight evidence plus an identified restore time; no deploy occurs in this task.
 
-- [ ] **Step 1: Confirm branch, immutable revision, and clean release source**
+- [x] **Step 1: Confirm branch, immutable revision, and clean release source**
 
 Run:
 
@@ -52,7 +52,7 @@ git diff --check
 
 Expected: branch is `feat/v1.0`; only the known user-owned `.pnpm-store/` may be untracked; no source changes are unstaged. Record the commit SHA in private evidence, not in `DEVELOPMENT_PROGRESS.md` until rollout finishes.
 
-- [ ] **Step 2: Verify the fixed CLI and live command surface read-only**
+- [x] **Step 2: Verify the fixed CLI and live command surface read-only**
 
 Run:
 
@@ -60,10 +60,13 @@ Run:
 npx -y --package @cloudbase/cli@3.7.2 tcb --version
 npx -y --package @cloudbase/cli@3.7.2 tcb fn deploy --help
 npx -y --package @cloudbase/cli@3.7.2 tcb fn code update --help
-npx -y --package @cloudbase/cli@3.7.2 tcb db nosql restore --help
+npx -y --package @cloudbase/cli@3.7.2 tcb db nosql backup time --help
+npx -y --package @cloudbase/cli@3.7.2 tcb db nosql backup collection --help
+npx -y --package @cloudbase/cli@3.7.2 tcb db nosql backup restore --help
+npx -y --package @cloudbase/cli@3.7.2 tcb db nosql backup task --help
 ```
 
-Expected: version `3.7.2`; help exposes `fn deploy`, `fn code update`, environment selection, non-interactive confirmation, and restore-to-new-table mapping. If live help differs from the approved runbook, stop and update the runbook through a reviewed code change before any write.
+Expected: version `3.7.2`; top-level help exposes `-e, --env-id`, function help exposes `fn deploy` and `fn code update`, and the nested backup help exposes time, collection, restore-to-new-table mapping, and task queries. The fixed 3.7.2 live function help does not publish `--yes`, so the reviewed commands below do not rely on it; the operator must confirm the target environment before each external write and must not use `--force` against an existing function. If live help differs again, stop and update the runbook through a reviewed code change before any write.
 
 - [ ] **Step 3: Validate the private reviewed dataset**
 
@@ -92,8 +95,8 @@ Expected: candidate is present and unchanged; the running service still points a
 Set `FITNESS_RESTORE_CHECK_TIME` to a time inside the returned restorable range, then run:
 
 ```powershell
-npx -y --package @cloudbase/cli@3.7.2 tcb db nosql restore-time -e $env:FITNESS_CLOUDBASE_ENV_ID
-npx -y --package @cloudbase/cli@3.7.2 tcb db nosql restore-tables --time $env:FITNESS_RESTORE_CHECK_TIME --filters "planning_user_states,planning_reviewed_datasets" -e $env:FITNESS_CLOUDBASE_ENV_ID
+npx -y --package @cloudbase/cli@3.7.2 tcb db nosql backup time -e $env:FITNESS_CLOUDBASE_ENV_ID
+npx -y --package @cloudbase/cli@3.7.2 tcb db nosql backup collection --time $env:FITNESS_RESTORE_CHECK_TIME --filters "planning_user_states,planning_reviewed_datasets" -e $env:FITNESS_CLOUDBASE_ENV_ID
 ```
 
 Expected: both collections are available at the selected point. Store only availability, selected timestamp, and request/task IDs in private evidence.
@@ -174,13 +177,13 @@ Create/verify the exact compound index `state.nextPhotoCleanupAt ASC, state.user
 For an existing function:
 
 ```powershell
-npx -y --package @cloudbase/cli@3.7.2 tcb fn code update photo-cleanup --yes -e $env:FITNESS_CLOUDBASE_ENV_ID
+npx -y --package @cloudbase/cli@3.7.2 tcb fn code update photo-cleanup -e $env:FITNESS_CLOUDBASE_ENV_ID
 ```
 
 For an absent function:
 
 ```powershell
-npx -y --package @cloudbase/cli@3.7.2 tcb fn deploy photo-cleanup --yes -e $env:FITNESS_CLOUDBASE_ENV_ID
+npx -y --package @cloudbase/cli@3.7.2 tcb fn deploy photo-cleanup -e $env:FITNESS_CLOUDBASE_ENV_ID
 ```
 
 Before timer activation, invoke one administrator-only cleanup scan against known disposable due data and verify success plus correct private-object handling. Then activate exactly `photo-cleanup-every-15-minutes` with config `0 */15 * * * * *` in CloudBase before any beta photo upload. Run `fn detail` again and verify Nodejs20.19, `index.main`, 25 seconds, no client invoke, timer present, and code hash/version.
@@ -190,15 +193,15 @@ Before timer activation, invoke one administrator-only cleanup scan against know
 Change only the server-side `FITNESS_REVIEWED_DATASET_ID` to the already validated candidate ID. Keep all values private. Then update/create planning:
 
 ```powershell
-npx -y --package @cloudbase/cli@3.7.2 tcb fn code update planning-api --yes -e $env:FITNESS_CLOUDBASE_ENV_ID
+npx -y --package @cloudbase/cli@3.7.2 tcb fn code update planning-api -e $env:FITNESS_CLOUDBASE_ENV_ID
 ```
 
-Use `fn deploy planning-api --yes` instead only when the read-only detail proved it absent. Verify Nodejs20.19, `index.main`, 25 seconds, authenticated-only invoke rule, the required six server config names, and v2-v8 read/v8 write smoke. Do not deploy assistant until planning smoke succeeds.
+Use `fn deploy planning-api` instead only when the read-only detail proved it absent. Verify Nodejs20.19, `index.main`, 25 seconds, authenticated-only invoke rule, the required six server config names, and v2-v8 read/v8 write smoke. Do not deploy assistant until planning smoke succeeds.
 
 - [ ] **Step 6: Deploy assistant last**
 
 ```powershell
-npx -y --package @cloudbase/cli@3.7.2 tcb fn code update assistant-api --yes -e $env:FITNESS_CLOUDBASE_ENV_ID
+npx -y --package @cloudbase/cli@3.7.2 tcb fn code update assistant-api -e $env:FITNESS_CLOUDBASE_ENV_ID
 ```
 
 Use deploy only if absent. Verify Nodejs20.19, `index.main`, 120 seconds, authenticated-only invoke, approved provider/model/function-name configuration, and no client access to photo cleanup.
@@ -313,8 +316,8 @@ Expected: exits 0 and writes passing capacity validation. Any threshold miss kee
 After confirming the exact environment and restore timestamp again, run:
 
 ```powershell
-npx -y --package @cloudbase/cli@3.7.2 tcb db nosql restore --time $env:FITNESS_RESTORE_CHECK_TIME --tables '[{"OldTableName":"planning_user_states","NewTableName":"planning_user_states_phase7_restore_drill"},{"OldTableName":"planning_reviewed_datasets","NewTableName":"planning_reviewed_datasets_phase7_restore_drill"}]' -e $env:FITNESS_CLOUDBASE_ENV_ID
-npx -y --package @cloudbase/cli@3.7.2 tcb db nosql restore-task -e $env:FITNESS_CLOUDBASE_ENV_ID
+npx -y --package @cloudbase/cli@3.7.2 tcb db nosql backup restore --time $env:FITNESS_RESTORE_CHECK_TIME --tables '[{"OldTableName":"planning_user_states","NewTableName":"planning_user_states_phase7_restore_drill"},{"OldTableName":"planning_reviewed_datasets","NewTableName":"planning_reviewed_datasets_phase7_restore_drill"}]' -e $env:FITNESS_CLOUDBASE_ENV_ID
+npx -y --package @cloudbase/cli@3.7.2 tcb db nosql backup task -e $env:FITNESS_CLOUDBASE_ENV_ID
 ```
 
 Expected: restore task succeeds into the two exact new names. Compare document counts, schema distribution, sample anonymized hashes, active version relationships, dataset checksum, A/B separation, photo cleanup deadlines, pending deletion markers, assistant pending turns, and assistant receipts; record restore duration and backup retention window. Never route application traffic to the drill collections. Any restored photo reference already past its original deletion deadline must be processed immediately by a controlled cleanup against the restored reference, never granted a new retention window.

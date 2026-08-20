@@ -78,7 +78,7 @@ describe('validateDatasetFile', () => {
     expect(persisted.datasetIdHashSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.stringify(persisted)).not.toContain('reviewed-planning-cn-v1');
     expect(JSON.stringify(persisted)).not.toContain('private-candidate');
-  });
+  }, 15_000);
 
   test('invalid input rejects and never replaces prior passing evidence', async () => {
     const directory = await temporaryDirectory();

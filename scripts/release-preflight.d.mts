@@ -10,6 +10,11 @@ export interface ReleasePreflightReport {
   readonly checks: readonly ReleasePreflightCheck[];
 }
 
+export function cloudBaseCliVersionCommand(platform: NodeJS.Platform): {
+  readonly executable: 'cmd.exe' | 'npx';
+  readonly args: readonly string[];
+};
+
 export function runReleasePreflight(input: {
   readonly repositoryRoot: string;
   readonly env: Readonly<Record<string, string | undefined>>;

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import {
+  cloudBaseCliVersionCommand,
   formatReleasePreflightReport,
   runReleasePreflight
 } from './release-preflight.mjs';
@@ -118,6 +119,22 @@ function run(root: string, overrides: {
 }
 
 describe('release preflight', () => {
+  test('pins the live CLI version probe to CloudBase CLI 3.7.2', () => {
+    expect(cloudBaseCliVersionCommand('win32')).toEqual({
+      executable: 'cmd.exe',
+      args: [
+        '/d',
+        '/s',
+        '/c',
+        'npx.cmd -y --package @cloudbase/cli@3.7.2 tcb --version'
+      ]
+    });
+    expect(cloudBaseCliVersionCommand('linux')).toEqual({
+      executable: 'npx',
+      args: ['-y', '--package', '@cloudbase/cli@3.7.2', 'tcb', '--version']
+    });
+  });
+
   test('passes valid inputs while formatting only names, presence and versions', async () => {
     const report = await run(await validRepository());
     const text = formatReleasePreflightReport(report);
