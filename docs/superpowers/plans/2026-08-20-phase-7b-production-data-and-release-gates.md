@@ -450,7 +450,7 @@ interface CapacityEvidenceV1 {
 
 Pass thresholds are non-Provider planning success `1.0`, Provider success-or-fixed-degradation `1.0`, p95 `< 5000`, all defect/timeout/quota counts `0`, and `budgetExceeded: false`.
 
-- [ ] **Step 1: Write RED 3 MB response-budget and 10×30 workload tests**
+- [x] **Step 1: Write RED 3 MB response-budget and 10×30 workload tests**
 
 Generate the largest valid aggregate at or below `3_000_000` bytes using visible assistant messages and planning versions, then assert its export serializes below 6 MB and parses through `planningApiResponseSchema`. Assert a one-byte-larger write fails with `account_capacity_exceeded` without changing the prior state. Before the measured workload, seed each identity through the reviewed local Provider with one active weekly meal plan; exclude that provider setup from the 30 measured non-provider operations.
 
@@ -458,11 +458,11 @@ Build `tests/support/capacity-planning-api.ts` with esbuild into ignored `.build
 
 Run 10 contexts concurrently. Each performs exactly 30 mixed operations from this fixed mix: 1 planning setup, 4 training-plan version changes, 3 successful training-completion writes, 1 completion with a fixed Provider/recalculation failure, 1 successful `retryPendingRecalculation`, 4 meal lock/unlock writes, 4 personal summary reads, 4 context reads, 4 exports, 1 failed stale-token export, 2 idempotent repeats, and 1 final context read. Classify operations before execution as Provider-touching or non-Provider. Assert the injected failure leaves the prior active meal intact with one retryable job, retry creates one valid successor, per-user version chains remain complete, and no data overlaps.
 
-- [ ] **Step 2: Write RED evidence-validator tests**
+- [x] **Step 2: Write RED evidence-validator tests**
 
 `release-capacity.mjs` reads either a just-produced local result or `.build/release-evidence/cloud-capacity-input.json`, validates the exact shape/thresholds, hashes identity labels before output, and writes `.build/release-evidence/capacity-validation.json`. Test missing identities, 299 operations, 5,000 ms p95, 99.9% non-Provider success, an unbounded Provider outcome, any partial transaction/leak/duplicate/lost cleanup/timeout/quota violation, budget excess, and raw OpenID presence as failures.
 
-- [ ] **Step 3: Write RED release-check order/failure tests**
+- [x] **Step 3: Write RED release-check order/failure tests**
 
 Inject a fake command runner and assert exact fail-fast order:
 
@@ -486,7 +486,7 @@ git status --short
 
 The orchestrator permits only the pre-existing `.pnpm-store/` untracked path plus ignored `.build`; any other unstaged/untracked release source fails.
 
-- [ ] **Step 4: Run focused tests and confirm RED**
+- [x] **Step 4: Run focused tests and confirm RED**
 
 Run:
 
@@ -496,7 +496,7 @@ pnpm.cmd test -- tests/e2e/personal-data-capacity.test.ts scripts/release-capaci
 
 Expected: FAIL because capacity validation and orchestration do not exist.
 
-- [ ] **Step 5: Implement deterministic metrics and orchestrator**
+- [x] **Step 5: Implement deterministic metrics and orchestrator**
 
 Use `performance.now()` for latency, nearest-rank p95 over all planning operations, and integer counters. Evidence stores only aggregate metrics and SHA-256 identity labels. `release-check` spawns each command without a shell, streams output, stops on first non-zero exit, and writes baseline commit, SHA-256 for the three function entries and mini program artifact manifest, plus only command name, exit code, start/end timestamps, and status to `.build/release-evidence/release-check.json`.
 
@@ -511,7 +511,7 @@ Add:
 }
 ```
 
-- [ ] **Step 6: Run local capacity and release-script regressions**
+- [x] **Step 6: Run local capacity and release-script regressions**
 
 Run:
 
@@ -522,7 +522,7 @@ pnpm.cmd release:capacity
 
 Expected: PASS in `local_baseline` mode and a passing anonymized evidence file. Do not run `release:check` until real release inputs exist; its test suite proves behavior in isolation.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add scripts package.json tests/e2e/personal-data-capacity.test.ts
