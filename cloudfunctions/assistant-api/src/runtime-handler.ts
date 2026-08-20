@@ -69,6 +69,9 @@ function lastUserMessage(input: AssistantLanguageModelInput): string {
 class DeterministicLocalLanguageModel implements AssistantLanguageModelProvider {
   public generateIntent(input: AssistantLanguageModelInput) {
     const message = lastUserMessage(input);
+    if (message === '本地烟测：模拟模型不可用') {
+      return Promise.reject(new Error('simulated local Provider outage'));
+    }
     const dates = Array.from(message.matchAll(/\d{4}-\d{2}-\d{2}/g), (match) => match[0]);
     if (dates.length >= 2) {
       return Promise.resolve({
@@ -79,6 +82,16 @@ class DeterministicLocalLanguageModel implements AssistantLanguageModelProvider 
             sourceDateText: dates[0],
             targetDateText: dates[1]
           }
+        }),
+        requestId: input.requestId
+      });
+    }
+    if (message.includes('训练') && dates.length === 1) {
+      return Promise.resolve({
+        rawText: JSON.stringify({
+          kind: 'clarify',
+          intent: 'move_training_day',
+          missingFields: ['target_date']
         }),
         requestId: input.requestId
       });
