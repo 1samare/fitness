@@ -15,6 +15,7 @@ import {
 class EmptyDocumentReference implements CloudBaseDocumentReference {
   public get(): Promise<{ readonly data?: unknown }> { return Promise.resolve({}); }
   public set(): Promise<unknown> { return Promise.resolve({ updated: 1 }); }
+  public remove(): Promise<unknown> { return Promise.resolve({ deleted: 0 }); }
 }
 
 class EmptyDatabase implements CloudBaseDatabase, CloudBaseTransaction, CloudBasePhotoCleanupQueryDatabase {

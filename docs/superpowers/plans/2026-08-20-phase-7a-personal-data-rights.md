@@ -73,7 +73,7 @@ export class PersonalDataDocumentNotFoundError extends Error {
 - `PlanningAggregateState.accountDeletion` is `PendingAccountDeletion | null`.
 - `CloudBaseDocumentReference.remove(): Promise<unknown>` is required by both CloudBase database adapters.
 
-- [ ] **Step 1: Add failing schema migration and deletion-boundary tests**
+- [x] **Step 1: Add failing schema migration and deletion-boundary tests**
 
 Add assertions that an empty state has `accountDeletion: null`, every v2-v7 document decodes with only that new field, v8 round-trips, `readExisting` distinguishes absence from an empty account, and `deleteExisting` removes the document transactionally:
 
@@ -97,7 +97,7 @@ it('deletes only an existing user document', async () => {
 
 Update both `wx-database-adapter.test.ts` files so a transaction document reference forwards `remove()` exactly once.
 
-- [ ] **Step 2: Run the focused tests and confirm RED**
+- [x] **Step 2: Run the focused tests and confirm RED**
 
 Run:
 
@@ -107,7 +107,7 @@ pnpm.cmd test -- packages/persistence/src/cloudbase-planning-repository.test.ts 
 
 Expected: FAIL because `accountDeletion`, schema v8, `readExisting`, `deleteExisting`, and document `remove` do not exist.
 
-- [ ] **Step 3: Implement the schema and repository primitives**
+- [x] **Step 3: Implement the schema and repository primitives**
 
 Add the domain field and the exact privileged interface shown above. Change stored documents to:
 
@@ -144,7 +144,7 @@ public async deleteExisting<TResult>(
 
 Give `InMemoryPlanningRepository` the same serialized per-user queue semantics for `readExisting` and `deleteExisting`. Both persistence implementations throw the application-owned `PersonalDataDocumentNotFoundError` when the document disappears so Task 3 can turn a response-loss retry into `already_absent` without making `application` depend on `persistence`.
 
-- [ ] **Step 4: Run focused tests and typecheck**
+- [x] **Step 4: Run focused tests and typecheck**
 
 Run:
 
@@ -157,7 +157,7 @@ pnpm.cmd --filter @fitness/persistence typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add packages/domain packages/application packages/persistence cloudfunctions/planning-api/src/wx-database-adapter.test.ts cloudfunctions/assistant-api/src/wx-database-adapter.test.ts

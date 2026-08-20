@@ -25,6 +25,10 @@ class FakeDocumentReference implements CloudBaseDocumentReference {
     this.documents.set(this.key, structuredClone(input.data));
     return Promise.resolve({ updated: 1 });
   }
+  public remove(): Promise<unknown> {
+    this.documents.delete(this.key);
+    return Promise.resolve({ deleted: 1 });
+  }
 }
 
 class FakeDatabase implements CloudBaseDatabase, CloudBaseTransaction {

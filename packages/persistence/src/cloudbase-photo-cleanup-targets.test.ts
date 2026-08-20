@@ -51,6 +51,7 @@ function state(
   photos: readonly IngredientPhotoVersion[]
 ): Omit<PlanningAggregateState, 'assistantConversation'> {
   return {
+    accountDeletion: null,
     bodyProfiles: [], goals: [], trainingPlans: [], dailyEnergyTargets: [],
     dailyNutritionTargets: [], inventories: [], mealPlans: [], mealPlanTargetDiffs: [],
     mealPlanDecisions: [], trainingCompletionEvents: [], recalculationJobs: [],

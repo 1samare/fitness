@@ -737,4 +737,34 @@ describe('versioned planning service', () => {
       resultVersionId: first.id
     });
   });
+
+  test('serializes privileged reads and deletion with normal in-memory transactions', async () => {
+    const repository = new InMemoryPlanningRepository() as InMemoryPlanningRepository & {
+      readExisting(userId: string): Promise<import('@fitness/domain').PlanningAggregateState | null>;
+      deleteExisting<TResult>(
+        userId: string,
+        operation: (current: import('@fitness/domain').PlanningAggregateState) => TResult
+      ): Promise<TResult>;
+    };
+
+    await expect(repository.readExisting('user-a')).resolves.toBeNull();
+    const write = repository.transact('user-a', (state) => ({
+      nextState: state,
+      result: 'written'
+    }));
+    const deletion = repository.deleteExisting('user-a', (current) => ({
+      bodyProfileCount: current.bodyProfiles.length
+    }));
+
+    await expect(write).resolves.toBe('written');
+    await expect(deletion).resolves.toEqual({ bodyProfileCount: 0 });
+    await expect(repository.readExisting('user-a')).resolves.toBeNull();
+    await expect(repository.deleteExisting('user-a', () => undefined)).rejects.toMatchObject({
+      code: 'personal_data_document_not_found'
+    });
+    await expect(repository.read('user-a')).resolves.toMatchObject({
+      accountDeletion: null,
+      bodyProfiles: []
+    });
+  });
 });

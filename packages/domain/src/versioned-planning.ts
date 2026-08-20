@@ -191,8 +191,18 @@ export type IdempotencyRecord =
       };
     };
 
+export interface PendingAccountDeletion {
+  readonly status: 'pending';
+  readonly idempotencyKey: string;
+  readonly requestFingerprint: string;
+  readonly snapshotToken: string;
+  readonly requestedAt: string;
+  readonly privateFileIds: readonly string[];
+}
+
 export interface PlanningAggregateState {
   readonly assistantConversation: AssistantConversationState;
+  readonly accountDeletion: PendingAccountDeletion | null;
   readonly bodyProfiles: readonly BodyProfileVersion[];
   readonly goals: readonly GoalVersion[];
   readonly trainingPlans: readonly TrainingPlanVersion[];

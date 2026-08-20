@@ -16,6 +16,10 @@ describe('adaptWxCloudBaseDatabase', () => {
               set: (input: { data: unknown }) => {
                 documents.set(key, input.data);
                 return Promise.resolve({ updated: 1 });
+              },
+              remove: () => {
+                documents.delete(key);
+                return Promise.resolve({ deleted: 1 });
               }
             };
           }
@@ -36,19 +40,48 @@ describe('adaptWxCloudBaseDatabase', () => {
     expect(result).toEqual({ data: { value: 1 } });
   });
 
+  test('forwards promise-based document removal', async () => {
+    const remove = () => Promise.resolve({ deleted: 1 });
+    const database = adaptWxCloudBaseDatabase({
+      collection: () => ({
+        doc: () => ({
+          get: () => Promise.resolve({ data: { value: 1 } }),
+          set: () => Promise.resolve({}),
+          remove
+        })
+      }),
+      runTransaction: (operation: (transaction: unknown) => Promise<unknown>) => operation({
+        collection: () => ({
+          doc: () => ({
+            get: () => Promise.resolve({ data: { value: 1 } }),
+            set: () => Promise.resolve({}),
+            remove
+          })
+        })
+      })
+    });
+    const reference = database.collection('states').doc('user-a') as unknown as {
+      remove(): Promise<unknown>;
+    };
+
+    await expect(reference.remove()).resolves.toEqual({ deleted: 1 });
+  });
+
   test('rejects callback-style or malformed SDK results', async () => {
     const database = adaptWxCloudBaseDatabase({
       collection: () => ({
         doc: () => ({
           get: () => 'callback-request-id',
-          set: () => Promise.resolve({})
+          set: () => Promise.resolve({}),
+          remove: () => Promise.resolve({})
         })
       }),
       runTransaction: (operation: (transaction: unknown) => Promise<unknown>) => operation({
         collection: () => ({
           doc: () => ({
             get: () => 'callback-request-id',
-            set: () => Promise.resolve({})
+            set: () => Promise.resolve({}),
+            remove: () => Promise.resolve({})
           })
         })
       })
@@ -71,14 +104,16 @@ describe('adaptWxCloudBaseDatabase', () => {
       collection: () => ({
         doc: () => ({
           get: () => Promise.reject(notFound),
-          set: () => Promise.resolve({})
+          set: () => Promise.resolve({}),
+          remove: () => Promise.resolve({})
         })
       }),
       runTransaction: (operation: (transaction: unknown) => Promise<unknown>) => operation({
         collection: () => ({
           doc: () => ({
             get: () => Promise.reject(notFound),
-            set: () => Promise.resolve({})
+            set: () => Promise.resolve({}),
+            remove: () => Promise.resolve({})
           })
         })
       })
@@ -92,14 +127,16 @@ describe('adaptWxCloudBaseDatabase', () => {
       collection: () => ({
         doc: () => ({
           get: () => Promise.resolve({ data: null }),
-          set: () => Promise.resolve({})
+          set: () => Promise.resolve({}),
+          remove: () => Promise.resolve({})
         })
       }),
       runTransaction: (operation: (transaction: unknown) => Promise<unknown>) => operation({
         collection: () => ({
           doc: () => ({
             get: () => Promise.resolve({ data: null }),
-            set: () => Promise.resolve({})
+            set: () => Promise.resolve({}),
+            remove: () => Promise.resolve({})
           })
         })
       })

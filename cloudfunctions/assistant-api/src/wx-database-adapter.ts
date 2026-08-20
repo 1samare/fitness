@@ -7,6 +7,7 @@ import type {
 interface RawDocumentReference {
   get(): unknown;
   set(input: { readonly data: unknown }): unknown;
+  remove(): unknown;
 }
 
 interface RawCollection {
@@ -28,7 +29,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isRawDocumentReference(value: unknown): value is RawDocumentReference {
   return isRecord(value)
     && typeof value.get === 'function'
-    && typeof value.set === 'function';
+    && typeof value.set === 'function'
+    && typeof value.remove === 'function';
 }
 
 function isRawCollection(value: unknown): value is RawCollection {
@@ -74,7 +76,8 @@ function adaptDocumentReference(value: unknown): CloudBaseDocumentReference {
         throw error;
       }
     },
-    set: (input) => requirePromise(value.set(input))
+    set: (input) => requirePromise(value.set(input)),
+    remove: () => requirePromise(value.remove())
   };
 }
 

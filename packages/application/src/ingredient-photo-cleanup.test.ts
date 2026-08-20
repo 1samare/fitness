@@ -16,6 +16,7 @@ const dueAt = '2026-08-19T23:00:00.000Z';
 function emptyState(): PlanningAggregateState {
   return {
     assistantConversation: emptyAssistantConversationState(),
+    accountDeletion: null,
     bodyProfiles: [],
     goals: [],
     trainingPlans: [],

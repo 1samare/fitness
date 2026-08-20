@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
-import type { PlanningRepository } from '@fitness/application';
+import {
+  PersonalDataDocumentNotFoundError,
+  type PersonalDataRepository
+} from '@fitness/application';
 import {
   emptyAssistantConversationState,
   type PlanningAggregateState
@@ -16,6 +19,7 @@ const collectionName = 'planning_user_states';
 function createEmptyState(): PlanningAggregateState {
   return {
     assistantConversation: emptyAssistantConversationState(),
+    accountDeletion: null,
     bodyProfiles: [],
     goals: [],
     trainingPlans: [],
@@ -42,6 +46,7 @@ function createEmptyState(): PlanningAggregateState {
 export interface CloudBaseDocumentReference {
   get(): Promise<{ readonly data?: unknown }>;
   set(input: { readonly data: unknown }): Promise<unknown>;
+  remove(): Promise<unknown>;
 }
 
 interface CloudBaseCollection {
@@ -59,7 +64,7 @@ export interface CloudBaseDatabase extends CloudBaseTransaction {
 }
 
 interface StoredPlanningDocument {
-  readonly schemaVersion: 7;
+  readonly schemaVersion: 8;
   readonly state: PlanningAggregateState & { readonly userId: string };
 }
 
@@ -81,6 +86,10 @@ const phase5Empty = {
 
 const phase6Empty = {
   assistantConversation: emptyAssistantConversationState()
+} as const;
+
+const phase7Empty = {
+  accountDeletion: null
 } as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -117,7 +126,8 @@ export function decodePlanningDocument(value: unknown, userId: string): Planning
       && value.schemaVersion !== 4
       && value.schemaVersion !== 5
       && value.schemaVersion !== 6
-      && value.schemaVersion !== 7)
+      && value.schemaVersion !== 7
+      && value.schemaVersion !== 8)
     || !isRecord(value.state)
   ) {
     throw new CorruptPlanningStateError();
@@ -129,16 +139,30 @@ export function decodePlanningDocument(value: unknown, userId: string): Planning
   const storedState = { ...value.state };
   delete storedState.userId;
   const candidateState = value.schemaVersion === 2
-    ? { ...storedState, dailyNutritionTargets: [], ...phase4Empty, ...phase5Empty, ...phase6Empty }
+    ? {
+        ...storedState,
+        dailyNutritionTargets: [],
+        ...phase4Empty,
+        ...phase5Empty,
+        ...phase6Empty,
+        ...phase7Empty
+      }
     : value.schemaVersion === 3
-      ? { ...storedState, ...phase4Empty, ...phase5Empty, ...phase6Empty }
+      ? { ...storedState, ...phase4Empty, ...phase5Empty, ...phase6Empty, ...phase7Empty }
       : value.schemaVersion === 4
-        ? { ...migrateV4RecalculationConflictDetails(storedState), ...phase5Empty, ...phase6Empty }
+        ? {
+            ...migrateV4RecalculationConflictDetails(storedState),
+            ...phase5Empty,
+            ...phase6Empty,
+            ...phase7Empty
+          }
         : value.schemaVersion === 5
-          ? { ...storedState, ...phase5Empty, ...phase6Empty }
+          ? { ...storedState, ...phase5Empty, ...phase6Empty, ...phase7Empty }
           : value.schemaVersion === 6
-            ? { ...storedState, ...phase6Empty }
-            : storedState;
+            ? { ...storedState, ...phase6Empty, ...phase7Empty }
+            : value.schemaVersion === 7
+              ? { ...storedState, ...phase7Empty }
+              : storedState;
   return parseAndAssertPlanningState(candidateState, userId);
 }
 
@@ -148,7 +172,9 @@ export function decodePlanningDocumentForCleanup(value: unknown): {
 } {
   if (
     !isRecord(value)
-    || (value.schemaVersion !== 6 && value.schemaVersion !== 7)
+    || (value.schemaVersion !== 6
+      && value.schemaVersion !== 7
+      && value.schemaVersion !== 8)
     || !isRecord(value.state)
     || typeof value.state.userId !== 'string'
     || value.state.userId.length === 0
@@ -162,12 +188,12 @@ function encodeDocument(
   userId: string
 ): StoredPlanningDocument {
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     state: { ...parseAndAssertPlanningState(state, userId), userId }
   };
 }
 
-export class CloudBasePlanningRepository implements PlanningRepository {
+export class CloudBasePlanningRepository implements PersonalDataRepository {
   public constructor(private readonly database: CloudBaseDatabase) {}
 
   public documentIdForUser(userId: string): string {
@@ -181,6 +207,16 @@ export class CloudBasePlanningRepository implements PlanningRepository {
       .get();
     return result.data === undefined
       ? createEmptyState()
+      : decodePlanningDocument(result.data, userId);
+  }
+
+  public async readExisting(userId: string): Promise<PlanningAggregateState | null> {
+    const result = await this.database
+      .collection(collectionName)
+      .doc(this.documentIdForUser(userId))
+      .get();
+    return result.data === undefined
+      ? null
       : decodePlanningDocument(result.data, userId);
   }
 
@@ -200,6 +236,22 @@ export class CloudBasePlanningRepository implements PlanningRepository {
         : decodePlanningDocument(stored.data, userId);
       const { nextState, result } = operation(current);
       await reference.set({ data: encodeDocument(nextState, userId) });
+      return result;
+    });
+  }
+
+  public deleteExisting<TResult>(
+    userId: string,
+    operation: (current: PlanningAggregateState) => TResult
+  ): Promise<TResult> {
+    const documentId = this.documentIdForUser(userId);
+    return this.database.runTransaction(async (transaction) => {
+      const reference = transaction.collection(collectionName).doc(documentId);
+      const stored = await reference.get();
+      if (stored.data === undefined) throw new PersonalDataDocumentNotFoundError();
+      const current = decodePlanningDocument(stored.data, userId);
+      const result = operation(current);
+      await reference.remove();
       return result;
     });
   }

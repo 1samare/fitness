@@ -805,8 +805,20 @@ const idempotencyRecordSchema = z.discriminatedUnion('operation', [
   singleResultIdempotencyRecordSchema('cleanupIngredientPhoto')
 ]);
 
+const pendingAccountDeletionSchema = z.object({
+  status: z.literal('pending'),
+  idempotencyKey: z.string().min(1),
+  requestFingerprint: z.string().min(1),
+  snapshotToken: z.string().min(1),
+  requestedAt: z.iso.datetime(),
+  privateFileIds: z.array(z.string().startsWith('cloud://')).refine((fileIds) => (
+    new Set(fileIds).size === fileIds.length
+  ))
+}).strict();
+
 export const planningAggregateStateSchema = z.object({
   assistantConversation: assistantConversationStateSchema,
+  accountDeletion: pendingAccountDeletionSchema.nullable(),
   bodyProfiles: z.array(storedBodyProfileVersionSchema),
   goals: z.array(storedGoalVersionSchema),
   trainingPlans: z.array(storedTrainingPlanVersionSchema),

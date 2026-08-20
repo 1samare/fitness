@@ -524,6 +524,54 @@ async function stateWithConfirmedPhoto(): Promise<PlanningAggregateState> {
 }
 
 describe('planning aggregate invariants', () => {
+  test('accepts a pending account deletion with a traceable immutable snapshot', async () => {
+    const state = await createValidState();
+    const pending = {
+      ...state,
+      accountDeletion: {
+        status: 'pending',
+        idempotencyKey: 'delete-account-0001',
+        requestFingerprint: `v2:sha256:${'a'.repeat(64)}`,
+        snapshotToken: 'snapshot-token-0001',
+        requestedAt: '2026-08-20T00:00:00.000Z',
+        privateFileIds: [
+          'cloud://env.bucket/ingredient-photos/photo-a/upload.jpg',
+          'cloud://env.bucket/ingredient-photos/photo-b/upload.jpg'
+        ]
+      }
+    } as unknown as PlanningAggregateState;
+
+    expect(() => assertPlanningAggregateInvariants(pending, 'user-a')).not.toThrow();
+  });
+
+  test.each([
+    ['empty idempotency key', { idempotencyKey: '' }],
+    ['empty request fingerprint', { requestFingerprint: '' }],
+    ['empty snapshot token', { snapshotToken: '' }],
+    ['non-ISO request time', { requestedAt: '2026-08-20' }],
+    ['non-private file identifier', { privateFileIds: ['https://example.com/photo.jpg'] }],
+    [
+      'duplicate private file identifiers',
+      { privateFileIds: ['cloud://env.bucket/photo.jpg', 'cloud://env.bucket/photo.jpg'] }
+    ]
+  ] as const)('rejects pending account deletion with %s', async (_caseName, override) => {
+    const state = await createValidState();
+    const corrupt = {
+      ...state,
+      accountDeletion: {
+        status: 'pending',
+        idempotencyKey: 'delete-account-0001',
+        requestFingerprint: `v2:sha256:${'a'.repeat(64)}`,
+        snapshotToken: 'snapshot-token-0001',
+        requestedAt: '2026-08-20T00:00:00.000Z',
+        privateFileIds: ['cloud://env.bucket/ingredient-photos/photo-a/upload.jpg'],
+        ...override
+      }
+    } as unknown as PlanningAggregateState;
+
+    expectCorrupt(corrupt);
+  });
+
   test('rejects assistant pending and receipt state for the same request', async () => {
     const state = await createValidState();
     const requestFingerprint = `v2:sha256:${'a'.repeat(64)}`;

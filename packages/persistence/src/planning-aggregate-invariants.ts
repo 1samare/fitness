@@ -25,6 +25,23 @@ function assertUnique(values: readonly string[]): void {
   if (new Set(values).size !== values.length) corrupt();
 }
 
+function assertAccountDeletion(
+  accountDeletion: PlanningAggregateState['accountDeletion']
+): void {
+  if (accountDeletion === null) return;
+  const requestedAt = Date.parse(accountDeletion.requestedAt);
+  if (
+    accountDeletion.status !== 'pending'
+    || accountDeletion.idempotencyKey.length === 0
+    || accountDeletion.requestFingerprint.length === 0
+    || accountDeletion.snapshotToken.length === 0
+    || !Number.isFinite(requestedAt)
+    || new Date(requestedAt).toISOString() !== accountDeletion.requestedAt
+    || accountDeletion.privateFileIds.some((fileId) => !fileId.startsWith('cloud://'))
+  ) corrupt();
+  assertUnique(accountDeletion.privateFileIds);
+}
+
 function assertContiguous(versions: readonly number[]): void {
   const seen = new Set<number>();
   let maximum = 0;
@@ -649,6 +666,7 @@ export function assertPlanningAggregateInvariants(
   userId: string
 ): void {
   assertAssistantConversation(state.assistantConversation);
+  assertAccountDeletion(state.accountDeletion);
   const ownedRecords = [
     ...state.bodyProfiles,
     ...state.goals,

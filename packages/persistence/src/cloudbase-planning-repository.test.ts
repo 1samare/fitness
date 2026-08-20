@@ -31,6 +31,11 @@ class FakeDocumentReference implements CloudBaseDocumentReference {
     this.documents.set(this.key, input.data);
     return Promise.resolve({ updated: 1 });
   }
+
+  public remove(): Promise<unknown> {
+    this.documents.delete(this.key);
+    return Promise.resolve({ deleted: 1 });
+  }
 }
 
 class FakeDatabase implements CloudBaseDatabase, CloudBaseTransaction {
@@ -313,6 +318,81 @@ function corruptPhase4State(
 }
 
 describe('CloudBasePlanningRepository', () => {
+  test('migrates schema v7 to an explicit empty account-deletion state without mutating on read', async () => {
+    const database = new FakeDatabase();
+    const repository = new CloudBasePlanningRepository(database);
+    const state = await createPhase4State(new InMemoryPlanningRepository());
+    const documentKey = `planning_user_states/${repository.documentIdForUser('user-a')}`;
+    const legacyState = structuredClone(state) as unknown as Record<string, unknown>;
+    delete legacyState.accountDeletion;
+    const stored = { schemaVersion: 7, state: legacyState };
+    const before = structuredClone(stored);
+    database.documents.set(documentKey, stored);
+
+    const migrated = await repository.read('user-a');
+
+    expect((migrated as unknown as Record<string, unknown>).accountDeletion).toBeNull();
+    expect(database.documents.get(documentKey)).toEqual(before);
+    await repository.transact('user-a', (current) => ({
+      nextState: current,
+      result: undefined
+    }));
+    expect(database.documents.get(documentKey)).toMatchObject({ schemaVersion: 8 });
+  });
+
+  test('round-trips a bounded schema-v8 pending account deletion', async () => {
+    const database = new FakeDatabase();
+    const repository = new CloudBasePlanningRepository(database);
+    const accountDeletion = {
+      status: 'pending' as const,
+      idempotencyKey: 'delete-account-0001',
+      requestFingerprint: `v2:sha256:${'a'.repeat(64)}`,
+      snapshotToken: 'snapshot-token-0001',
+      requestedAt: '2026-08-20T00:00:00.000Z',
+      privateFileIds: [
+        'cloud://env.bucket/ingredient-photos/photo-a/upload.jpg',
+        'cloud://env.bucket/ingredient-photos/photo-b/upload.jpg'
+      ]
+    };
+    await repository.transact('user-a', (state) => ({
+      nextState: {
+        ...state,
+        accountDeletion
+      } as unknown as PlanningAggregateState,
+      result: undefined
+    }));
+
+    const restored = await new CloudBasePlanningRepository(database).read('user-a');
+    const stored = database.documents.get(
+      `planning_user_states/${repository.documentIdForUser('user-a')}`
+    );
+
+    expect((restored as unknown as Record<string, unknown>).accountDeletion)
+      .toEqual(accountDeletion);
+    expect(stored).toMatchObject({ schemaVersion: 8 });
+  });
+
+  test('distinguishes missing privileged reads and atomically deletes an existing document', async () => {
+    const database = new FakeDatabase();
+    const repository = new CloudBasePlanningRepository(database) as CloudBasePlanningRepository & {
+      readExisting(userId: string): Promise<PlanningAggregateState | null>;
+      deleteExisting<TResult>(
+        userId: string,
+        operation: (current: PlanningAggregateState) => TResult
+      ): Promise<TResult>;
+    };
+
+    await expect(repository.readExisting('user-a')).resolves.toBeNull();
+    await repository.transact('user-a', (state) => ({ nextState: state, result: undefined }));
+    await expect(repository.deleteExisting('user-a', (current) => (
+      current.bodyProfiles.length
+    ))).resolves.toBe(0);
+    await expect(repository.readExisting('user-a')).resolves.toBeNull();
+    await expect(repository.deleteExisting('user-a', () => undefined)).rejects.toMatchObject({
+      code: 'personal_data_document_not_found'
+    });
+  });
+
   test('migrates schema v6 to an empty assistant conversation without inventing history', async () => {
     const database = new FakeDatabase();
     const repository = new CloudBasePlanningRepository(database);
@@ -332,10 +412,10 @@ describe('CloudBasePlanningRepository', () => {
       nextState: current,
       result: undefined
     }));
-    expect(database.documents.get(documentKey)).toMatchObject({ schemaVersion: 7 });
+    expect(database.documents.get(documentKey)).toMatchObject({ schemaVersion: 8 });
   });
 
-  test('round-trips a bounded schema-v7 assistant conversation', async () => {
+  test('round-trips a bounded schema-v8 assistant conversation', async () => {
     const database = new FakeDatabase();
     const repository = new CloudBasePlanningRepository(database);
     const conversation: PlanningAggregateState['assistantConversation'] = {
@@ -446,7 +526,7 @@ describe('CloudBasePlanningRepository', () => {
     });
     expect(database.documents.get(documentKey)).toEqual(legacyDocument);
     await repository.transact('user-a', (state) => ({ nextState: state, result: undefined }));
-    expect(database.documents.get(documentKey)).toMatchObject({ schemaVersion: 7 });
+    expect(database.documents.get(documentKey)).toMatchObject({ schemaVersion: 8 });
   });
 
   test.each([
@@ -478,6 +558,7 @@ describe('CloudBasePlanningRepository', () => {
       const repository = new CloudBasePlanningRepository(new FakeDatabase());
 
       await expect(repository.read('wx-openid-a')).resolves.toMatchObject({
+        accountDeletion: null,
         inventories: [],
         mealPlans: [],
         mealPlanTargetDiffs: [],
@@ -528,7 +609,7 @@ describe('CloudBasePlanningRepository', () => {
     expect(database.documents).toHaveLength(1);
     expect(database.requestedKeys.join('|')).not.toContain('wx-openid-sensitive');
     expect([...database.documents.values()][0]).toEqual(expect.objectContaining({
-      schemaVersion: 7
+      schemaVersion: 8
     }));
   });
 
@@ -567,7 +648,7 @@ describe('CloudBasePlanningRepository', () => {
     );
     await repository.transact('wx-openid-a', (state) => ({ nextState: state, result: undefined }));
     const migrated = database.documents.get(documentKey);
-    expect(isRecord(migrated) ? migrated.schemaVersion : undefined).toBe(7);
+    expect(isRecord(migrated) ? migrated.schemaVersion : undefined).toBe(8);
     expect(isRecord(migrated) && isRecord(migrated.state)
       ? migrated.state.dailyNutritionTargets
       : undefined).toEqual([]);
@@ -699,7 +780,7 @@ describe('CloudBasePlanningRepository', () => {
     );
   });
 
-  test.each([1, 8])(
+  test.each([1, 9])(
     'rejects schema version %s without attempting an implicit migration',
     async (schemaVersion) => {
     const database = new FakeDatabase();

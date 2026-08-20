@@ -349,7 +349,8 @@ describe('planning API contracts', () => {
       activeTrainingPlanVersionId: null,
       activeInventoryVersionId: 'inventory-1',
       activeMealPlanVersionId: null,
-      nextPhotoCleanupAt: null
+      nextPhotoCleanupAt: null,
+      accountDeletion: null
     };
 
     expect(planningAggregateStateSchema.parse(v4State)).toEqual(v4State);
