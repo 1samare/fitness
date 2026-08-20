@@ -81,8 +81,8 @@ describe('cloud assistant runtime', () => {
       database: new FakeDatabase(),
       environment: {
         CLOUDBASE_ENV_ID: 'environment-1',
-        FITNESS_AI_PROVIDER_ID: providerId,
-        FITNESS_AI_MODEL_NAME: modelName
+        FITNESS_LLM_PROVIDER_ID: providerId,
+        FITNESS_LLM_MODEL: modelName
       },
       createModel,
       now: () => '2026-08-20T00:00:00.000Z'
@@ -101,8 +101,8 @@ describe('cloud assistant runtime', () => {
   it.each([
     {},
     { CLOUDBASE_ENV_ID: 'environment-1' },
-    { CLOUDBASE_ENV_ID: 'environment-1', FITNESS_AI_PROVIDER_ID: 'cloudbase' }
-  ])('fails closed when any explicit AI environment value is absent', (environment) => {
+    { CLOUDBASE_ENV_ID: 'environment-1', FITNESS_LLM_PROVIDER_ID: 'cloudbase' }
+  ])('fails closed when any explicit LLM environment value is absent', (environment) => {
     const createModel = vi.fn();
     expect(() => createCloudRuntimeAssistantHandler({
       runtimeMode: 'cloud',
@@ -121,8 +121,8 @@ describe('cloud assistant runtime', () => {
       database: new FakeDatabase(),
       environment: {
         CLOUDBASE_ENV_ID: 'environment-1',
-        FITNESS_AI_PROVIDER_ID: 'custom-deepseek-production',
-        FITNESS_AI_MODEL_NAME: 'deepseek-chat'
+        FITNESS_LLM_PROVIDER_ID: 'custom-deepseek-production',
+        FITNESS_LLM_MODEL: 'deepseek-chat'
       },
       createModel,
       now: () => '2026-08-20T00:00:00.000Z'

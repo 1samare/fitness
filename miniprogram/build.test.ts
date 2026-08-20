@@ -28,6 +28,6 @@ describe('mini program production build', () => {
     const assistantJavascript = await readFile(
       new URL('../.build/miniprogram/pages/assistant/index.js', import.meta.url), 'utf8'
     );
-    expect(assistantJavascript).not.toMatch(/FITNESS_AI_PROVIDER_ID|FITNESS_AI_MODEL_NAME/);
+    expect(assistantJavascript).not.toMatch(/FITNESS_LLM_PROVIDER_ID|FITNESS_LLM_MODEL/);
   });
 });

@@ -30,8 +30,8 @@ import { adaptWxCloudBaseDatabase } from './wx-database-adapter';
 
 export interface AssistantRuntimeEnvironment {
   readonly CLOUDBASE_ENV_ID?: string | undefined;
-  readonly FITNESS_AI_PROVIDER_ID?: string | undefined;
-  readonly FITNESS_AI_MODEL_NAME?: string | undefined;
+  readonly FITNESS_LLM_PROVIDER_ID?: string | undefined;
+  readonly FITNESS_LLM_MODEL?: string | undefined;
 }
 
 export class AssistantRuntimeConfigurationError extends Error {
@@ -122,8 +122,8 @@ export function createCloudRuntimeAssistantHandler(
   context?: TrustedAssistantRequestContext
 ) => Promise<AssistantApiResponse> {
   requiredIdentifier(options.environment.CLOUDBASE_ENV_ID);
-  const providerId = requiredIdentifier(options.environment.FITNESS_AI_PROVIDER_ID);
-  const modelName = requiredIdentifier(options.environment.FITNESS_AI_MODEL_NAME);
+  const providerId = requiredIdentifier(options.environment.FITNESS_LLM_PROVIDER_ID);
+  const modelName = requiredIdentifier(options.environment.FITNESS_LLM_MODEL);
   const model = options.createModel(providerId);
   const repository = new CloudBasePlanningRepository(options.database);
   const now = options.now ?? (() => new Date().toISOString());
@@ -154,8 +154,8 @@ export function createCloudRuntimeAssistantHandler(
 export function createDefaultCloudRuntimeAssistantHandler() {
   const environment: AssistantRuntimeEnvironment = {
     CLOUDBASE_ENV_ID: process.env.CLOUDBASE_ENV_ID,
-    FITNESS_AI_PROVIDER_ID: process.env.FITNESS_AI_PROVIDER_ID,
-    FITNESS_AI_MODEL_NAME: process.env.FITNESS_AI_MODEL_NAME
+    FITNESS_LLM_PROVIDER_ID: process.env.FITNESS_LLM_PROVIDER_ID,
+    FITNESS_LLM_MODEL: process.env.FITNESS_LLM_MODEL
   };
   const environmentId = requiredIdentifier(environment.CLOUDBASE_ENV_ID);
   cloud.init();
