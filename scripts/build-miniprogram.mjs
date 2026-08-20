@@ -3,6 +3,7 @@ import path from 'node:path';
 import { argv, env } from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { validateControlledBetaMetadata } from './lib/release-config.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sourceRoot = path.join(repositoryRoot, 'miniprogram');
@@ -21,25 +22,13 @@ if (releaseChannel !== 'development' && releaseChannel !== 'controlled_beta') {
   throw new Error(`Unsupported mini program release channel: ${releaseChannel}`);
 }
 
-function requiredPublicMetadata(name) {
-  const value = env[name]?.trim();
-  if (value === undefined || value.length === 0) {
-    throw new Error(`Missing controlled-beta public metadata: ${name}`);
-  }
-  return value;
-}
-
 const releaseMetadata = releaseChannel === 'development'
   ? {
       operatorName: '仅限本地开发，不得发布',
       privacyContact: 'local-only@invalid.example',
       privacyNoticeVersion: 'local-dev'
     }
-  : {
-      operatorName: requiredPublicMetadata('FITNESS_PUBLIC_OPERATOR_NAME'),
-      privacyContact: requiredPublicMetadata('FITNESS_PUBLIC_PRIVACY_CONTACT'),
-      privacyNoticeVersion: requiredPublicMetadata('FITNESS_PRIVACY_NOTICE_VERSION')
-    };
+  : validateControlledBetaMetadata(env);
 
 if (path.dirname(outputRoot) !== buildRoot) {
   throw new Error(`Refusing to clean unexpected output directory: ${outputRoot}`);

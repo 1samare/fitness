@@ -1,0 +1,19 @@
+{
+  "cloudbaseCliVersion": "3.7.2",
+  "nodeRuntime": "Nodejs20.19",
+  "functions": [
+    "photo-cleanup",
+    "planning-api",
+    "assistant-api"
+  ],
+  "reviewedDatasetCollection": "planning_reviewed_datasets",
+  "userStateCollection": "planning_user_states",
+  "requiredServerConfigNames": [
+    "CLOUDBASE_STORAGE_FILE_ID_PREFIX",
+    "FITNESS_VISION_FUNCTION_NAME",
+    "CLOUDBASE_ENV_ID",
+    "FITNESS_LLM_PROVIDER_ID",
+    "FITNESS_LLM_MODEL",
+    "FITNESS_REVIEWED_DATASET_ID"
+  ]
+}

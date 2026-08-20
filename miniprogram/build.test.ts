@@ -70,6 +70,23 @@ describe('mini program production build', () => {
       cwd: new URL('..', import.meta.url),
       windowsHide: true,
       env: environment
-    })).rejects.toThrow('Missing controlled-beta public metadata');
+    })).rejects.toThrow('FITNESS_PUBLIC_OPERATOR_NAME: missing');
+  });
+
+  test('rejects development-only metadata in a controlled-beta artifact', async () => {
+    await expect(execFileAsync(process.execPath, [
+      'scripts/build-miniprogram.mjs',
+      '--api-mode=cloud',
+      '--release-channel=controlled_beta'
+    ], {
+      cwd: new URL('..', import.meta.url),
+      windowsHide: true,
+      env: {
+        ...process.env,
+        FITNESS_PUBLIC_OPERATOR_NAME: '仅限本地开发，不得发布',
+        FITNESS_PUBLIC_PRIVACY_CONTACT: 'local-only@invalid.example',
+        FITNESS_PRIVACY_NOTICE_VERSION: 'local-dev'
+      }
+    })).rejects.toThrow('development-only values');
   });
 });

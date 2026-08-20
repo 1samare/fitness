@@ -320,7 +320,7 @@ git commit -m "feat: load production reviewed planning data"
 
 - `runReleasePreflight({ repositoryRoot, env, runCliVersion })` returns a structured pass/fail report; the CLI formatter emits only names and states.
 
-- [ ] **Step 1: Add RED pure preflight tests**
+- [x] **Step 1: Add RED pure preflight tests**
 
 Build temporary repositories and assert failures for tourist AppID, absent/empty private AppID, absent target environment selection, local-only operator/contact/version, missing or stale dataset evidence, wrong CLI version, missing server config name, wrong CloudBase runtime/handler/timeout/install setting, timer config drift beyond the one expected trigger, and untracked release input.
 
@@ -347,13 +347,13 @@ FITNESS_CLOUDBASE_CONFIGURED_NAMES
 
 `FITNESS_CLOUDBASE_CONFIGURED_NAMES` is a comma-separated set of names, never values.
 
-- [ ] **Step 2: Add RED artifact/secret scan tests**
+- [x] **Step 2: Add RED artifact/secret scan tests**
 
 Seed fixtures containing `.map`, test files, `node_modules`, local fixture markers, OpenID-shaped log values, Base64 image values, concrete `cloud://` file IDs in evidence/logs, high-entropy `secret=`/`token=` assignments, and unapproved output paths. Assert a clean build contains only the three allowlisted function directories with `index.js`/`package.json` and the mini program tree. Explicitly assert safe identifiers and validators such as `snapshotToken`, `estimatedTokenUnits`, `CLOUDBASE_STORAGE_FILE_ID_PREFIX`, and the literal `cloud://` validation prefix do not trigger without a secret/file-ID value.
 
 The scanner allows public operator/contact/version values in the mini program, but forbids `.env`, private config, server settings, and evidence files from any deploy artifact.
 
-- [ ] **Step 3: Run tests and confirm RED**
+- [x] **Step 3: Run tests and confirm RED**
 
 Run:
 
@@ -363,7 +363,7 @@ pnpm.cmd test -- scripts/lib/release-config.test.ts scripts/release-preflight.te
 
 Expected: FAIL because the validators, release manifest, and scripts do not exist.
 
-- [ ] **Step 4: Implement release build mode and pure validators**
+- [x] **Step 4: Implement release build mode and pure validators**
 
 Add `build:miniprogram:release` which invokes:
 
@@ -375,7 +375,7 @@ Controlled-beta mode rejects local values and injects the three public metadata 
 
 Implement exact JSON/config comparisons using parsed objects, not regular expressions. `project.private.config.json` is read only to classify the AppID as present and non-tourist; neither AppID nor environment ID enters evidence/output.
 
-- [ ] **Step 5: Implement artifact and sensitive-log scanning**
+- [x] **Step 5: Implement artifact and sensitive-log scanning**
 
 Walk only resolved paths under `.build/cloudfunctions`, `.build/miniprogram`, and `.build/release-evidence`. Refuse symlinks. Scan text files with bounded reads. Apply artifact secret-value rules to deploy code and stricter personal-data/file-ID rules to logs/evidence; do not treat safe field names as values. Report relative path plus rule ID, not matched content. Add package commands:
 
@@ -389,7 +389,7 @@ Walk only resolved paths under `.build/cloudfunctions`, `.build/miniprogram`, an
 }
 ```
 
-- [ ] **Step 6: Run focused tests and a development build scan**
+- [x] **Step 6: Run focused tests and a development build scan**
 
 Run:
 
@@ -401,7 +401,7 @@ pnpm.cmd release:scan
 
 Expected: tests and scan PASS. `release:preflight` is expected to fail in a workspace without real private release inputs; its behavioral tests must pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add scripts package.json miniprogram/build.test.ts tests/e2e/cloudfunction-deploy-artifact.test.ts docs/release/phase-7-release-manifest.json
