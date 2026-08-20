@@ -51,6 +51,8 @@ interface PageActions {
   onRetry(): Promise<void>;
   onOpenTrainingPlan(): void;
   onOpenMealPlan(): void;
+  onOpenPrivacy(): void;
+  onOpenDataRights(): void;
 }
 
 interface AssistantPageContext {
@@ -356,5 +358,13 @@ Page<PageData, PageActions>({
 
   onOpenMealPlan() {
     void wx.navigateTo({ url: '/pages/meal-execution/index' });
+  },
+
+  onOpenPrivacy() {
+    void wx.navigateTo({ url: '/pages/privacy/index' });
+  },
+
+  onOpenDataRights() {
+    void wx.navigateTo({ url: '/pages/data-rights/index' });
   }
 });

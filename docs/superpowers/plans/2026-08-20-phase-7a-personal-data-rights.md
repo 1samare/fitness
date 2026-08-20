@@ -745,7 +745,7 @@ export function clearAllLocalPrivateState(): void;
 - Development build values are exactly `仅限本地开发，不得发布`, `local-only@invalid.example`, and `local-dev`.
 - Controlled-beta values are injected only by `build:miniprogram:release` and validated in Phase 7B.
 
-- [ ] **Step 1: Add RED page, build, and cache-clearing tests**
+- [x] **Step 1: Add RED page, build, and cache-clearing tests**
 
 Test that:
 
@@ -774,7 +774,7 @@ expect(planningCalls.at(-1)).toEqual({
 expect(wx.clearStorageSync).toHaveBeenCalledOnce();
 ```
 
-- [ ] **Step 2: Run focused tests and confirm RED**
+- [x] **Step 2: Run focused tests and confirm RED**
 
 Run:
 
@@ -784,7 +784,7 @@ pnpm.cmd test -- miniprogram/services/release-metadata.test.ts miniprogram/servi
 
 Expected: FAIL because modules, pages, entries, and build defines do not exist.
 
-- [ ] **Step 3: Implement release metadata and cache clearing**
+- [x] **Step 3: Implement release metadata and cache clearing**
 
 Declare compile constants in `global.d.ts` and expose a frozen metadata object. `clearAllLocalPrivateState` calls only `wx.clearStorageSync()`, guaranteeing removal of planning, meal workflow, photo, assistant, and future app-local recovery records.
 
@@ -798,7 +798,7 @@ FITNESS_PRIVACY_NOTICE_VERSION
 
 The build script validates only non-empty values here; Phase 7B adds release-grade validation.
 
-- [ ] **Step 4: Implement page controllers and explicit privacy copy**
+- [x] **Step 4: Implement page controllers and explicit privacy copy**
 
 The data-rights page stores the snapshot token only in page memory. The copy action uses `wx.setClipboardData`. The share action, initiated directly by a user tap, writes UTF-8 JSON to `${wx.env.USER_DATA_PATH}/fitness-personal-data-export.json`, calls `wx.shareFileMessage({ filePath, fileName: 'fitness-personal-data-export.json' })`, and unlinks the local file in the completion callback; unsupported share APIs fall back to clipboard with explicit copy-success text. Never save the export in mini program key/value storage or CloudBase storage. Deletion requires two separate text fields plus a system `wx.showModal` confirmation, shows an irreversible-action warning, disables normal actions while sending, clears storage on both terminal success kinds, then `wx.reLaunch({ url: '/pages/planning-setup/index' })`.
 
@@ -812,7 +812,7 @@ AI 辅助：受限助手表述与食材候选；候选必须由用户确认。
 
 Add `AI 辅助` beside assistant content and ingredient recognition; add `确定性估算，仅供参考` beside target/meal numeric summaries. Do not label stored user text as AI-generated.
 
-- [ ] **Step 5: Run all mini program tests and build**
+- [x] **Step 5: Run all mini program tests and build**
 
 Run:
 
@@ -824,7 +824,7 @@ pnpm.cmd build:miniprogram:local
 
 Expected: PASS; `.build/miniprogram/pages/privacy` and `.build/miniprogram/pages/data-rights` each contain JS/JSON/WXML/WXSS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add miniprogram scripts/build-miniprogram.mjs

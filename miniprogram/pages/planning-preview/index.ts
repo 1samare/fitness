@@ -31,6 +31,8 @@ interface PageActions {
   onGoalChange(event: TextValueEvent): void;
   onTrainingChange(event: TextValueEvent): void;
   onHealthScopeChange(event: SwitchValueEvent): void;
+  onOpenPrivacy(): void;
+  onOpenDataRights(): void;
   onSubmit(): Promise<void>;
 }
 
@@ -89,6 +91,12 @@ Page<PageData, PageActions>({
     this.setData({ trainingIndex: pickerIndex(event.detail.value, this.data.trainingLabels.length) });
   },
   onHealthScopeChange(event) { this.setData({ healthScopeConfirmed: event.detail.value }); },
+  onOpenPrivacy() {
+    void wx.navigateTo({ url: '/pages/privacy/index' });
+  },
+  onOpenDataRights() {
+    void wx.navigateTo({ url: '/pages/data-rights/index' });
+  },
   async onSubmit() {
     this.setData({
       loading: true,

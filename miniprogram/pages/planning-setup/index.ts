@@ -70,6 +70,8 @@ interface PageActions {
   onTrainingDurationInput(event: IndexedTextValueEvent): void;
   onOpenAssistant(): void;
   onOpenMealExecution(): void;
+  onOpenPrivacy(): void;
+  onOpenDataRights(): void;
   onSubmit(): Promise<void>;
 }
 
@@ -297,6 +299,12 @@ Page<PageData, PageActions>({
   },
   onOpenAssistant() {
     void wx.navigateTo({ url: '/pages/assistant/index' });
+  },
+  onOpenPrivacy() {
+    void wx.navigateTo({ url: '/pages/privacy/index' });
+  },
+  onOpenDataRights() {
+    void wx.navigateTo({ url: '/pages/data-rights/index' });
   },
   async onSubmit() {
     this.setData({ loading: true, errorMessage: '', successMessage: '', displayTargets: [] });

@@ -2,6 +2,7 @@
   <view class="hero">
     <text class="eyebrow">FITNESS · 私有图片辅助</text>
     <text class="title">拍照识别现有食材</text>
+    <text class="subtitle">AI 辅助</text>
     <text class="subtitle">图片仅用于给出候选名称，系统不会从照片猜测克数、热量或营养素。</text>
   </view>
 
@@ -52,4 +53,8 @@
   </view>
 
   <text class="disclaimer">原图保存在私有路径，按清理策略处理；确认前不会写入正式库存，也不会触发营养或餐单重算。</text>
+  <view class="quick-links" aria-label="隐私与个人数据">
+    <button class="button button--secondary" bindtap="onOpenPrivacy">隐私说明</button>
+    <button class="button button--secondary" bindtap="onOpenDataRights">个人数据管理</button>
+  </view>
 </view>

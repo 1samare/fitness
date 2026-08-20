@@ -64,6 +64,8 @@ interface PageActions {
   onGramsInput(event: TextValueEvent): void;
   onConfirmCandidate(): Promise<void>;
   onManualEntry(): void;
+  onOpenPrivacy(): void;
+  onOpenDataRights(): void;
 }
 
 let selectedLocalFile: SelectedLocalFile | null = null;
@@ -596,5 +598,13 @@ Page<PageData, PageActions>({
   onManualEntry() {
     selectedLocalFile = null;
     void wx.redirectTo({ url: '/pages/meal-execution/index' });
+  },
+
+  onOpenPrivacy() {
+    void wx.navigateTo({ url: '/pages/privacy/index' });
+  },
+
+  onOpenDataRights() {
+    void wx.navigateTo({ url: '/pages/data-rights/index' });
   }
 });

@@ -129,6 +129,8 @@ interface PageActions {
   onRetryRecalculation(): Promise<void>;
   onOpenAssistant(): void;
   onOpenIngredientPhoto(): void;
+  onOpenPrivacy(): void;
+  onOpenDataRights(): void;
 }
 
 const emptyVersions: LatestVersions = {
@@ -310,6 +312,14 @@ Page<PageData, PageActions>({
 
   onOpenAssistant() {
     void wx.navigateTo({ url: '/pages/assistant/index' });
+  },
+
+  onOpenPrivacy() {
+    void wx.navigateTo({ url: '/pages/privacy/index' });
+  },
+
+  onOpenDataRights() {
+    void wx.navigateTo({ url: '/pages/data-rights/index' });
   },
 
   async refreshContext() {

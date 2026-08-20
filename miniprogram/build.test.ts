@@ -6,12 +6,12 @@ import { describe, expect, test } from 'vitest';
 const execFileAsync = promisify(execFile);
 
 describe('mini program production build', () => {
-  test('emits the registered assistant and ingredient photo pages without source-only files', async () => {
+  test('emits all registered interactive and privacy pages without source-only files', async () => {
     await execFileAsync(process.execPath, [
-      'scripts/build-miniprogram.mjs', '--api-mode=cloud'
+      'scripts/build-miniprogram.mjs', '--api-mode=cloud', '--release-channel=development'
     ], { cwd: new URL('..', import.meta.url), windowsHide: true });
 
-    for (const pageName of ['assistant', 'ingredient-photo']) {
+    for (const pageName of ['assistant', 'ingredient-photo', 'privacy', 'data-rights']) {
       const pageRoot = new URL(`../.build/miniprogram/pages/${pageName}/`, import.meta.url);
       for (const filename of ['index.js', 'index.json', 'index.wxml', 'index.wxss']) {
         await expect(access(new URL(filename, pageRoot))).resolves.toBeUndefined();
@@ -29,5 +29,47 @@ describe('mini program production build', () => {
       new URL('../.build/miniprogram/pages/assistant/index.js', import.meta.url), 'utf8'
     );
     expect(assistantJavascript).not.toMatch(/FITNESS_LLM_PROVIDER_ID|FITNESS_LLM_MODEL/);
+  });
+
+  test('injects controlled-beta public metadata without development contact values', async () => {
+    await execFileAsync(process.execPath, [
+      'scripts/build-miniprogram.mjs',
+      '--api-mode=cloud',
+      '--release-channel=controlled_beta'
+    ], {
+      cwd: new URL('..', import.meta.url),
+      windowsHide: true,
+      env: {
+        ...process.env,
+        FITNESS_PUBLIC_OPERATOR_NAME: '测试运营主体',
+        FITNESS_PUBLIC_PRIVACY_CONTACT: 'privacy@example.test',
+        FITNESS_PRIVACY_NOTICE_VERSION: 'beta-2026-08-20'
+      }
+    });
+    const privacyJavascript = await readFile(
+      new URL('../.build/miniprogram/pages/privacy/index.js', import.meta.url),
+      'utf8'
+    );
+    expect(privacyJavascript).toMatch(/\\u6D4B\\u8BD5\\u8FD0\\u8425\\u4E3B\\u4F53/i);
+    expect(privacyJavascript).toContain('privacy@example.test');
+    expect(privacyJavascript).toContain('beta-2026-08-20');
+    expect(privacyJavascript).not.toContain('local-only@invalid.example');
+  });
+
+  test('fails a controlled-beta build when any public metadata value is empty', async () => {
+    const environment = { ...process.env };
+    delete environment.FITNESS_PUBLIC_OPERATOR_NAME;
+    delete environment.FITNESS_PUBLIC_PRIVACY_CONTACT;
+    delete environment.FITNESS_PRIVACY_NOTICE_VERSION;
+
+    await expect(execFileAsync(process.execPath, [
+      'scripts/build-miniprogram.mjs',
+      '--api-mode=cloud',
+      '--release-channel=controlled_beta'
+    ], {
+      cwd: new URL('..', import.meta.url),
+      windowsHide: true,
+      env: environment
+    })).rejects.toThrow('Missing controlled-beta public metadata');
   });
 });

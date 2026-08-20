@@ -65,6 +65,7 @@
   <view wx:if="{{supportedResult}}" class="card result-card" aria-role="region" aria-label="能量规划结果">
     <text class="section-kicker">已通过适用范围门禁</text>
     <text class="section-title">今日规划起点</text>
+    <text class="metadata">确定性估算，仅供参考</text>
     <view class="metric"><text>BMI</text><text class="metric-value">{{supportedResult.bmi}}</text></view>
     <view class="metric"><text>估算 BMR</text><text class="metric-value">{{supportedResult.estimatedBmrKcal}} kcal</text></view>
     <view class="metric"><text>非训练基线</text><text class="metric-value">{{supportedResult.nonTrainingBaselineKcal}} kcal</text></view>
@@ -88,4 +89,8 @@
     <text class="error-help">请检查输入；如为连接错误，请先运行本地 API 后重试。</text>
   </view>
   <text class="phase-note">本阶段仅提供每日能量起点预览，尚未生成宏量营养目标或食谱。</text>
+  <view class="quick-links" aria-label="隐私与个人数据">
+    <button bindtap="onOpenPrivacy">隐私说明</button>
+    <button bindtap="onOpenDataRights">个人数据管理</button>
+  </view>
 </view>

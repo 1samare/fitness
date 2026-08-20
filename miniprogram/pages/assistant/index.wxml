@@ -2,6 +2,7 @@
   <view class="hero">
     <text class="eyebrow">FITNESS · 确定性修改</text>
     <text class="title">受限计划助手</text>
+    <text class="subtitle">AI 辅助</text>
     <text class="subtitle">仅支持移动训练日、换菜和调整份量。所有命令都会先校验，再调用确定性规划服务。</text>
   </view>
 
@@ -75,5 +76,7 @@
   <view class="quick-links" aria-label="结构化页面入口">
     <button class="button button--ghost" bindtap="onOpenTrainingPlan">训练计划</button>
     <button class="button button--ghost" bindtap="onOpenMealPlan">一周餐单</button>
+    <button class="button button--ghost" bindtap="onOpenPrivacy">隐私说明</button>
+    <button class="button button--ghost" bindtap="onOpenDataRights">个人数据管理</button>
   </view>
 </view>

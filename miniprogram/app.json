@@ -4,7 +4,9 @@
     "pages/assistant/index",
     "pages/planning-preview/index",
     "pages/meal-execution/index",
-    "pages/ingredient-photo/index"
+    "pages/ingredient-photo/index",
+    "pages/privacy/index",
+    "pages/data-rights/index"
   ],
   "window": {
     "navigationBarTitleText": "Fitness 规划预览",
