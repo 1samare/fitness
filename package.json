@@ -28,7 +28,7 @@
     "smoke:api": "pnpm --filter @fitness/planning-api build && vitest run --config vitest.smoke.config.ts",
     "smoke:assistant": "pnpm --filter @fitness/assistant-api build && vitest run --config vitest.assistant-smoke.config.ts",
     "test": "vitest run",
-    "typecheck": "pnpm -r --if-present typecheck && tsc -p miniprogram/tsconfig.json --noEmit"
+    "typecheck": "pnpm -r --if-present typecheck && tsc -p tsconfig.json --noEmit && tsc -p miniprogram/tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@fitness/contracts": "workspace:*",

@@ -4,9 +4,9 @@ import { runCommandSequence } from './release-command-runner.mjs';
 describe('release command runner', () => {
   test('runs in order and stops on the first non-zero exit', async () => {
     const invoked: string[] = [];
-    const spawnCommand = vi.fn(async (command: { name: string }) => {
+    const spawnCommand = vi.fn((command: { name: string }) => {
       invoked.push(command.name);
-      return { exitCode: command.name === 'typecheck' ? 2 : 0 };
+      return Promise.resolve({ exitCode: command.name === 'typecheck' ? 2 : 0 });
     });
     const result = await runCommandSequence({
       commands: [{ name: 'lint' }, { name: 'typecheck' }, { name: 'test' }],

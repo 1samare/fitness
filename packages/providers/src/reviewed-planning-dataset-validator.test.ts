@@ -10,6 +10,11 @@ import {
   validateReviewedPlanningDataset
 } from './reviewed-planning-dataset-validator';
 
+function required<T>(value: T | undefined, label: string): T {
+  if (value === undefined) throw new Error(`Missing ${label} test fixture`);
+  return value;
+}
+
 function withChecksum(candidate = createReviewedPlanningDatasetCandidate()) {
   candidate.checksumSha256 = createHash('sha256')
     .update(canonicalReviewedDatasetPayload(candidate), 'utf8')
@@ -46,39 +51,57 @@ describe('validateReviewedPlanningDataset', () => {
 
     expectInvalid((candidate) => { candidate.activatedAt = '2026-07-01T00:00:00.000Z'; });
     expectInvalid((candidate) => { candidate.validUntil = REVIEWED_DATASET_NOW; });
-    expectInvalid((candidate) => { candidate.sourceReferences[0]!.authorizationEvidenceRef = ' '; });
-    expectInvalid((candidate) => { candidate.sourceReferences[0]!.cacheAllowed = false as true; });
-    expectInvalid((candidate) => { candidate.sourceReferences[0]!.displayAllowed = false as true; });
     expectInvalid((candidate) => {
-      candidate.sourceReferences[0]!.authorizationValidUntil = null;
-      candidate.sourceReferences[0]!.noExpiryBasis = null;
+      required(candidate.sourceReferences[0], 'source reference').authorizationEvidenceRef = ' ';
     });
     expectInvalid((candidate) => {
-      candidate.sourceReferences[0]!.noExpiryBasis = 'perpetual-license';
+      required(candidate.sourceReferences[0], 'source reference').cacheAllowed = false as true;
     });
     expectInvalid((candidate) => {
-      candidate.sourceReferences[0]!.exitDisposition = 'delete_all' as 'retain_historical_only';
+      required(candidate.sourceReferences[0], 'source reference').displayAllowed = false as true;
+    });
+    expectInvalid((candidate) => {
+      const source = required(candidate.sourceReferences[0], 'source reference');
+      source.authorizationValidUntil = null;
+      source.noExpiryBasis = null;
+    });
+    expectInvalid((candidate) => {
+      required(candidate.sourceReferences[0], 'source reference').noExpiryBasis = 'perpetual-license';
+    });
+    expectInvalid((candidate) => {
+      required(candidate.sourceReferences[0], 'source reference').exitDisposition =
+        'delete_all' as 'retain_historical_only';
     });
   });
 
   test('rejects duplicate IDs and mismatched dataset/source metadata', () => {
     expectInvalid((candidate) => {
-      candidate.nutritionSnapshots.push(structuredClone(candidate.nutritionSnapshots[0]!));
+      candidate.nutritionSnapshots.push(structuredClone(required(
+        candidate.nutritionSnapshots[0],
+        'nutrition snapshot'
+      )));
     });
-    expectInvalid((candidate) => { candidate.recipeTemplates[0]!.datasetVersion = 'other-version'; });
-    expectInvalid((candidate) => { candidate.dailyMenus[0]!.sourceId = 'missing-source'; });
+    expectInvalid((candidate) => {
+      required(candidate.recipeTemplates[0], 'recipe template').datasetVersion = 'other-version';
+    });
+    expectInvalid((candidate) => {
+      required(candidate.dailyMenus[0], 'daily menu').sourceId = 'missing-source';
+    });
     expectInvalid((candidate) => { candidate.menuCatalog.reviewedAt = '2026-08-02T00:00:00.000Z'; });
   });
 
   test('rejects every broken or dangling graph edge', () => {
     expectInvalid((candidate) => {
-      candidate.recipeTemplates[0]!.ingredients[0]!.nutritionSnapshotId = 'missing-snapshot';
+      const recipe = required(candidate.recipeTemplates[0], 'recipe template');
+      required(recipe.ingredients[0], 'recipe ingredient').nutritionSnapshotId = 'missing-snapshot';
     });
     expectInvalid((candidate) => {
-      candidate.recipeTemplates[0]!.ingredients[0]!.foodId = 'wrong-food';
+      const recipe = required(candidate.recipeTemplates[0], 'recipe template');
+      required(recipe.ingredients[0], 'recipe ingredient').foodId = 'wrong-food';
     });
     expectInvalid((candidate) => {
-      candidate.dailyMenus[0]!.meals[0]!.recipeTemplateVersionId = 'missing-recipe';
+      const menu = required(candidate.dailyMenus[0], 'daily menu');
+      required(menu.meals[0], 'daily menu meal').recipeTemplateVersionId = 'missing-recipe';
     });
     expectInvalid((candidate) => {
       candidate.menuCatalog.dailyMenuTemplateVersionIds[0] = 'missing-menu';
@@ -88,20 +111,20 @@ describe('validateReviewedPlanningDataset', () => {
     });
     expectInvalid((candidate) => {
       candidate.dailyMenus.push({
-        ...structuredClone(candidate.dailyMenus[0]!),
+        ...structuredClone(required(candidate.dailyMenus[0], 'daily menu')),
         id: 'dangling-menu-v1'
       });
     });
     expectInvalid((candidate) => {
       candidate.recipeTemplates.push({
-        ...structuredClone(candidate.recipeTemplates[0]!),
+        ...structuredClone(required(candidate.recipeTemplates[0], 'recipe template')),
         id: 'dangling-recipe-v1',
         templateId: 'dangling-recipe'
       });
     });
     expectInvalid((candidate) => {
       candidate.nutritionSnapshots.push({
-        ...structuredClone(candidate.nutritionSnapshots[0]!),
+        ...structuredClone(required(candidate.nutritionSnapshots[0], 'nutrition snapshot')),
         id: 'dangling-snapshot-v1',
         foodId: 'dangling-food',
         sourceRecordId: 'dangling-source-record'

@@ -104,7 +104,7 @@ afterEach(async () => {
   )));
 });
 
-async function run(root: string, overrides: {
+function run(root: string, overrides: {
   env?: Record<string, string>;
   cliVersion?: string;
   isTracked?: (relativePath: string) => boolean;

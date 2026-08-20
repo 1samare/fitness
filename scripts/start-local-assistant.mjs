@@ -1,4 +1,4 @@
-/* global console, process */
+/* global console */
 import { spawn } from 'node:child_process';
 
 const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';

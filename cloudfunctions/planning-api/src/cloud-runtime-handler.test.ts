@@ -19,7 +19,7 @@ import { describe, expect, test } from 'vitest';
 import { createCloudRuntimePlanningHandler } from './cloud-runtime-handler';
 
 class FakeDocumentReference implements CloudBaseDocumentReference {
-  public constructor(private readonly value: unknown | undefined) {}
+  public constructor(private readonly value: unknown) {}
   public get(): Promise<{ readonly data?: unknown }> {
     return Promise.resolve(this.value === undefined ? {} : { data: structuredClone(this.value) });
   }
@@ -125,7 +125,8 @@ describe('cloud planning runtime reviewed dataset composition', () => {
   test('reads exactly the configured document and resolves reviewed food data', async () => {
     const datasetId = 'reviewed-planning-cn-v1';
     const dataset = reviewedDataset();
-    const expectedSnapshot = dataset.nutritionSnapshots[0]!;
+    const expectedSnapshot = dataset.nutritionSnapshots[0];
+    if (expectedSnapshot === undefined) throw new Error('Expected reviewed snapshot fixture');
     const database = new FakeDatabase(new Map([
       [`planning_reviewed_datasets/${datasetId}`, dataset]
     ]));

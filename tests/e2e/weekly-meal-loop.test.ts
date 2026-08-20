@@ -812,11 +812,22 @@ describe('weekly meal loop end-to-end acceptance', () => {
       );
       expect(publicConflict).toMatchObject({ code: expectedConflict, businessDate: WEEK_START });
       if (expectedConflict === 'inventory_insufficient') {
-        expect(typeof publicConflict?.requiredGrams).toBe('number');
-        expect(publicConflict?.availableGrams).toBe(1);
+        const inventoryConflict = result.error.conflicts.find(
+          (conflict) => conflict.code === 'inventory_insufficient'
+            && conflict.businessDate === WEEK_START
+        );
+        if (inventoryConflict?.code !== 'inventory_insufficient') {
+          throw new Error('Expected an inventory conflict');
+        }
+        expect(typeof inventoryConflict.requiredGrams).toBe('number');
+        expect(inventoryConflict.availableGrams).toBe(1);
       }
       if (foodNameExpectation === 'present') {
-        expect(typeof publicConflict?.foodNameZh).toBe('string');
+        if (
+          publicConflict?.code !== 'allergen_detected'
+          && publicConflict?.code !== 'inventory_insufficient'
+        ) throw new Error('Expected a public food conflict');
+        expect(typeof publicConflict.foodNameZh).toBe('string');
       } else {
         expect(publicConflict).not.toHaveProperty('foodNameZh');
       }

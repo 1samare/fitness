@@ -1,5 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createServer } from 'node:http';
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse
+} from 'node:http';
 import {
   ProviderUnavailableError,
   createAccountDeletionGuardedRepository,
@@ -125,7 +129,7 @@ function requiredIdentity(headers: Record<string, string | string[] | undefined>
   return identity;
 }
 
-function setupRequest(identity: string) {
+function setupRequest(identity: string): PlanningApiRequest {
   return {
     action: 'completePlanningSetup',
     payload: {
@@ -158,7 +162,7 @@ function setupRequest(identity: string) {
         }))
       }
     }
-  } as const;
+  };
 }
 
 async function call(identity: string, request: PlanningApiRequest, injectProviderFailure = false) {
@@ -306,14 +310,16 @@ async function seedMaximumAggregate() {
   }
   let excess = planningAggregateUtf8Bytes(candidate) - PLANNING_AGGREGATE_MAX_UTF8_BYTES;
   for (let profileIndex = profiles.length - 1; profileIndex >= 0 && excess > 0; profileIndex -= 1) {
-    const profile = profiles[profileIndex]!;
+    const profile = profiles[profileIndex];
+    if (profile === undefined) throw new Error('maximum_profile_missing');
     for (const collection of [
       profile.payload.allergens,
       profile.payload.avoidFoods,
       profile.payload.dietPreferences
     ]) {
       for (let index = collection.length - 1; index >= 0 && excess > 0; index -= 1) {
-        const current = collection[index]!;
+        const current = collection[index];
+        if (current === undefined) throw new Error('maximum_visible_value_missing');
         const shrinkBy = Math.min(excess, current.length - 1);
         collection[index] = current.slice(0, current.length - shrinkBy);
         excess -= shrinkBy;
@@ -351,9 +357,11 @@ async function maximumOverflow() {
   const attempted = structuredClone(before) as PlanningAggregateState & {
     bodyProfiles: MutableProfile[];
   };
-  const first = attempted.bodyProfiles[0]?.payload.avoidFoods[0];
+  const firstProfile = attempted.bodyProfiles[0];
+  if (firstProfile === undefined) throw new Error('maximum_profile_missing');
+  const first = firstProfile.payload.avoidFoods[0];
   if (first === undefined) throw new Error('maximum_visible_value_missing');
-  attempted.bodyProfiles[0]!.payload.avoidFoods[0] = `${first}x`;
+  firstProfile.payload.avoidFoods[0] = `${first}x`;
   let errorCode = '';
   try {
     await repository.transact(userId, () => ({ nextState: attempted, result: undefined }));
@@ -372,8 +380,8 @@ async function maximumOverflow() {
   };
 }
 
-async function readBody(request: import('node:http').IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
+async function readBody(request: IncomingMessage): Promise<unknown> {
+  const chunks: Uint8Array[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -387,7 +395,7 @@ async function readBody(request: import('node:http').IncomingMessage): Promise<u
 const port = Number(process.env.PORT);
 if (!Number.isInteger(port) || port <= 0) throw new Error('PORT is required');
 
-const server = createServer(async (request, response) => {
+async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
   response.setHeader('content-type', 'application/json; charset=utf-8');
   try {
     if (request.method !== 'POST') throw new Error('method_not_allowed');
@@ -421,6 +429,10 @@ const server = createServer(async (request, response) => {
       error: error instanceof Error ? error.message : 'unknown_error'
     }));
   }
+}
+
+const server = createServer((request, response) => {
+  void handleRequest(request, response);
 });
 
 server.listen(port, '127.0.0.1', () => {

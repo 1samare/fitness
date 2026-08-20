@@ -1,4 +1,8 @@
-import { execFile } from 'node:child_process';
+import {
+  execFile,
+  spawn,
+  type ChildProcessWithoutNullStreams
+} from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import path from 'node:path';
@@ -10,7 +14,7 @@ import { planningApiResponseSchema, type PlanningApiResponse } from '@fitness/co
 const execFileAsync = promisify(execFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const serverBundle = path.join(repositoryRoot, '.build', 'release-capacity', 'server.mjs');
-let child: import('node:child_process').ChildProcessWithoutNullStreams | undefined;
+let child: ChildProcessWithoutNullStreams | undefined;
 let endpoint = '';
 let output = '';
 let port = 0;
@@ -23,7 +27,7 @@ async function reservePort(): Promise<number> {
   });
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('No capacity port');
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => server.close(() => { resolve(); }));
   return address.port;
 }
 
@@ -67,7 +71,7 @@ async function waitReady(): Promise<void> {
 async function stopChild(): Promise<void> {
   const running = child;
   if (running !== undefined && running.exitCode === null) {
-    const closed = new Promise<void>((resolve) => running.once('close', () => resolve()));
+    const closed = new Promise<void>((resolve) => running.once('close', () => { resolve(); }));
     if (!running.kill('SIGTERM')) throw new Error('Could not stop capacity server');
     await closed;
   }
@@ -77,7 +81,7 @@ async function stopChild(): Promise<void> {
       server.once('error', reject);
       server.listen(port, '127.0.0.1', resolve);
     });
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => { resolve(); }));
   }
 }
 
@@ -88,7 +92,7 @@ beforeAll(async () => {
   });
   port = await reservePort();
   endpoint = `http://127.0.0.1:${String(port)}`;
-  child = (await import('node:child_process')).spawn(process.execPath, [serverBundle], {
+  child = spawn(process.execPath, [serverBundle], {
     cwd: repositoryRoot,
     env: { ...process.env, PORT: String(port) },
     shell: false,
@@ -209,7 +213,7 @@ describe('personal data capacity and concurrent planning baseline', () => {
         const result = await request('/api', {
           identity,
           body: operation.request,
-          injectProviderFailure: operation.inject
+          injectProviderFailure: operation.inject === true
         });
         latencies.push(result.elapsedMs);
         responses.push(result.text);
@@ -244,7 +248,8 @@ describe('personal data capacity and concurrent planning baseline', () => {
       latencies.push(retry.elapsedMs);
       responses.push(retry.text);
       providerCount += 1;
-      if (asSuccess(retry.value)) providerAccepted += 1;
+      asSuccess(retry.value);
+      providerAccepted += 1;
       if (retry.elapsedMs >= 5_000) providerTimeoutViolationCount += 1;
 
       let mealPlanVersion = ((await request('/inspect', { identity })).value as {

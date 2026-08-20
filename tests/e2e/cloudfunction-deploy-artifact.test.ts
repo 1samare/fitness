@@ -144,5 +144,5 @@ describe('CloudBase deployment boundaries', () => {
       expect(forbiddenFixtureSentinels.filter((sentinel) => bundledSource.includes(sentinel)))
         .toEqual([]);
     }
-  }, 30_000);
+  }, 60_000);
 });

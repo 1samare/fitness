@@ -15,6 +15,11 @@ import { validateDatasetFile } from './validate-reviewed-dataset.mjs';
 
 const temporaryDirectories: string[] = [];
 
+function required<T>(value: T | undefined, label: string): T {
+  if (value === undefined) throw new Error(`Missing ${label} test fixture`);
+  return value;
+}
+
 async function temporaryDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), 'fitness-reviewed-dataset-'));
   temporaryDirectories.push(directory);
@@ -89,7 +94,8 @@ describe('validateDatasetFile', () => {
     const before = await readFile(path.join(evidenceDirectory, 'dataset-validation.json'), 'utf8');
 
     const invalid = validDataset();
-    invalid.dailyMenus[0]!.meals[0]!.recipeTemplateVersionId = 'missing-recipe';
+    const menu = required(invalid.dailyMenus[0], 'daily menu');
+    required(menu.meals[0], 'daily menu meal').recipeTemplateVersionId = 'missing-recipe';
     await writeFile(inputPath, JSON.stringify(invalid), 'utf8');
 
     await expect(validateDatasetFile({

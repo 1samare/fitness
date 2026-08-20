@@ -15,7 +15,7 @@ import {
 } from './reviewed-planning-dataset-validator';
 
 export interface ReviewedPlanningDatasetSource {
-  read(datasetId: string): Promise<unknown | null>;
+  read(datasetId: string): Promise<unknown>;
 }
 
 export interface CloudBaseReviewedPlanningDataProviderOptions {
@@ -95,7 +95,9 @@ implements NutritionProvider, RecipeTemplateProvider, DailyMenuCatalogProvider {
       const value = await Promise.race([
         this.source.read(this.datasetId),
         new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => reject(new ReviewedDatasetUnavailableError()), this.loadTimeoutMs);
+          timeout = setTimeout(() => {
+            reject(new ReviewedDatasetUnavailableError());
+          }, this.loadTimeoutMs);
         })
       ]);
       if (value === null) throw new ReviewedDatasetUnavailableError();
@@ -151,8 +153,8 @@ implements NutritionProvider, RecipeTemplateProvider, DailyMenuCatalogProvider {
     const matches = dataset.nutritionSnapshots.filter(
       (snapshot) => normalizeFoodName(snapshot.canonicalNameZh) === normalized
     );
-    if (matches.length !== 1) return null;
-    const snapshot = matches[0]!;
+    const [snapshot] = matches;
+    if (matches.length !== 1 || snapshot === undefined) return null;
     return {
       foodId: snapshot.foodId,
       canonicalNameZh: snapshot.canonicalNameZh,

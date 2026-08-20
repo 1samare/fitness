@@ -3,7 +3,7 @@ import { reviewedPlanningDatasetV1Schema } from './reviewed-planning-dataset';
 
 function createReviewedPlanningDatasetCandidate() {
   const dailyMenus = Array.from({ length: 7 }, (_, index) => ({
-    id: `menu-${index + 1}`,
+    id: `menu-${String(index + 1)}`,
     datasetVersion: 'dataset-v1',
     sourceId: 'source-v1',
     reviewedAt: '2026-08-01T00:00:00.000Z',
@@ -98,7 +98,9 @@ describe('reviewedPlanningDatasetV1Schema', () => {
     expect(() => reviewedPlanningDatasetV1Schema.parse(withUnknown)).toThrow();
 
     const fixtureRecord = createReviewedPlanningDatasetCandidate();
-    fixtureRecord.nutritionSnapshots[0]!.qualityStatus = 'test_fixture';
+    const firstSnapshot = fixtureRecord.nutritionSnapshots[0];
+    if (firstSnapshot === undefined) throw new Error('Expected nutrition snapshot fixture');
+    firstSnapshot.qualityStatus = 'test_fixture';
     expect(() => reviewedPlanningDatasetV1Schema.parse(fixtureRecord)).toThrow();
   });
 

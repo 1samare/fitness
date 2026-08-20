@@ -4,7 +4,11 @@ import { createRuntimePlanningHandler } from './runtime-handler';
 
 describe('CloudBase main event adapter', () => {
   it('parses the functions-framework HTTP body', async () => {
-    await expect(main({ body: JSON.stringify({ action: 'health' }) })).resolves.toEqual({
+    const injectedMain = createMain({
+      resolveIdentity: () => undefined,
+      handle: createRuntimePlanningHandler({ runtimeMode: 'local' })
+    });
+    await expect(injectedMain({ body: JSON.stringify({ action: 'health' }) })).resolves.toEqual({
       success: true,
       data: {
         kind: 'health',

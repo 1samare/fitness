@@ -206,7 +206,7 @@ async function prepareUser(
       trainingPlan: {
         weekStartDate: WEEK_START,
         businessTimezone: 'Asia/Shanghai',
-        sessions
+        sessions: [...sessions]
       }
     }
   });

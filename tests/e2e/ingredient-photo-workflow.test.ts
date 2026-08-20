@@ -90,7 +90,9 @@ class FakePrivatePhotoStorage implements PrivatePhotoStorage {
     return Promise.resolve({ mediaType: 'image/jpeg' as const, sizeBytes: bytes.byteLength });
   }
 
-  public deletePrivateFile(input: { readonly privateFileId: string }) {
+  public deletePrivateFile(
+    input: { readonly privateFileId: string }
+  ): Promise<'deleted' | 'not_found'> {
     const result = this.objects.delete(input.privateFileId) ? 'deleted' : 'not_found';
     this.deletions.push({ privateFileId: input.privateFileId, result });
     return Promise.resolve(result);

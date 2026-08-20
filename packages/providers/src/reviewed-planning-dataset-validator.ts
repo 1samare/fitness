@@ -30,7 +30,8 @@ function sortJsonValue(value: unknown): unknown {
 export function canonicalReviewedDatasetPayload(
   dataset: DatasetWithoutChecksum | ReviewedPlanningDatasetV1
 ): string {
-  const { checksumSha256: _checksumSha256, ...payload } = dataset as ReviewedPlanningDatasetV1;
+  const payload: Partial<ReviewedPlanningDatasetV1> = { ...dataset };
+  delete payload.checksumSha256;
   return JSON.stringify(sortJsonValue(payload));
 }
 

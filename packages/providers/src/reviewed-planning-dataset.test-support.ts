@@ -130,7 +130,7 @@ export function createReviewedPlanningDatasetCandidate(): MutableReviewedPlannin
   const dailyMenus: MutableReviewedPlanningDataset['dailyMenus'] = Array.from(
     { length: 7 },
     (_, index) => ({
-    id: `menu-day-${index + 1}-v1`,
+    id: `menu-day-${String(index + 1)}-v1`,
     datasetVersion,
     sourceId,
     reviewedAt,

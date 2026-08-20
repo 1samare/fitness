@@ -62,10 +62,9 @@ describe('release artifact scanner', () => {
     await write(root, relativePath, value);
     const report = await scanReleaseArtifacts({ repositoryRoot: root });
     expect(report.status).toBe('failed');
-    expect(report.findings[0]).toEqual(expect.objectContaining({
-      path: relativePath.replaceAll('\\', '/'),
-      ruleId: expect.any(String)
-    }));
+    const [finding] = report.findings;
+    expect(finding?.path).toBe(relativePath.replaceAll('\\', '/'));
+    expect(typeof finding?.ruleId).toBe('string');
     if (value.length > 20) expect(JSON.stringify(report.findings)).not.toContain(value);
   });
 

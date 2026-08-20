@@ -12,6 +12,11 @@ import {
   type ReviewedPlanningDatasetSource
 } from './cloudbase-reviewed-planning-data-provider';
 
+function required<T>(value: T | undefined, label: string): T {
+  if (value === undefined) throw new Error(`Missing ${label} test fixture`);
+  return value;
+}
+
 function validDataset(
   mutate?: (candidate: MutableReviewedPlanningDataset) => void
 ): MutableReviewedPlanningDataset {
@@ -84,7 +89,8 @@ describe('CloudBaseReviewedPlanningDataProvider', () => {
     ['missing document', () => null],
     ['database failure', () => Promise.reject(new Error('database sentinel'))],
     ['invalid graph', () => validDataset((candidate) => {
-      candidate.dailyMenus[0]!.meals[0]!.recipeTemplateVersionId = 'missing-recipe';
+      const menu = required(candidate.dailyMenus[0], 'daily menu');
+      required(menu.meals[0], 'daily menu meal').recipeTemplateVersionId = 'missing-recipe';
     })],
     ['checksum mismatch', () => ({ ...validDataset(), checksumSha256: 'f'.repeat(64) })]
   ])('fails closed for %s without caching it', async (_caseName, result) => {
@@ -104,7 +110,8 @@ describe('CloudBaseReviewedPlanningDataProvider', () => {
     const clock = { iso: REVIEWED_DATASET_NOW, ms: 1_000 };
     const dataset = validDataset((candidate) => {
       candidate.validUntil = '2026-09-01T00:00:00.000Z';
-      candidate.sourceReferences[0]!.authorizationValidUntil = '2026-09-01T00:00:00.000Z';
+      required(candidate.sourceReferences[0], 'source reference').authorizationValidUntil =
+        '2026-09-01T00:00:00.000Z';
     });
     const read = vi.fn(() => Promise.resolve(dataset));
     const provider = providerWith({ read }, clock);
@@ -128,7 +135,7 @@ describe('CloudBaseReviewedPlanningDataProvider', () => {
     await expect(unambiguous.resolveCanonicalName('不存在')).resolves.toBeNull();
 
     const ambiguous = providerWith({ read: () => Promise.resolve(validDataset((candidate) => {
-      candidate.nutritionSnapshots[1]!.canonicalNameZh = '燕麦';
+      required(candidate.nutritionSnapshots[1], 'second nutrition snapshot').canonicalNameZh = '燕麦';
     })) });
     await expect(ambiguous.resolveCanonicalName('燕麦')).resolves.toBeNull();
   });
