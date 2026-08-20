@@ -35,7 +35,7 @@ pnpm.cmd dev:api
 
 当前实现用一个原子命令保存身体档案、目标、一周训练计划、受影响日期的能量目标与营养目标、幂等结果和 `TrainingPlanChanged` outbox 事件；请求在响应丢失后会复用同一幂等键安全重试。独立编辑会使旧的下游活动指针失效，当前上下文只返回一致的活动版本链，同时返回各实体的历史版本计数。
 
-同周训练变更只为发生新增、移动、取消或时长变化的未来日期追加能量与营养目标版本；过去事实不改写。每个营养目标精确引用对应的每日能量目标以及 `calculation-policy-v2`、`nutrition-policy-v1`。CloudBase 聚合当前写入 schema v7；读取既有 schema v2–v6 时只做结构性迁移，其中 v4 缺失的重算冲突详情明确标记为 `legacy_unavailable`，v5→v6 只补空图片历史和 null 清理指针，v6→v7 只补空助手会话，不推断或伪造历史照片、对话、fileID、候选、清理结果、营养、库存、餐单、完成度事实或失败原因。
+同周训练变更只为发生新增、移动、取消或时长变化的未来日期追加能量与营养目标版本；过去事实不改写。每个营养目标精确引用对应的每日能量目标以及 `calculation-policy-v2`、`nutrition-policy-v1`。CloudBase 聚合当前写入 schema v8；读取既有 schema v2–v7 时只做结构性迁移，其中 v4 缺失的重算冲突详情明确标记为 `legacy_unavailable`，v5→v6 只补空图片历史和 null 清理指针，v6→v7 只补空助手会话，v7→v8 只补 null 账户删除状态，不推断或伪造历史照片、对话、fileID、候选、清理结果、营养、库存、餐单、完成度事实或失败原因。
 
 `nutrition-policy-v1` 由确定性 TypeScript 代码计算蛋白质、脂肪、碳水、纤维、饱和脂肪和添加糖边界，并在约束交集为空时返回结构化 `nutrition_constraints_infeasible`。食谱候选校验会从每 100 克审核快照和实际克数复算营养汇总，并把过敏原、忌口、库存、食物多样性和来源完整性作为硬约束。
 
@@ -51,7 +51,7 @@ planning API 已提供 `resolveFoodName`、`saveInventory`、`generateWeeklyMeal
 
 小程序的“受限计划助手”页面只支持移动训练日、按精确中文菜名换菜和按 `0.50–1.50`、`0.05` 步长调整餐量。独立 `assistant-api` 只编译并复用一个固定 LangGraph.js 状态图；模型输出必须通过严格联合 schema 和用户原文证据校验，最多修复一次，之后才可转换为公开应用服务命令。训练消耗、食材克数、营养值、版本、过敏原和锁定保护始终由确定性代码决定。
 
-会话只在当前用户聚合内保存最近 12 条消息、一个待恢复 turn、非敏感结构化摘要和最近 32 个幂等回执。云端只读取 `CLOUDBASE_ENV_ID`、`FITNESS_LLM_PROVIDER_ID` 和 `FITNESS_LLM_MODEL`；混元、CloudBase 托管 DeepSeek 或自有 DeepSeek Provider 均须显式选择目标环境实际启用的模型 ID，缺少配置时失败关闭，运行时不自动跨供应商回退。Provider 单次尝试 20 秒、仅对传输/超时重试一次，连续三个完整操作失败后熔断 60 秒；日志只记录字段白名单。
+会话只在当前用户聚合内保存最近 12 条消息、一个待恢复 turn、非敏感结构化摘要和最近 32 个幂等回执。云端只读取 `CLOUDBASE_ENV_ID`、`FITNESS_LLM_PROVIDER_ID`、`FITNESS_LLM_MODEL` 和 `FITNESS_REVIEWED_DATASET_ID`；混元、CloudBase 托管 DeepSeek 或自有 DeepSeek Provider 均须显式选择目标环境实际启用的模型 ID，planning/assistant 也必须显式选择同一审核数据集，缺少配置时失败关闭，运行时不自动跨供应商或数据集回退。模型 Provider 单次尝试 20 秒、仅对传输/超时重试一次，连续三个完整操作失败后熔断 60 秒；审核数据读取超时 2 秒、成功缓存 60 秒但每次仍复核许可窗口；日志只记录字段白名单。
 
 助手执行前的内部异常只会在同一仓库事务确认 turn 仍为 `received` 后终结；一旦命令已经 `validated`，异常响应会保留该 turn，并在客户端重试时跳过模型、复用同一领域幂等键。客户端遇到对话版本冲突或 busy 时先读取服务端 pending，不会盲目循环旧请求。
 
@@ -391,6 +391,14 @@ TrainingPlanChanged
 公开导出明确排除可信身份、CloudBase 文档 ID、私有文件 ID/路径、供应商请求 ID、请求指纹、幂等回执、删除内部状态和清理调度字段。小程序导出只在用户直接点击后复制到剪贴板，或写入 `USER_DATA_PATH` 临时 JSON 并在分享完成回调中删除；不会保存到本地键值存储或 CloudBase 存储。账户删除终态会先执行 `wx.clearStorageSync()`，再回到建档页。
 
 聚合自助处理上限为 UTF-8 JSON `3,000,000` 字节。超限时返回 `account_capacity_exceeded`/`admin_recovery_required`，不允许截断历史、放宽隐私约束或由客户端直接修复。完整操作、测试步骤、删除重试语义和人工恢复边界见 [`docs/cloudbase/phase-7-personal-data-rights.md`](docs/cloudbase/phase-7-personal-data-rights.md)。当前仅完成 7A 本地代码与门禁，不代表阶段七真实受控内测已经发布。
+
+### 生产审核数据与发布门禁
+
+云端餐单不再使用 unavailable 占位或 fixture 回退。planning/assistant 只按服务端 `FITNESS_REVIEWED_DATASET_ID` 精确读取 `planning_reviewed_datasets` 中一份 `reviewed-planning-dataset-v1` 文档，并校验审批/质量、来源授权、缓存/展示许可、有效期、SHA-256、版本元数据和目录→七日菜单→菜谱→营养快照的完整闭合图。缺失、超时、授权到期、checksum 或引用图错误统一失败关闭为公开 `provider_unavailable`。
+
+发布工具提供 `release:dataset`（私有候选离线校验）、`build:miniprogram:release`（受控内测公开元数据构建）、`release:preflight`（真实 AppID/环境/CLI/配置名/数据集证据）、`release:capacity`（3 MB 与 10×30 本地基线）、`release:scan`（三函数/小程序/匿名证据扫描）和按固定顺序 fail-fast 的 `release:check`。证据只写入已忽略的 `.build/release-evidence`，不包含 ID、联系信息、健康数据、自由文本、图片/fileID、密钥或供应商正文。
+
+候选导入、活动 ID 切换、备份与回滚的完整顺序见 [`docs/cloudbase/phase-7-reviewed-dataset.md`](docs/cloudbase/phase-7-reviewed-dataset.md)。当前 7B 只证明本地代码和发布工具就绪；真实来源/授权、数据集导入、CloudBase preflight、Provider 验收、双账号、恢复和设备仍未通过。
 
 ## 测试与验收基线
 

@@ -541,7 +541,7 @@ git commit -m "build: add capacity and release check gates"
 - Consumes: Tasks 1-4.
 - Produces: a release operator contract and verified local code readiness without claiming real dataset/license/deployment acceptance.
 
-- [ ] **Step 1: Document candidate-to-active dataset promotion**
+- [x] **Step 1: Document candidate-to-active dataset promotion**
 
 Specify this fail-closed sequence:
 
@@ -556,11 +556,11 @@ Specify this fail-closed sequence:
 
 Document license owner, evidence owner, expiry-review date, and rollback decision as required operational fields—kept in private release evidence, not in the repository.
 
-- [ ] **Step 2: Add safe example variable names**
+- [x] **Step 2: Add safe example variable names**
 
 Add only names and non-secret format descriptions to `.env.example`; do not provide a dataset ID, environment ID, AppID, provider key, contact address, or storage prefix value.
 
-- [ ] **Step 3: Run the complete local Phase 7B gate**
+- [x] **Step 3: Run the complete local Phase 7B gate**
 
 Run:
 
@@ -581,7 +581,7 @@ git diff --check
 
 Expected: every command exits 0. `release:dataset`, `release:preflight`, and `release:check` remain external-input gates and are not marked passed without a real reviewed dataset and release configuration.
 
-- [ ] **Step 4: Update progress truthfully and audit**
+- [x] **Step 4: Update progress truthfully and audit**
 
 Record the exact command results in Phase 7. Mark code, strict dataset adapter, and local release-tooling items complete only if the commands ran. Keep reviewed source/license, active dataset import, real CloudBase preflight, provider acceptance, two-account isolation, backup/restore, and device testing unchecked.
 
@@ -596,7 +596,7 @@ rg -n "test_fixture|unavailableNutritionProvider|unavailableRecipeProvider|unava
 
 Expected: cloud runtime contains no fixture/unavailable meal provider; local test runtime may still contain explicit fixtures. `.pnpm-store/` remains untouched.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add docs/cloudbase/phase-7-reviewed-dataset.md README.md DEVELOPMENT_PROGRESS.md .env.example
