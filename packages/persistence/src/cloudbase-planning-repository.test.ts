@@ -88,6 +88,65 @@ function replaceStoredFingerprint(
   });
 }
 
+function stateAtUtf8Bytes(
+  empty: PlanningAggregateState,
+  userId: string,
+  targetBytes: number
+): PlanningAggregateState {
+  const profiles: PlanningAggregateState['bodyProfiles'][number][] = Array.from(
+    { length: 15_000 },
+    (_, index) => ({
+      kind: 'body_profile_version' as const,
+      id: `capacity-profile-${String(index + 1)}`,
+      userId,
+      version: index + 1,
+      createdAt: '2026-08-20T00:00:00.000Z',
+      payload: {
+        ageYears: 30,
+        sexCode: 0 as const,
+        heightCm: 175,
+        weightKg: 70,
+        healthScopeConfirmed: true,
+        nonTrainingActivity: 'light' as const,
+        allergens: [],
+        avoidFoods: [],
+        dietPreferences: [],
+        businessTimezone: 'Asia/Shanghai'
+      }
+    })
+  );
+  const utf8Bytes = (state: PlanningAggregateState) => (
+    new TextEncoder().encode(JSON.stringify(state)).byteLength
+  );
+  let low = 1;
+  let high = profiles.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    const candidate = { ...empty, bodyProfiles: profiles.slice(0, middle) };
+    if (utf8Bytes(candidate) <= targetBytes) low = middle;
+    else high = middle - 1;
+  }
+  const selected = profiles.slice(0, low);
+  const candidate = { ...empty, bodyProfiles: selected };
+  const remaining = targetBytes - utf8Bytes(candidate);
+  const last = selected.at(-1);
+  if (last === undefined || remaining < 0) throw new Error('Capacity fixture is too small');
+  const exact = {
+    ...candidate,
+    bodyProfiles: [
+      ...selected.slice(0, -1),
+      { ...last, id: `${last.id}${'x'.repeat(remaining)}` }
+    ]
+  };
+  const exactBytes = utf8Bytes(exact);
+  if (exactBytes !== targetBytes) {
+    throw new Error(
+      `Capacity fixture is not exact: expected ${String(targetBytes)}, got ${String(exactBytes)}, remaining ${String(remaining)}`
+    );
+  }
+  return exact;
+}
+
 async function createPhase4State(repository: PlanningRepository): Promise<PlanningAggregateState> {
   let sequence = 0;
   const service = createVersionedPlanningService({
@@ -318,6 +377,42 @@ function corruptPhase4State(
 }
 
 describe('CloudBasePlanningRepository', () => {
+  test('accepts exactly 3,000,000 aggregate bytes and rejects one more before writing', async () => {
+    const aggregateLimitBytes = 3_000_000;
+    const acceptedDatabase = new FakeDatabase();
+    const acceptedRepository = new CloudBasePlanningRepository(acceptedDatabase);
+    const empty = await acceptedRepository.read('user-a');
+    const exact = stateAtUtf8Bytes(
+      empty,
+      'user-a',
+      aggregateLimitBytes
+    );
+
+    await expect(acceptedRepository.transact('user-a', () => ({
+      nextState: exact,
+      result: undefined
+    }))).resolves.toBeUndefined();
+    expect(acceptedDatabase.documents).toHaveLength(1);
+
+    const rejectedDatabase = new FakeDatabase();
+    const rejectedRepository = new CloudBasePlanningRepository(rejectedDatabase);
+    const last = exact.bodyProfiles.at(-1);
+    if (last === undefined) throw new Error('Expected capacity profile fixture');
+    const over = {
+      ...exact,
+      bodyProfiles: [
+        ...exact.bodyProfiles.slice(0, -1),
+        { ...last, id: `${last.id}x` }
+      ]
+    };
+
+    await expect(rejectedRepository.transact('user-a', () => ({
+      nextState: over,
+      result: undefined
+    }))).rejects.toMatchObject({ code: 'account_capacity_exceeded' });
+    expect(rejectedDatabase.documents).toHaveLength(0);
+  });
+
   test('migrates schema v7 to an explicit empty account-deletion state without mutating on read', async () => {
     const database = new FakeDatabase();
     const repository = new CloudBasePlanningRepository(database);

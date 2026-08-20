@@ -1,4 +1,5 @@
 export * from './business-time';
+export * from './account-deletion-guarded-repository';
 export * from './assistant-conversation';
 export * from './idempotency-fingerprint';
 export * from './ingredient-photo';
@@ -7,6 +8,7 @@ export * from './meal-plan-editing';
 export * from './meal-plan-generation';
 export * from './meal-plan-recalculation';
 export * from './personal-data-repository';
+export * from './planning-aggregate-capacity';
 export * from './preview-daily-energy';
 export * from './planning-errors';
 export * from './planning-assistant-commands';

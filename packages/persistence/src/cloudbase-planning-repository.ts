@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   PersonalDataDocumentNotFoundError,
+  assertPlanningAggregateCapacity,
   type PersonalDataRepository
 } from '@fitness/application';
 import {
@@ -187,6 +188,7 @@ function encodeDocument(
   state: PlanningAggregateState,
   userId: string
 ): StoredPlanningDocument {
+  assertPlanningAggregateCapacity(state);
   return {
     schemaVersion: 8,
     state: { ...parseAndAssertPlanningState(state, userId), userId }

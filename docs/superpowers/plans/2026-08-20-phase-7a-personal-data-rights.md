@@ -198,7 +198,7 @@ export function createAccountDeletionGuardedRepository(
 ): PlanningRepository;
 ```
 
-- [ ] **Step 1: Write RED tests for exact UTF-8 sizing and complete blocking**
+- [x] **Step 1: Write RED tests for exact UTF-8 sizing and complete blocking**
 
 ```ts
 it('counts UTF-8 bytes rather than JavaScript code units', () => {
@@ -223,7 +223,7 @@ it('blocks both reads and transactions while deletion is pending', async () => {
 
 Add persistence tests for `3_000_000` bytes accepted and `3_000_001` bytes rejected before a document write.
 
-- [ ] **Step 2: Run focused tests and confirm RED**
+- [x] **Step 2: Run focused tests and confirm RED**
 
 Run:
 
@@ -233,7 +233,7 @@ pnpm.cmd test -- packages/application/src/planning-aggregate-capacity.test.ts pa
 
 Expected: FAIL because the capacity and guard modules do not exist.
 
-- [ ] **Step 3: Implement capacity and guard logic**
+- [x] **Step 3: Implement capacity and guard logic**
 
 Use `TextEncoder` over canonical `JSON.stringify(state)` and throw before every in-memory or CloudBase set. The guarded transaction must inspect `current.accountDeletion` inside the underlying transaction, not via an earlier read:
 
@@ -246,7 +246,7 @@ transact: (userId, operation) => repository.transact(userId, (current) => {
 
 The raw personal-data repository remains unguarded. No other service composition may receive it after Task 4.
 
-- [ ] **Step 4: Run focused and repository regression tests**
+- [x] **Step 4: Run focused and repository regression tests**
 
 Run:
 
@@ -258,7 +258,7 @@ pnpm.cmd --filter @fitness/persistence typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add packages/application packages/persistence
