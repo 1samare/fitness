@@ -3,7 +3,7 @@
 > 唯一动态进度真源
 > 固定开发分支：`feat/v1.0`
 > 统一分支起始代码基线：`0401d5f`（阶段二验收完成）
-> 最近更新：2026-08-19
+> 最近更新：2026-08-20
 
 本清单依据已批准的 12 周受控内测 MVP 路线图整理。`README.md` 和历史计划负责描述产品、架构与阶段目标，本文件只维护当前开发状态、验收证据和下一步工作。
 
@@ -25,13 +25,13 @@
 | 3. 营养计算与审核数据 | 第 5–6 周 | 已完成 | 确定性营养目标、约束冲突、审核数据边界、离线 Provider 和版本化每日营养目标已实现并验证 |
 | 4. 一周餐单与联动闭环 | 第 7–8 周 | 已完成 | 手动库存、确定性七天餐单、锁定/手改保护、训练变更与完成度重算闭环已实现并验证 |
 | 5. 食材图片与 Provider | 第 9 周 | 已完成 | 私有上传、受控候选、明确确认、Provider 韧性、原图清理和本地端到端证据已进入 `feat/v1.0` 并通过 fresh 主线门禁；真实云/Provider/设备仍是外部门禁 |
-| 6. 单 Agent 有限对话 | 第 10 周 | 进行中 | 单 Agent、三项白名单命令、会话/Provider/降级边界设计已批准，进入实施计划与 TDD 开发 |
+| 6. 单 Agent 有限对话 | 第 10 周 | 已完成 | 固定单图、三项白名单命令、有界会话、混元/DeepSeek 显式接入、恢复与降级均已进入 `feat/v1.0` 并通过 fresh 主线门禁和独立复审 |
 | 7. 云端集成与内测发布 | 第 11–12 周 | 未开始 | 阶段二基础设施已验收，但完整 MVP 的云端发布、隐私、供应商和恢复门禁尚未开始 |
 
 ## 当前阶段
 
-- 当前阶段：阶段 6“单 Agent 有限对话”（进行中）。
-- 开发入口：已批准独立 `assistant-api`、LangGraph.js 单图、三项白名单命令、schema v7 有界会话、混元/DeepSeek 显式切换且不自动跨供应商回退的设计；下一步编写实施计划并按 TDD 开发。阶段五真实云端部署事项继续保留为阶段七/发布门禁，不因本地阶段退出而视为已验证。
+- 当前阶段：阶段 6“单 Agent 有限对话”已完成；下一阶段为阶段 7“云端集成与内测发布”（未开始）。
+- 开发入口：阶段六代码、测试、小程序页面、部署与回滚清单已进入固定分支并通过 fresh 全量门禁。阶段五、六的真实 CloudBase、供应商、双账号和设备事项继续作为阶段七/发布门禁。
 
 ## 生产上线前待办
 
@@ -200,29 +200,37 @@
 
 ## 阶段 6：单 Agent 有限对话
 
-**状态：进行中**
+**状态：已完成**
 
 ### 验收清单
 
-- [ ] 使用 LangGraph.js 实现单 Agent 状态图，不引入多 Agent。
-- [ ] 只支持换菜、调份量、移动训练日等白名单意图，并转换为公开应用服务领域命令。
-- [ ] 对模型输出执行严格运行时 schema 校验，最多一次受控修复，二次失败明确降级。
-- [ ] 限制最近 12 条消息和结构化摘要，不把敏感数据写入公共知识库或跨用户记忆。
-- [ ] 拒绝模型生成数值、任意工具、URL、数据库查询、身份字段和绕过版本/过敏原的请求。
-- [ ] 覆盖非法输出、越权字段、供应商超时、熔断、降级和确定性核心独立可用测试。
+- [x] 使用 LangGraph.js 实现单 Agent 状态图，不引入多 Agent。
+- [x] 只支持换菜、调份量、移动训练日等白名单意图，并转换为公开应用服务领域命令。
+- [x] 对模型输出执行严格运行时 schema 校验，最多一次受控修复，二次失败明确降级。
+- [x] 限制最近 12 条消息和结构化摘要，不把敏感数据写入公共知识库或跨用户记忆。
+- [x] 拒绝模型生成数值、任意工具、URL、数据库查询、身份字段和绕过版本/过敏原的请求。
+- [x] 覆盖非法输出、越权字段、供应商超时、熔断、降级和确定性核心独立可用测试。
 
 ### 代码与验证证据
 
-- 已批准设计：`docs/superpowers/specs/2026-08-19-phase-6-bounded-single-agent-design.md`。设计确认独立 `assistant-api`、LangGraph.js 单 Agent、移动训练日/换菜/调份量三项白名单、严格证据校验与一次修复、schema v7 最近 12 条消息和结构化摘要，以及混元/DeepSeek 通过 CloudBase AI+ 显式切换且不自动跨供应商回退。
-- 当前分支仍没有阶段六实现代码、语言模型 Provider 或会话摘要持久化；验收项在真实 TDD 实现和 fresh 全量门禁通过前保持未勾选。
+- 设计与计划：`docs/superpowers/specs/2026-08-19-phase-6-bounded-single-agent-design.md`、`docs/superpowers/plans/2026-08-20-phase-6-bounded-single-agent.md`；部署与 v7-aware 回滚见 `docs/cloudbase/phase-6-bounded-assistant-deployment.md`。
+- 实现提交：`c2be978`、`08207d4`、`bb40d86`、`7fbef07`、`a7d4083`、`d8b5488`、`b761e70`、`6a86885`、`3412baa`；审计与复审修正为 `741a351`（配置名）、`b173854`（schema v7 回滚断言）、`2b3f10e`（澄清/响应丢失/Provider/客户端恢复）、`7b694f2`（received/validated 失败边界）和 `5c54b0d`（received-only 原子终结）。
+- 单图证据：`packages/agent/src/single-agent.ts` 只构造并编译一个有限 `StateGraph`；`single-agent.test.ts` 校验固定节点/边，`runtime-handler.test.ts` 校验跨请求只创建一次 Agent。仓库边界扫描未发现 `createReactAgent`、多 Agent 或动态 tool choice；命中的 `createAgent` 仅为测试注入构造钩子。
+- 白名单与安全证据：contracts/domain/model 只定义 `move_training_day`、`replace_meal`、`resize_meal_portion`，`planning-assistant-commands.test.ts` 和 `assistant-workflow.test.ts` 验证三项命令进入公开确定性服务。`evidence.test.ts` 拒绝身份、工具、URL、SQL/query、热量、克数、MET、时长、解释和非原文证据；版本、过去事实、锁定/手改、库存、来源、营养、忌口及过敏原继续由既有服务失败关闭。
+- 修复与会话证据：`single-agent.test.ts` 验证首次非法输出只修复一次且二次非法不调用命令；`assistant-conversation.test.ts` 验证最近 12 条消息、32 个回执、安全摘要、幂等，以及 authorize-wins 时 received-only 失败终结在同一事务内返回 null；真实 composition 测试证明授权前异常释放会话、提交后响应丢失保留 validated turn、跳过第二次模型调用并复用领域幂等键；`cloudbase-planning-repository.test.ts` 验证 v6→v7 空会话迁移与 v7 往返；端到端测试验证两个身份的消息、摘要、pending、回执和规划版本隔离。
+- Provider 与降级证据：同一 CloudBase backend 显式透传混元、托管 DeepSeek 或自有 DeepSeek Provider/模型，不配置默认值且不自动跨供应商回退。Provider 测试覆盖 20 秒超时、一次传输重试、三次完整失败熔断、单半开探测、严格 envelope、字段白名单日志和固定错误；端到端测试验证模型不可用时结构化 planning API 与确定性份量调整仍独立可用。
+- 2026-08-20 最终复审后 fresh 门禁：`pnpm.cmd lint`、`pnpm.cmd typecheck`（13/14 workspace 项目及小程序 TypeScript）、`pnpm.cmd test`（81/81 文件、842/842 测试）、`pnpm.cmd build`、三个 dry-run、`pnpm.cmd smoke:api`（2/2 进程测试）、`pnpm.cmd smoke:assistant`（1/1）和 `git diff --check` 全部退出 0。部署 `index.js` 为 planning `3,368,909 B`、assistant `5,363,941 B`、cleanup `3,151,521 B`，对应 `package.json` 为 92/93/93 B；独立复审无 Critical、无 Important。
+- 密钥与边界扫描未发现私钥头、`SECRET_ACCESS_KEY`、硬编码 API key、真实环境/fileID 或 domain/calculation 外部 SDK 依赖；命中项均为文档格式、本地开关或合成测试哨兵。任务开始前已有的 `.pnpm-store/` 保持未跟踪且未修改。
 
 ### 剩余工作
 
-- 编写实施计划，并完成本阶段全部六项代码、测试、构建、dry-run、smoke、部署文档和最终审计。
+- 无阻断阶段六完成的本地代码项。会话摘要在 finalize 前读取规划上下文，极短并发窗口内可能比权威计划落后一版；摘要不参与领域命令、数值或授权，作为阶段七一致性加固项跟踪。
 
 ### 外部阻塞
 
-- 混元模型访问、公开服务备案或登记以及 AI 内容标识会阻塞真实云端验收；结构化表单核心流程不得依赖这些审批。
+- 尚未验证真实 CloudBase AI+ 混元/DeepSeek 的精确模型 ID、访问权限、区域、配额、响应合同和费用，以及自有 DeepSeek Provider 的 BaseURL/API Key 管理、服务协议和数据处理。
+- 尚未验证公开服务备案/登记与 AI 内容标识、两个真实微信账号的数据库/会话/图片隔离、规则/IAM/定时器/复合索引、微信开发者工具和物理设备；结构化规划核心流程不得依赖模型审批或可用性。
+- 生产餐单/营养数据来源、授权与缓存许可，以及正式 `CN-DRI-2023` 表格复核继续是生产上线前门禁。
 
 ## 阶段 7：云端集成与内测发布
 
@@ -262,6 +270,7 @@
 
 | 日期 | 分支/基线 | 更新 |
 |---|---|---|
+| 2026-08-20 | `feat/v1.0` / `5c54b0d` 阶段六最终复审 | 完成固定 LangGraph.js 单 Agent、三项白名单命令、严格证据与一次修复、schema v7 有界会话、混元/DeepSeek 显式单 Provider 配置、原子恢复和原生助手页；fresh 门禁为 81 文件、842 测试、三函数 dry-run、smoke 2/2 + 1/1，独立复审无 Critical/Important。真实云、供应商、双账号、合规和设备事项进入阶段七门禁 |
 | 2026-08-19 | `feat/v1.0` / `319ac92` 后阶段六设计启动 | 阶段六改为进行中：批准独立 `assistant-api`、LangGraph.js 单 Agent、三项白名单领域命令、严格模型证据与一次修复、schema v7 有界会话，以及混元/DeepSeek 显式配置切换且不自动跨供应商回退；尚未勾选任何实现验收项 |
 | 2026-08-19 | `feat/v1.0` / `3aa9b07` 阶段五最终审查与合入 | 完成阶段五本地代码验收：私有食材图片上传、受控 Vision Provider、明确候选/克数确认、schema v6、原图清理、原生页面与 authenticated handler E2E；fresh 主线门禁为 62 文件、694 测试、双函数 dry-run 和 smoke 1/1。真实混元、CloudBase 规则/IAM/定时器/复合索引、early-v6 可信身份检查、IDE/设备仍列外部未验，下一阶段为阶段六 |
 | 2026-08-11 | `feat/v1.0` / `cefc812` 最终审查 Round 3 | 关闭同 active training/date 旧 failed completion job 重现与误重试：合法库存版本链、初始零 Provider 调用、事务竞态回滚和公共 `candidate_not_pending`；fresh 六门禁为 43 文件、527 测试及 smoke 1/1，独立复审 CLEAN |

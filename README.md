@@ -25,17 +25,17 @@ pnpm.cmd build
 pnpm.cmd dev:api
 ```
 
-`pnpm.cmd dev:api` 会构建并启动 CloudBase 兼容的本地函数服务，监听 `http://127.0.0.1:3000/`。保持该终端运行，再执行 `pnpm.cmd open:miniprogram`；该命令会显式生成本地 API 构建并通过微信开发者工具打开仓库项目。若工具未注册开始菜单快捷方式，可将 `WECHAT_DEVTOOLS_CLI` 设置为 `cli.bat` 的绝对路径。
+`pnpm.cmd dev:api` 会构建并启动 CloudBase 兼容的本地规划函数服务，监听 `http://127.0.0.1:3000/`。使用助手时另开终端运行 `pnpm.cmd dev:assistant`，监听 `http://127.0.0.1:3001/`。保持所需终端运行，再执行 `pnpm.cmd open:miniprogram`；该命令会显式生成本地 API 构建并通过微信开发者工具打开仓库项目。若工具未注册开始菜单快捷方式，可将 `WECHAT_DEVTOOLS_CLI` 设置为 `cli.bat` 的绝对路径。
 
-常规 `pnpm.cmd build` 同时生成云端小程序构建和可部署的 `.build/cloudfunctions/planning-api` 单文件制品。客户端通过 `wx.cloud.callFunction` 调用 `planning-api`，用户身份只取自云函数运行时的可信 OpenID。真实部署前需配置微信 AppID 和 CloudBase 开发环境，并应用拒绝客户端直读数据库的规则；仓库不提交环境 ID 或密钥。部署与双身份验收清单见 [`docs/cloudbase/phase-2-deployment.md`](docs/cloudbase/phase-2-deployment.md)。
+常规 `pnpm.cmd build` 同时生成云端小程序构建，以及 `planning-api`、`assistant-api`、`photo-cleanup` 三个可部署单文件制品。客户端通过 `wx.cloud.callFunction` 调用前两个已认证函数，用户身份只取自云函数运行时的可信 OpenID；普通客户端不能调用清理函数或直接读写数据库。仓库不提交 AppID、环境 ID 或密钥。基础部署与双身份验收见 [`docs/cloudbase/phase-2-deployment.md`](docs/cloudbase/phase-2-deployment.md)，阶段六模型与助手部署见 [`docs/cloudbase/phase-6-bounded-assistant-deployment.md`](docs/cloudbase/phase-6-bounded-assistant-deployment.md)。
 
-无需打开小程序也可以执行 `pnpm.cmd smoke:api`：它会在隔离端口启动真实函数进程，验证健康检查、受支持能量预览和超出适用范围三种场景，然后回收子进程。`pnpm.cmd dry-run:api` 用于确认 CloudBase 函数构建产物可被本地运行框架加载。
+无需打开小程序也可以执行 `pnpm.cmd smoke:api` 和 `pnpm.cmd smoke:assistant`：它们会在隔离端口启动真实函数进程，验证结构化规划与有限对话场景，然后回收子进程。对应的 `dry-run:api`、`dry-run:photo-cleanup` 和 `dry-run:assistant` 用于确认三个函数构建产物可被本地运行框架加载。
 
 自动化验收覆盖 lint、类型检查、单元测试、构建、CloudBase 本地加载和真实 HTTP 进程烟雾测试。`pnpm.cmd open:miniprogram` 只负责构建并请求已安装的微信开发者工具打开项目；页面在 IDE 内的实际渲染，以及受支持/不受支持两次表单交互，仍需人工确认，不能由命令退出码替代。
 
 当前实现用一个原子命令保存身体档案、目标、一周训练计划、受影响日期的能量目标与营养目标、幂等结果和 `TrainingPlanChanged` outbox 事件；请求在响应丢失后会复用同一幂等键安全重试。独立编辑会使旧的下游活动指针失效，当前上下文只返回一致的活动版本链，同时返回各实体的历史版本计数。
 
-同周训练变更只为发生新增、移动、取消或时长变化的未来日期追加能量与营养目标版本；过去事实不改写。每个营养目标精确引用对应的每日能量目标以及 `calculation-policy-v2`、`nutrition-policy-v1`。CloudBase 聚合当前写入 schema v6；读取既有 schema v2/v3/v4/v5 时只做结构性迁移，其中 v4 缺失的重算冲突详情会明确标记为 `legacy_unavailable`，v5→v6 只补空图片历史和 null 清理指针，不推断或伪造历史照片、fileID、候选、清理结果、营养、库存、餐单、完成度事实或失败原因。
+同周训练变更只为发生新增、移动、取消或时长变化的未来日期追加能量与营养目标版本；过去事实不改写。每个营养目标精确引用对应的每日能量目标以及 `calculation-policy-v2`、`nutrition-policy-v1`。CloudBase 聚合当前写入 schema v7；读取既有 schema v2–v6 时只做结构性迁移，其中 v4 缺失的重算冲突详情明确标记为 `legacy_unavailable`，v5→v6 只补空图片历史和 null 清理指针，v6→v7 只补空助手会话，不推断或伪造历史照片、对话、fileID、候选、清理结果、营养、库存、餐单、完成度事实或失败原因。
 
 `nutrition-policy-v1` 由确定性 TypeScript 代码计算蛋白质、脂肪、碳水、纤维、饱和脂肪和添加糖边界，并在约束交集为空时返回结构化 `nutrition_constraints_infeasible`。食谱候选校验会从每 100 克审核快照和实际克数复算营养汇总，并把过敏原、忌口、库存、食物多样性和来源完整性作为硬约束。
 
@@ -43,13 +43,19 @@ pnpm.cmd dev:api
 
 从小程序规划建档页的“一周餐单与执行”入口可进入 `pages/meal-execution/index`。该页支持按天锁定、从服务端备选列表结构化换菜和录入实际训练分钟。手动换菜成功后自动锁定当天。训练变更或当天完成度变化时，未受保护日可在完整生成成功后原子激活新版本；锁定或手改日只生成 stale 提示、待确认候选和结构化差异，由用户选择保留或覆盖，后台不静默覆盖。完成度事实先独立保存；Provider 失败时旧活动餐单继续可用，重算任务可显式重试，幂等重放不增长版本计数。
 
-planning API 已提供 `resolveFoodName`、`saveInventory`、`generateWeeklyMealPlan`、`setMealPlanDayLock`、`updateMealPlanDay`、`recordTrainingCompletion`、`decideMealPlanCandidate`、`retryPendingRecalculation`、`createIngredientPhotoUpload`、`registerIngredientPhotoUpload`、`recognizeIngredientPhoto`、`confirmIngredientCandidate` 和扩展后的 `getCurrentContext`。本地运行只使用显式标记的合成 `test_fixture` 餐单/营养数据；其中可执行的均衡餐单 fixture 从营养快照、食谱、每日菜单到目录均使用独立且闭合的稳定 ID、版本和来源链，不会改写原始营养 fixture 的身份或数值。生产部署制品不包含 fixture 或本地身份路径，且当前没有可用的生产餐单 Provider。
+planning API 已提供 `resolveFoodName`、`saveInventory`、`generateWeeklyMealPlan`、`setMealPlanDayLock`、`updateMealPlanDay`、`resizeMealPlanPortion`、`recordTrainingCompletion`、`decideMealPlanCandidate`、`retryPendingRecalculation`、`createIngredientPhotoUpload`、`registerIngredientPhotoUpload`、`recognizeIngredientPhoto`、`confirmIngredientCandidate` 和扩展后的 `getCurrentContext`。本地运行只使用显式标记的合成 `test_fixture` 餐单/营养数据；其中可执行的均衡餐单 fixture 从营养快照、食谱、每日菜单到目录均使用独立且闭合的稳定 ID、版本和来源链，不会改写原始营养 fixture 的身份或数值。生产部署制品不包含 fixture 或本地身份路径，且当前没有可用的生产餐单 Provider。
 
 食材拍照页只接受 JPEG/PNG 和最多 10 MiB 的对象。服务端先创建不含用户标识的随机私有路径，小程序上传后登记完整 fileID；服务端核对预期 fileID、对象签名、媒体类型和大小后才允许识别。视觉结果最多展示五个已映射到审核营养快照的名称、置信度和食物状态候选，不估算克数或营养值，也不自动选择。用户必须明确选择候选并输入正整数克数，确认事务才会同时追加不可变图片 revision 和库存版本；确认前库存、营养目标、餐单、重算任务和 outbox 均不改变，确认本身也不自动生成餐单。识别不可用时页面始终保留手动库存录入。
 
 原图在上传会话创建后 23 小时进入应用清理队列，为 24 小时上限保留调度余量；确认后私有清理时间会提前到确认时刻。独立 `photo-cleanup` 云函数删除失败 15 分钟后重试，存储 `NOT_FOUND` 按幂等成功处理，未完成登记的孤儿对象仍通过创建会话时持久化的预期 fileID 清理。默认 `cloudbaserc.json` 不创建定时器；只有索引、可信身份、规则/IAM 和双账号检查通过后，管理员才使用独立 `cloudbaserc.photo-cleanup-timer.json` 激活每 15 分钟任务。服务端环境只使用 `CLOUDBASE_STORAGE_FILE_ID_PREFIX` 和 `FITNESS_VISION_FUNCTION_NAME` 两个配置名称；部署、复合索引、early-v6 可信身份硬门禁、权限与回滚见 [`docs/cloudbase/phase-5-ingredient-photo-deployment.md`](docs/cloudbase/phase-5-ingredient-photo-deployment.md)。
 
-阶段五的本地固定桩、契约、进程 smoke、构建和清理证据不代表真实云端已经验收。生产审核餐单/营养数据及授权、阶段三至五能力的 CloudBase 部署、真实混元合同/备案/内容标识、双账号存储规则、定时器、复合索引、微信 IDE/真机交互和 LLM 有限对话仍未完成；生产上线前也须复核正式 `CN-DRI-2023` 表格。因此当前不宣称 production ready。
+小程序的“受限计划助手”页面只支持移动训练日、按精确中文菜名换菜和按 `0.50–1.50`、`0.05` 步长调整餐量。独立 `assistant-api` 只编译并复用一个固定 LangGraph.js 状态图；模型输出必须通过严格联合 schema 和用户原文证据校验，最多修复一次，之后才可转换为公开应用服务命令。训练消耗、食材克数、营养值、版本、过敏原和锁定保护始终由确定性代码决定。
+
+会话只在当前用户聚合内保存最近 12 条消息、一个待恢复 turn、非敏感结构化摘要和最近 32 个幂等回执。云端只读取 `CLOUDBASE_ENV_ID`、`FITNESS_LLM_PROVIDER_ID` 和 `FITNESS_LLM_MODEL`；混元、CloudBase 托管 DeepSeek 或自有 DeepSeek Provider 均须显式选择目标环境实际启用的模型 ID，缺少配置时失败关闭，运行时不自动跨供应商回退。Provider 单次尝试 20 秒、仅对传输/超时重试一次，连续三个完整操作失败后熔断 60 秒；日志只记录字段白名单。
+
+助手执行前的内部异常只会在同一仓库事务确认 turn 仍为 `received` 后终结；一旦命令已经 `validated`，异常响应会保留该 turn，并在客户端重试时跳过模型、复用同一领域幂等键。客户端遇到对话版本冲突或 busy 时先读取服务端 pending，不会盲目循环旧请求。
+
+阶段五、六的本地固定桩、契约、进程 smoke、构建和恢复证据不代表真实云端已经验收。生产审核餐单/营养数据及授权、阶段三至六能力的 CloudBase 部署、真实混元/DeepSeek 合同与权限、自有 DeepSeek Provider、备案/登记、AI 内容标识、双账号规则、定时器、复合索引、微信 IDE/真机交互仍未完成；生产上线前也须复核正式 `CN-DRI-2023` 表格。因此当前不宣称 production ready。
 
 ## 项目简介
 
@@ -119,7 +125,7 @@ Fitness 是一款目标驱动的健身与饮食规划应用。它不是一次性
 | UI | 微信原生组件，按需引入小程序组件库 | 保持包体、可访问性和交互可控 |
 | 后端 | 腾讯云开发 CloudBase Node.js 云函数 | 无需管理服务器，原生连接微信身份、数据库和存储 |
 | Agent 编排 | LangGraph.js 单 Agent 状态图 | 流程可测试、可恢复、可版本化，适合 Codex 辅助开发 |
-| 大模型 | CloudBase AI+ 接入腾讯混元 | 国内可用，支持工具调用和小程序/Node.js 集成 |
+| 大模型 | CloudBase AI+ 显式接入腾讯混元或 DeepSeek | 服务端按目标环境配置单一 Provider/模型，不自动跨供应商回退 |
 | 图像理解 | 混元视觉模型，供应商适配器封装 | 识别多种候选食材；服务可替换 |
 | 业务数据库 | CloudBase 文档型数据库 | JSON 结构灵活，支持事务、索引和快速迭代 |
 | 文件存储 | CloudBase 私有云存储 | 保存待识别图片并实施生命周期清理 |
@@ -161,25 +167,21 @@ flowchart TD
 
 ## Agent 的职责边界
 
-MVP 使用一个编排 Agent，而不是多个互相对话的 Agent。LangGraph 状态图负责：
+MVP 使用一个固定编排 Agent，而不是多个互相对话的 Agent。阶段六的 LangGraph 状态图只负责：
 
-- 判断用户是在修改目标、训练计划、食材还是食谱。
-- 补齐执行领域命令所需的参数。
-- 调用受控工具读取或变更计划。
-- 在计划变化后启动确定性重算流程。
-- 把结构化结果解释成自然语言，并提示估算范围和数据来源。
+- 从最新用户消息识别 `move_training_day`、`replace_meal`、`resize_meal_portion` 三项意图。
+- 在缺少日期、餐次、菜名或份量倍数时返回固定澄清提示。
+- 对严格模型 JSON 做一次可控修复，并从用户原文重新验证所有参数证据。
+- 把验证后的命令交给绑定可信身份、版本和幂等键的公开应用服务。
+- 在模型、版本或领域约束失败时返回固定安全结果和结构化页面恢复入口。
 
-Agent 可以调用的工具应保持小而明确，例如：
+三项白名单命令映射为：
 
-- `get_current_context`
-- `update_goal`
-- `create_training_plan_version`
-- `record_training_completion`
-- `recognize_ingredients`
-- `confirm_inventory_items`
-- `recalculate_impacted_days`
-- `replace_meal`
-- `resize_meal_portion`
+- 移动训练日 → 读取当前上下文并保存新的训练计划版本。
+- 替换菜品 → 通过当前可选食谱的精确中文名执行结构化换菜。
+- 调整餐量 → 使用当前审核食谱与营养快照重新计算克数和营养。
+
+目标建档、食材照片、训练完成记录和候选确认仍通过既有结构化页面/API 完成，不向 Agent 暴露任意工具名、数据库查询、URL、用户身份或数值计算入口。
 
 Agent 不得直接操作集合、拼接数据库查询、运行任意代码或绕过领域服务。
 
