@@ -73,6 +73,7 @@ export interface AssistantLanguageModelMessage {
 }
 
 export interface AssistantLanguageModelInput {
+  readonly requestId: string;
   readonly systemPrompt: string;
   readonly messages: readonly AssistantLanguageModelMessage[];
   readonly repairAttempt: 0 | 1;

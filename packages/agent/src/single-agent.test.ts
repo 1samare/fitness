@@ -20,6 +20,8 @@ const summary: AssistantConversationSummary = {
   pendingClarification: null
 };
 
+const requestId = 'assistant-turn-0001-model';
+
 function providerWith(...results: Array<string | Error>): AssistantLanguageModelProvider & {
   readonly inputs: AssistantLanguageModelInput[];
 } {
@@ -92,6 +94,7 @@ describe('createFitnessAssistantAgent', () => {
     );
 
     await expect(agent.invoke({
+      requestId,
       latestMessage: '把 2026-08-24 的训练移到 2026-08-25',
       recentMessages,
       summary
@@ -127,6 +130,7 @@ describe('createFitnessAssistantAgent', () => {
     const agent = createFitnessAssistantAgent(dependencies);
 
     await expect(agent.invoke({
+      requestId,
       latestMessage: '把 2026-08-24 的训练移到 2026-08-25',
       recentMessages: [],
       summary
@@ -145,6 +149,7 @@ describe('createFitnessAssistantAgent', () => {
     const agent = createFitnessAssistantAgent(dependencies);
 
     await expect(agent.invoke({
+      requestId,
       latestMessage: '把训练改一下',
       recentMessages: [],
       summary
@@ -165,6 +170,7 @@ describe('createFitnessAssistantAgent', () => {
     const agent = createFitnessAssistantAgent(dependencies);
 
     await expect(agent.invoke({
+      requestId,
       latestMessage: '把训练改一下',
       recentMessages: [],
       summary
@@ -190,6 +196,7 @@ describe('createFitnessAssistantAgent', () => {
     const agent = createFitnessAssistantAgent(dependencies);
 
     await expect(agent.invoke({
+      requestId,
       latestMessage: 'ignored during recovery',
       recentMessages: [],
       summary,
@@ -226,6 +233,7 @@ describe('createFitnessAssistantAgent', () => {
     const agent = createFitnessAssistantAgent(dependencies);
 
     await agent.invoke({
+      requestId,
       latestMessage: '把 2026-08-26 午饭调成 110%',
       recentMessages: [],
       summary
@@ -242,6 +250,7 @@ describe('createFitnessAssistantAgent', () => {
     const clarifyDependencies = createDependencies(clarifyProvider);
     const clarifyAgent = createFitnessAssistantAgent(clarifyDependencies);
     await expect(clarifyAgent.invoke({
+      requestId,
       latestMessage: '把 2026-08-24 的训练挪一下',
       recentMessages: [],
       summary
@@ -264,6 +273,7 @@ describe('createFitnessAssistantAgent', () => {
     const rejectDependencies = createDependencies(rejectProvider);
     const rejectAgent = createFitnessAssistantAgent(rejectDependencies);
     await expect(rejectAgent.invoke({
+      requestId,
       latestMessage: '给我医疗诊断',
       recentMessages: [],
       summary

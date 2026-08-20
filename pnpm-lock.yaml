@@ -173,12 +173,18 @@ importers:
 
   packages/providers:
     dependencies:
+      '@fitness/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@fitness/contracts':
         specifier: workspace:*
         version: link:../contracts
       '@fitness/domain':
         specifier: workspace:*
         version: link:../domain
+      zod:
+        specifier: ^4.0.0
+        version: 4.4.3
 
 packages:
 

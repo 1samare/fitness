@@ -62,6 +62,7 @@ export const FITNESS_ASSISTANT_GRAPH_EDGES = [
 ] as const;
 
 export interface FitnessAssistantAgentInput {
+  readonly requestId: string;
   readonly latestMessage: string;
   readonly recentMessages: readonly AssistantConversationMessage[];
   readonly summary: AssistantConversationSummary;
@@ -87,6 +88,7 @@ type RouteDestination = 'clarify' | 'reject' | 'execute';
 type TerminalFailure = 'model_output_invalid' | 'provider_unavailable' | null;
 
 const AgentState = new StateSchema({
+  requestId: z.string(),
   latestMessage: z.string(),
   recentMessages: z.array(z.custom<AssistantConversationMessage>()),
   summary: z.custom<AssistantConversationSummary>(),
@@ -119,6 +121,7 @@ function modelInput(
   feedback?: AssistantModelRepairFeedback
 ): AssistantLanguageModelInput {
   return {
+    requestId: `${state.requestId}-attempt-${String(repairAttempt)}`,
     systemPrompt: FITNESS_ASSISTANT_SYSTEM_PROMPT,
     messages: boundedMessages(state.recentMessages, state.latestMessage),
     repairAttempt,
@@ -319,6 +322,7 @@ export function createFitnessAssistantAgent(
   return {
     async invoke(input) {
       const state = await graph.invoke({
+        requestId: input.requestId,
         latestMessage: input.latestMessage,
         recentMessages: [...input.recentMessages],
         summary: input.summary,

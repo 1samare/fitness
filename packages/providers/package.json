@@ -17,7 +17,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@fitness/agent": "workspace:*",
     "@fitness/contracts": "workspace:*",
-    "@fitness/domain": "workspace:*"
+    "@fitness/domain": "workspace:*",
+    "zod": "^4.0.0"
   }
 }

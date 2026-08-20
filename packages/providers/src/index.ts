@@ -6,3 +6,5 @@ export * from './vision-provider-policy';
 export * from './resilient-vision-provider';
 export * from './cloudbase-function-vision-backend';
 export * from './cloudbase-private-photo-storage';
+export * from './cloudbase-language-model-backend';
+export * from './resilient-language-model-provider';
