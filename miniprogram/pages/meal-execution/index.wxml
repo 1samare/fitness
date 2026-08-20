@@ -11,6 +11,8 @@
     <button class="button button--secondary" loading="{{loadingContext}}" disabled="{{loadingContext}}" bindtap="refreshContext">重新读取</button>
   </view>
 
+  <button class="button button--secondary button--wide" bindtap="onOpenAssistant">打开受限计划助手</button>
+
   <view class="card">
     <text class="section-title">1. 现有食材库存</text>
     <text class="section-help">每行食材名称须先通过审核数据校验。克数由你确认，系统不会从名称或图片猜测重量。</text>

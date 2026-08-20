@@ -27,6 +27,7 @@ await build({
   entryPoints: {
     app: 'miniprogram/app.ts',
     'pages/planning-setup/index': 'miniprogram/pages/planning-setup/index.ts',
+    'pages/assistant/index': 'miniprogram/pages/assistant/index.ts',
     'pages/planning-preview/index': 'miniprogram/pages/planning-preview/index.ts',
     'pages/meal-execution/index': 'miniprogram/pages/meal-execution/index.ts',
     'pages/ingredient-photo/index': 'miniprogram/pages/ingredient-photo/index.ts'
@@ -50,6 +51,9 @@ const assets = [
   'pages/planning-setup/index.json',
   'pages/planning-setup/index.wxml',
   'pages/planning-setup/index.wxss',
+  'pages/assistant/index.json',
+  'pages/assistant/index.wxml',
+  'pages/assistant/index.wxss',
   'pages/planning-preview/index.json',
   'pages/planning-preview/index.wxml',
   'pages/planning-preview/index.wxss',

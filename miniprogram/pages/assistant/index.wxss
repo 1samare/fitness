@@ -1,0 +1,70 @@
+.page {
+  --color-primary: #176b4a;
+  --color-primary-pressed: #105338;
+  --color-surface: #ffffff;
+  --color-surface-soft: #f4faf7;
+  --color-border: #bfd8cd;
+  --color-text: #17352b;
+  --color-text-muted: #49695e;
+  --color-success: #0e6845;
+  --color-error: #a52b2b;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 40rpx 28rpx calc(64rpx + env(safe-area-inset-bottom));
+  background: #ecfdf5;
+}
+
+.hero { display: flex; flex-direction: column; gap: 16rpx; margin-bottom: 28rpx; }
+.eyebrow { color: var(--color-primary); font-size: 24rpx; font-weight: 700; letter-spacing: 2rpx; }
+.title { color: var(--color-text); font-size: 52rpx; font-weight: 700; line-height: 1.2; }
+.subtitle { color: var(--color-text-muted); font-size: 32rpx; line-height: 1.65; }
+
+.card {
+  margin-bottom: 24rpx;
+  padding: 32rpx;
+  border: 2rpx solid var(--color-border);
+  border-radius: 24rpx;
+  background: var(--color-surface);
+  box-shadow: 0 10rpx 28rpx rgba(23, 53, 43, 0.06);
+}
+.section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16rpx; }
+.section-title { display: block; color: var(--color-text); font-size: 34rpx; font-weight: 700; line-height: 1.4; }
+.section-help, .field__hint { display: block; margin-top: 12rpx; color: var(--color-text-muted); font-size: 28rpx; line-height: 1.6; }
+.version-label { flex: none; color: var(--color-text-muted); font-size: 24rpx; }
+
+.guide { display: flex; flex-direction: column; gap: 14rpx; }
+.guide__line { color: var(--color-text-muted); font-size: 30rpx; line-height: 1.6; }
+.guide__line--strong { color: var(--color-text); font-weight: 600; }
+
+.example-row { display: flex; align-items: flex-start; gap: 20rpx; margin-top: 22rpx; }
+.example-row__index { display: flex; flex: none; align-items: center; justify-content: center; width: 48rpx; height: 48rpx; border-radius: 24rpx; color: #ffffff; background: var(--color-primary); font-size: 24rpx; font-weight: 700; }
+.example-row__text { flex: 1; color: var(--color-text); font-size: 30rpx; line-height: 1.6; }
+
+.empty-state { margin-top: 24rpx; padding: 28rpx; border-radius: 16rpx; color: var(--color-text-muted); background: var(--color-surface-soft); font-size: 30rpx; line-height: 1.6; }
+.message { display: flex; flex-direction: column; gap: 8rpx; margin-top: 24rpx; padding: 24rpx; border-radius: 20rpx; border: 2rpx solid var(--color-border); }
+.message--user { margin-left: 40rpx; background: #e7f6ee; }
+.message--assistant { margin-right: 40rpx; background: var(--color-surface-soft); }
+.message__role { color: var(--color-primary); font-size: 24rpx; font-weight: 700; }
+.message__content { color: var(--color-text); font-size: 32rpx; line-height: 1.65; overflow-wrap: anywhere; }
+
+.field { display: flex; flex-direction: column; gap: 12rpx; }
+.field__label { color: var(--color-text); font-size: 30rpx; font-weight: 600; }
+.field__control { box-sizing: border-box; width: 100%; min-height: 176rpx; padding: 24rpx; border: 2rpx solid #8eb8a5; border-radius: 16rpx; color: var(--color-text); background: #ffffff; font-size: 32rpx; line-height: 1.6; }
+.field__control[disabled] { color: #647b73; background: #e7eeea; opacity: 0.78; }
+
+.button { display: flex; align-items: center; justify-content: center; min-height: 96rpx; margin: 20rpx 0 0; padding: 0 28rpx; border-radius: 16rpx; font-size: 30rpx; font-weight: 600; line-height: 1.3; }
+.button::after { border: 0; }
+.button--primary { color: #ffffff; background: var(--color-primary); }
+.button--primary:active { background: var(--color-primary-pressed); }
+.button--secondary { color: var(--color-primary); border: 2rpx solid var(--color-primary); background: #ffffff; }
+.button--ghost { flex: 1; color: var(--color-text); border: 2rpx solid var(--color-border); background: var(--color-surface); }
+.button[disabled] { color: #667c74; border-color: #cbd9d3; background: #e7eeea; opacity: 0.78; }
+
+.notice { margin-bottom: 24rpx; padding: 24rpx 28rpx; border-radius: 16rpx; font-size: 30rpx; line-height: 1.6; }
+.notice--success { color: var(--color-success); border: 2rpx solid #91c9b2; background: #e9f8f0; }
+.notice--error { color: var(--color-error); border: 2rpx solid #e1abab; background: #fff1f1; }
+.quick-links { display: flex; gap: 16rpx; padding-bottom: env(safe-area-inset-bottom); }
+
+@media (min-width: 700px) {
+  .page { max-width: 960rpx; margin: 0 auto; padding-left: 48rpx; padding-right: 48rpx; }
+}

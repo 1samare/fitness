@@ -127,6 +127,7 @@ interface PageActions {
   onCompletionMinutesInput(event: TextValueEvent): void;
   onRecordCompletion(): Promise<void>;
   onRetryRecalculation(): Promise<void>;
+  onOpenAssistant(): void;
   onOpenIngredientPhoto(): void;
 }
 
@@ -305,6 +306,10 @@ Page<PageData, PageActions>({
 
   onOpenIngredientPhoto() {
     void wx.navigateTo({ url: '/pages/ingredient-photo/index' });
+  },
+
+  onOpenAssistant() {
+    void wx.navigateTo({ url: '/pages/assistant/index' });
   },
 
   async refreshContext() {

@@ -149,6 +149,9 @@
     <button class="meal-link-button" disabled="{{loading}}" bindtap="onOpenMealExecution">
       前往一周餐单与执行
     </button>
+    <button class="meal-link-button" disabled="{{loading}}" bindtap="onOpenAssistant">
+      打开受限计划助手
+    </button>
   </view>
 
   <view wx:if="{{successMessage}}" class="card result-card" aria-live="polite">

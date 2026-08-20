@@ -1,0 +1,79 @@
+<view class="page">
+  <view class="hero">
+    <text class="eyebrow">FITNESS · 确定性修改</text>
+    <text class="title">受限计划助手</text>
+    <text class="subtitle">仅支持移动训练日、换菜和调整份量。所有命令都会先校验，再调用确定性规划服务。</text>
+  </view>
+
+  <view class="card guide" aria-label="使用说明">
+    <text class="section-title">使用前请确认</text>
+    <text class="guide__line">日期使用 YYYY-MM-DD。</text>
+    <text class="guide__line">份量使用 0.5–1.5 倍或 50%–150%。</text>
+    <text class="guide__line">所有修改仍受过去事实、版本、库存、营养和过敏原规则约束。</text>
+    <text class="guide__line guide__line--strong">热量、营养和训练消耗均为估算；本助手不提供医疗建议。</text>
+  </view>
+
+  <view class="card examples" aria-label="输入示例">
+    <text class="section-title">可以这样说</text>
+    <text class="section-help">以下示例只用于参考，不会点击后自动发送。</text>
+    <view wx:for="{{examples}}" wx:key="*this" class="example-row">
+      <text class="example-row__index">{{index + 1}}</text>
+      <text class="example-row__text">{{item}}</text>
+    </view>
+  </view>
+
+  <view class="card conversation" aria-label="最近对话">
+    <view class="section-heading">
+      <text class="section-title">最近对话</text>
+      <text class="version-label">会话版本 {{conversationVersion}}</text>
+    </view>
+    <view wx:if="{{loadingConversation && messages.length === 0}}" class="empty-state" aria-live="polite">正在读取安全会话…</view>
+    <view wx:elif="{{messages.length === 0}}" class="empty-state">还没有消息。请按上方格式描述一个修改。</view>
+    <view wx:for="{{messages}}" wx:key="turnId" class="message message--{{item.role}}">
+      <text class="message__role">{{item.roleLabel}}</text>
+      <text class="message__content" selectable="true">{{item.content}}</text>
+    </view>
+  </view>
+
+  <view class="card composer">
+    <label class="field">
+      <text class="field__label">输入一条修改请求</text>
+      <textarea
+        class="field__control"
+        value="{{messageInput}}"
+        maxlength="2000"
+        disabled="{{sending || loadingConversation}}"
+        auto-height="true"
+        bindinput="onMessageInput"
+        placeholder="例如：把 2026-08-21 的晚餐调整为 1.2 倍"
+        aria-label="输入一条训练或餐单修改请求"
+      />
+      <text class="field__hint">最多 2000 个字符；一次只处理一条请求。</text>
+    </label>
+    <button
+      class="button button--primary"
+      loading="{{sending}}"
+      disabled="{{sending || loadingConversation}}"
+      bindtap="onSend"
+    >{{sending ? '正在校验并执行…' : '发送请求'}}</button>
+  </view>
+
+  <view wx:if="{{statusMessage}}" class="notice notice--success" aria-live="polite">
+    {{statusMessage}}
+  </view>
+  <view wx:if="{{errorMessage}}" class="notice notice--error" aria-role="alert" aria-live="assertive">
+    {{errorMessage}}
+  </view>
+
+  <view wx:if="{{showRetryRecovery || showTrainingPlanRecovery || showMealPlanRecovery}}" class="card recovery" aria-label="恢复操作">
+    <text class="section-title">下一步</text>
+    <button wx:if="{{showRetryRecovery}}" class="button button--secondary" disabled="{{sending || loadingConversation}}" bindtap="onRetry">重试原请求</button>
+    <button wx:if="{{showTrainingPlanRecovery}}" class="button button--secondary" bindtap="onOpenTrainingPlan">打开结构化训练计划</button>
+    <button wx:if="{{showMealPlanRecovery}}" class="button button--secondary" bindtap="onOpenMealPlan">打开餐单并核对差异</button>
+  </view>
+
+  <view class="quick-links" aria-label="结构化页面入口">
+    <button class="button button--ghost" bindtap="onOpenTrainingPlan">训练计划</button>
+    <button class="button button--ghost" bindtap="onOpenMealPlan">一周餐单</button>
+  </view>
+</view>

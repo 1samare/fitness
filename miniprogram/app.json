@@ -1,6 +1,7 @@
 {
   "pages": [
     "pages/planning-setup/index",
+    "pages/assistant/index",
     "pages/planning-preview/index",
     "pages/meal-execution/index",
     "pages/ingredient-photo/index"
