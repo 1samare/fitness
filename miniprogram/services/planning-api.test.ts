@@ -185,6 +185,18 @@ describe('mini program planning API client', () => {
         }
       },
       {
+        action: 'resizeMealPlanPortion',
+        payload: {
+          expectedVersion: 3,
+          idempotencyKey: 'resize-client-001',
+          payload: {
+            businessDate: '2026-08-19',
+            slot: 'dinner',
+            multiplier: 0.55
+          }
+        }
+      },
+      {
         action: 'recordTrainingCompletion',
         payload: {
           expectedVersion: 0,

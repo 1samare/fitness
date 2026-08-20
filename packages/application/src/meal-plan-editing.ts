@@ -101,6 +101,15 @@ export interface ManualMealReplacementInput {
   readonly allowTestFixtures: boolean;
 }
 
+export interface ManualMealPortionInput
+  extends Omit<ManualMealReplacementInput, 'replacementRecipe'> {
+  readonly multiplier: number;
+}
+
+interface ManualMealChangeInput extends ManualMealReplacementInput {
+  readonly allowedMultipliers: readonly number[];
+}
+
 interface ProviderSnapshot {
   readonly catalog: DailyMenuCatalogVersion;
   readonly menus: readonly DailyMenuTemplateVersion[];
@@ -136,7 +145,7 @@ function findById<T extends { readonly id: string }>(
 
 function findRecord(
   state: PlanningAggregateState,
-  operation: 'setMealPlanDayLock' | 'updateMealPlanDay',
+  operation: 'setMealPlanDayLock' | 'updateMealPlanDay' | 'resizeMealPlanPortion',
   key: string
 ): Extract<IdempotencyRecord, { readonly operation: typeof operation }> | undefined {
   return state.idempotencyRecords.find(
@@ -418,8 +427,8 @@ function wholeWeekDiversityConflict(input: {
     : null;
 }
 
-export function selectManualMealReplacement(
-  input: ManualMealReplacementInput
+function selectManualMealChange(
+  input: ManualMealChangeInput
 ): MealPlanDay | WeeklyMealInfeasibleResult {
   const currentDay = input.currentPlan.days.find(
     (day) => day.businessDate === input.businessDate
@@ -450,7 +459,7 @@ export function selectManualMealReplacement(
   }[] = [];
   const rejected: WeeklyMealConflict[] = [];
 
-  for (const multiplier of WEEKLY_MEAL_SERVING_MULTIPLIERS) {
+  for (const multiplier of input.allowedMultipliers) {
     const meals = currentDay.meals.map((meal) => meal.slot === input.slot
       ? {
           slot: meal.slot,
@@ -624,6 +633,46 @@ export function selectManualMealReplacement(
     businessDate: input.businessDate,
     code: 'nutrition_out_of_range'
   }]);
+}
+
+export function selectManualMealReplacement(
+  input: ManualMealReplacementInput
+): MealPlanDay | WeeklyMealInfeasibleResult {
+  return selectManualMealChange({
+    ...input,
+    allowedMultipliers: WEEKLY_MEAL_SERVING_MULTIPLIERS
+  });
+}
+
+export function selectManualMealPortion(
+  input: ManualMealPortionInput
+): MealPlanDay | WeeklyMealInfeasibleResult {
+  if (!WEEKLY_MEAL_SERVING_MULTIPLIERS.some(
+    (candidate) => candidate === input.multiplier
+  )) {
+    return infeasible([{
+      businessDate: input.businessDate,
+      code: 'nutrition_out_of_range'
+    }]);
+  }
+  const currentMeal = input.currentPlan.days
+    .find((day) => day.businessDate === input.businessDate)
+    ?.meals.find((meal) => meal.slot === input.slot);
+  const currentRecipe = input.recipes.find(
+    (recipe) => recipe.id === currentMeal?.recipeTemplateVersionId
+  );
+  if (currentMeal === undefined || currentRecipe === undefined) {
+    return infeasible([{
+      businessDate: input.businessDate,
+      code: 'source_chain_incomplete'
+    }]);
+  }
+  const { multiplier, ...base } = input;
+  return selectManualMealChange({
+    ...base,
+    replacementRecipe: currentRecipe,
+    allowedMultipliers: [multiplier]
+  });
 }
 
 function targetsForActiveWeek(
@@ -936,6 +985,113 @@ export function createMealPlanEditingService(
         });
         const record: IdempotencyRecord = {
           operation: 'updateMealPlanDay',
+          key: envelope.idempotencyKey,
+          requestFingerprint: expectedFingerprint,
+          resultVersionId: mealPlan.id
+        };
+        return {
+          nextState: {
+            ...state,
+            mealPlans: [...state.mealPlans, mealPlan],
+            activeMealPlanVersionId: mealPlan.id,
+            idempotencyRecords: [...state.idempotencyRecords, record]
+          },
+          result: mealPlan
+        };
+      });
+    },
+
+    async resizeMealPlanPortion(
+      userId: string,
+      envelope: WriteCommandEnvelope<{
+        readonly businessDate: string;
+        readonly slot: MealSlot;
+        readonly multiplier: number;
+      }>
+    ): Promise<MealPlanVersion> {
+      const expectedFingerprint = requestFingerprint({
+        expectedVersion: envelope.expectedVersion,
+        payload: envelope.payload
+      });
+      const initialState = await repository.read(userId);
+      const initialReplay = findRecord(
+        initialState,
+        'resizeMealPlanPortion',
+        envelope.idempotencyKey
+      );
+      if (initialReplay !== undefined) {
+        assertReplay(initialReplay, expectedFingerprint, envelope.idempotencyKey);
+        return replayMealPlan(initialState, initialReplay.resultVersionId);
+      }
+      if (envelope.expectedVersion !== initialState.mealPlans.length) {
+        throw new VersionConflictError(envelope.expectedVersion, initialState.mealPlans.length);
+      }
+      const activeProfile = findById(
+        initialState.bodyProfiles,
+        initialState.activeBodyProfileVersionId
+      );
+      if (activeProfile === null) throw new PlanningPrerequisiteError('body_profile');
+      assertFutureBusinessDate(envelope.payload.businessDate, activeProfile, now());
+      const initial = editingPrerequisites(initialState, envelope.payload.businessDate);
+      const providerSnapshot = await loadProviderSnapshot({
+        providers,
+        currentPlan: initial.mealPlan
+      });
+      const selected = selectManualMealPortion({
+        currentPlan: initial.mealPlan,
+        businessDate: envelope.payload.businessDate,
+        slot: envelope.payload.slot,
+        multiplier: envelope.payload.multiplier,
+        recipes: providerSnapshot.recipes,
+        snapshots: providerSnapshot.snapshots,
+        inventory: initial.inventory,
+        target: initial.target,
+        allergens: initial.profile.payload.allergens,
+        avoidFoodIds: initial.profile.payload.avoidFoods,
+        allowTestFixtures: providers.allowTestFixtures
+      });
+      if ('kind' in selected) {
+        throw new NutritionConstraintsInfeasibleError(
+          withReviewedFoodNames(selected.conflicts, providerSnapshot.snapshots)
+        );
+      }
+      const initialProviderSnapshotToken = providerSnapshotToken(providerSnapshot);
+      const commitProviderSnapshotToken = providerSnapshotToken(
+        await loadProviderSnapshot({
+          providers,
+          currentPlan: initial.mealPlan
+        })
+      );
+      if (commitProviderSnapshotToken !== initialProviderSnapshotToken) {
+        throw new VersionConflictError(envelope.expectedVersion, initialState.mealPlans.length);
+      }
+      return repository.transact(userId, (state) => {
+        const replay = findRecord(state, 'resizeMealPlanPortion', envelope.idempotencyKey);
+        if (replay !== undefined) {
+          assertReplay(replay, expectedFingerprint, envelope.idempotencyKey);
+          return { nextState: state, result: replayMealPlan(state, replay.resultVersionId) };
+        }
+        if (envelope.expectedVersion !== state.mealPlans.length) {
+          throw new VersionConflictError(envelope.expectedVersion, state.mealPlans.length);
+        }
+        const current = editingPrerequisites(state, envelope.payload.businessDate);
+        if (!tokensEqual(initial.token, current.token)) {
+          throw new VersionConflictError(envelope.expectedVersion, state.mealPlans.length);
+        }
+        const createdAt = now();
+        assertFutureBusinessDate(envelope.payload.businessDate, current.profile, createdAt);
+        const mealPlan = successor({
+          userId,
+          previous: current.mealPlan,
+          inventoryVersionId: current.inventory.id,
+          catalogVersionId: providerSnapshot.catalog.id,
+          replacementDay: selected,
+          createdAt,
+          id: nextId('meal-plan'),
+          version: state.mealPlans.length + 1
+        });
+        const record: IdempotencyRecord = {
+          operation: 'resizeMealPlanPortion',
           key: envelope.idempotencyKey,
           requestFingerprint: expectedFingerprint,
           resultVersionId: mealPlan.id

@@ -30,6 +30,7 @@ import {
   PastFactImmutableError,
   RecipeNotSelectableError,
   createMealPlanEditingService,
+  selectManualMealPortion,
   selectManualMealReplacement,
   type MealPlanEditingServiceDependencies
 } from './meal-plan-editing';
@@ -160,6 +161,75 @@ async function selectorInput(harness = createHarness()) {
     allergens: [] as readonly string[],
     avoidFoodIds: [] as readonly string[],
     allowTestFixtures: true
+  };
+}
+
+async function portionSelectorInput(harness = createHarness()) {
+  const replacementInput = await selectorInput(harness);
+  const currentMeal = replacementInput.currentPlan.days
+    .find((day) => day.businessDate === EDIT_DATE)
+    ?.meals.find((meal) => meal.slot === 'dinner');
+  const currentRecipe = TEST_RECIPE_TEMPLATES.find(
+    (recipe) => recipe.id === currentMeal?.recipeTemplateVersionId
+  );
+  if (currentMeal === undefined || currentRecipe === undefined) {
+    throw new Error('Expected current portion fixture');
+  }
+  return {
+    currentPlan: replacementInput.currentPlan,
+    businessDate: replacementInput.businessDate,
+    slot: replacementInput.slot,
+    recipes: replacementInput.recipes,
+    snapshots: replacementInput.snapshots,
+    inventory: replacementInput.inventory,
+    target: replacementInput.target,
+    allergens: replacementInput.allergens,
+    avoidFoodIds: replacementInput.avoidFoodIds,
+    allowTestFixtures: replacementInput.allowTestFixtures,
+    currentRecipe,
+    currentMeal
+  };
+}
+
+function compensateOtherMealMultipliers(
+  input: Awaited<ReturnType<typeof portionSelectorInput>>,
+  targetMultiplier: number
+) {
+  const currentDay = input.currentPlan.days.find(
+    (day) => day.businessDate === input.businessDate
+  );
+  if (currentDay === undefined) throw new Error('Expected portion day');
+  const baselineUnits = Math.round(currentDay.meals.reduce(
+    (sum, meal) => sum + meal.servingMultiplier,
+    0
+  ) * 20);
+  const remainingUnits = baselineUnits - Math.round(targetMultiplier * 20);
+  let compensation: readonly number[] | undefined;
+  for (let first = 10; first <= 30 && compensation === undefined; first += 1) {
+    for (let second = 10; second <= 30; second += 1) {
+      const third = remainingUnits - first - second;
+      if (third >= 10 && third <= 30) {
+        compensation = [first / 20, second / 20, third / 20];
+        break;
+      }
+    }
+  }
+  if (compensation === undefined) throw new Error('Expected feasible multiplier compensation');
+  const resolvedCompensation = compensation;
+  let otherIndex = 0;
+  return {
+    ...input,
+    currentPlan: {
+      ...input.currentPlan,
+      days: input.currentPlan.days.map((day) => day.businessDate === input.businessDate
+        ? {
+            ...day,
+            meals: day.meals.map((meal) => meal.slot === input.slot
+              ? meal
+              : { ...meal, servingMultiplier: resolvedCompensation[otherIndex++] ?? 1 })
+          }
+        : day)
+    }
   };
 }
 
@@ -567,7 +637,179 @@ describe('manual meal replacement selection', () => {
   });
 });
 
+describe('manual meal portion selection', () => {
+  test.each([
+    [0.5, 50],
+    [0.55, 55],
+    [1.5, 150]
+  ] as const)(
+    'recomputes reviewed ingredient grams for the exact %s multiplier',
+    async (multiplier, expectedIngredientGrams) => {
+      const input = compensateOtherMealMultipliers(await portionSelectorInput(), multiplier);
+      const before = structuredClone(input.currentPlan);
+
+      const selected = selectManualMealPortion({
+        ...input,
+        multiplier
+      });
+
+      expect(selected).not.toHaveProperty('kind');
+      if ('kind' in selected) throw new Error('Expected a selected portion day');
+      const meal = selected.meals.find((candidate) => candidate.slot === input.slot);
+      expect(meal).toMatchObject({
+        recipeTemplateVersionId: input.currentRecipe.id,
+        servingMultiplier: multiplier,
+        ingredients: input.currentRecipe.ingredients.map((ingredient) => ({
+          displayNameZh: input.snapshots.find(
+            (snapshot) => snapshot.id === ingredient.nutritionSnapshotId
+          )?.canonicalNameZh,
+          grams: expectedIngredientGrams
+        }))
+      });
+      expect(selected).toMatchObject({ locked: true, manuallyModified: true });
+      expect(input.currentPlan).toEqual(before);
+    }
+  );
+
+  test('rejects an off-grid multiplier before rebuilding a day', async () => {
+    const input = await portionSelectorInput();
+    const selected = selectManualMealPortion({ ...input, multiplier: 0.56 });
+    expect(selected).toMatchObject({
+      kind: 'infeasible',
+      conflicts: [{ businessDate: EDIT_DATE, code: 'nutrition_out_of_range' }]
+    });
+  });
+
+  test('rechecks allergens and whole-week inventory for the current recipe', async () => {
+    const input = compensateOtherMealMultipliers(await portionSelectorInput(), 1.5);
+    const allergenResult = selectManualMealPortion({
+      ...input,
+      allergens: ['芝麻'],
+      multiplier: 1.5
+    });
+    expect('kind' in allergenResult).toBe(true);
+    if (!('kind' in allergenResult)) throw new Error('Expected allergen infeasibility');
+    expect(allergenResult.conflicts.some(
+      (conflict) => conflict.code === 'allergen_detected'
+    )).toBe(true);
+
+    const foodId = input.currentRecipe.ingredients[0]?.foodId;
+    if (foodId === undefined) throw new Error('Expected a portion ingredient');
+    const currentUsage = input.currentPlan.days.reduce((sum, day) => (
+      sum + (day.ingredientAmounts.find((amount) => amount.foodId === foodId)?.grams ?? 0)
+    ), 0);
+    const inventoryResult = selectManualMealPortion({
+      ...input,
+      inventory: {
+        ...input.inventory,
+        items: input.inventory.items.map((item) => item.foodId === foodId
+          ? { ...item, availableGrams: currentUsage }
+          : item)
+      },
+      multiplier: 1.5
+    });
+    expect('kind' in inventoryResult).toBe(true);
+    if (!('kind' in inventoryResult)) throw new Error('Expected inventory infeasibility');
+    expect(inventoryResult.conflicts.some((conflict) => (
+      conflict.code === 'inventory_insufficient' && conflict.foodId === foodId
+    ))).toBe(true);
+  });
+});
+
 describe('manual meal edit transaction', () => {
+  test.each([0.5, 1.5])(
+    'writes and idempotently replays a complete %s portion successor',
+    async (multiplier) => {
+      const harness = createHarness();
+      const input = compensateOtherMealMultipliers(await portionSelectorInput(harness), multiplier);
+      const seededDay = selectManualMealPortion({ ...input, multiplier });
+      if ('kind' in seededDay) throw new Error('Expected a feasible seeded portion day');
+      await harness.repository.transact('user-a', (state) => ({
+        nextState: {
+          ...state,
+          mealPlans: state.mealPlans.map((plan) => plan.id === input.currentPlan.id
+            ? {
+                ...plan,
+                days: plan.days.map((day) => day.businessDate === input.businessDate
+                  ? seededDay
+                  : day)
+              }
+            : plan)
+        },
+        result: undefined
+      }));
+      const command = {
+        expectedVersion: 1,
+        idempotencyKey: `meal-resize-${String(multiplier).replace('.', '-')}`,
+        payload: { businessDate: EDIT_DATE, slot: 'dinner' as const, multiplier }
+      };
+
+      const resized = await harness.service.resizeMealPlanPortion('user-a', command);
+      const replay = await harness.service.resizeMealPlanPortion('user-a', command);
+
+      expect(replay).toEqual(resized);
+      expect(resized).toMatchObject({
+        version: 2,
+        readiness: 'complete',
+        supersedesVersionId: input.currentPlan.id
+      });
+      expect(resized.days.find((day) => day.businessDate === EDIT_DATE))
+        .toMatchObject({ locked: true, manuallyModified: true });
+      expect(resized.days.find((day) => day.businessDate === EDIT_DATE)
+        ?.meals.find((meal) => meal.slot === 'dinner'))
+        .toMatchObject({ servingMultiplier: multiplier });
+      const state = await harness.repository.read('user-a');
+      expect(state.mealPlans).toHaveLength(2);
+      expect(state.idempotencyRecords.filter(
+        (record) => record.operation === 'resizeMealPlanPortion'
+      )).toHaveLength(1);
+    }
+  );
+
+  test('rejects portion version/key conflicts and past facts without partial writes', async () => {
+    const harness = createHarness();
+    const plan = await prepareGeneratedPlan(harness);
+    const currentMultiplier = plan.days.find((day) => day.businessDate === EDIT_DATE)
+      ?.meals.find((meal) => meal.slot === 'dinner')?.servingMultiplier;
+    if (currentMultiplier === undefined) throw new Error('Expected current multiplier');
+    const command = {
+      expectedVersion: 1,
+      idempotencyKey: 'meal-resize-replay-001',
+      payload: { businessDate: EDIT_DATE, slot: 'dinner' as const, multiplier: currentMultiplier }
+    };
+    await harness.service.resizeMealPlanPortion('user-a', command);
+    await expect(harness.service.resizeMealPlanPortion('user-a', {
+      ...command,
+      payload: { ...command.payload, slot: 'lunch' }
+    })).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
+    await expect(harness.service.resizeMealPlanPortion('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'meal-resize-stale-001',
+      payload: { ...command.payload, businessDate: '2026-08-20' }
+    })).rejects.toBeInstanceOf(VersionConflictError);
+    const beforePast = await harness.repository.read('user-a');
+    await expect(harness.service.resizeMealPlanPortion('user-a', {
+      expectedVersion: 2,
+      idempotencyKey: 'meal-resize-past-001',
+      payload: { ...command.payload, businessDate: '2026-08-10' }
+    })).rejects.toBeInstanceOf(PastFactImmutableError);
+    expect(await harness.repository.read('user-a')).toEqual(beforePast);
+  });
+
+  test('rolls back an infeasible portion without adding a plan or receipt', async () => {
+    const harness = createHarness();
+    await prepareGeneratedPlan(harness);
+    const before = await harness.repository.read('user-a');
+
+    await expect(harness.service.resizeMealPlanPortion('user-a', {
+      expectedVersion: 1,
+      idempotencyKey: 'meal-resize-infeasible-001',
+      payload: { businessDate: EDIT_DATE, slot: 'dinner', multiplier: 0.56 }
+    })).rejects.toMatchObject({ code: 'nutrition_constraints_infeasible' });
+
+    expect(await harness.repository.read('user-a')).toEqual(before);
+  });
+
   test('writes one complete successor, locks the edited day, and keeps the old plan immutable', async () => {
     const harness = createHarness();
     const original = await prepareGeneratedPlan(harness);
@@ -772,7 +1014,9 @@ describe('manual meal edit transaction', () => {
     ))).toBe(false);
   });
 
-  test('rejects a content-only menu-reference race before a manual edit commits', async () => {
+  test.each(['replacement', 'portion'] as const)(
+    'rejects a content-only menu-reference race before a %s commit',
+    async (operation) => {
     const base = fixtureProviders();
     const changedMenus = TEST_DAILY_MENU_TEMPLATES.map((menu, menuIndex) => menuIndex === 0
       ? {
@@ -818,18 +1062,26 @@ describe('manual meal edit transaction', () => {
     armed = true;
     const before = await harness.repository.read('user-a');
 
-    await expect(harness.service.updateMealPlanDay('user-a', {
-      expectedVersion: 1,
-      idempotencyKey: 'meal-edit-menu-content-race',
-      payload: {
-        businessDate: EDIT_DATE,
-        slot: 'dinner',
-        recipeTemplateVersionId: REPLACEMENT_ID
-      }
-    })).rejects.toBeInstanceOf(VersionConflictError);
+    const request = operation === 'replacement'
+      ? harness.service.updateMealPlanDay('user-a', {
+          expectedVersion: 1,
+          idempotencyKey: 'meal-edit-menu-content-race',
+          payload: {
+            businessDate: EDIT_DATE,
+            slot: 'dinner',
+            recipeTemplateVersionId: REPLACEMENT_ID
+          }
+        })
+      : harness.service.resizeMealPlanPortion('user-a', {
+          expectedVersion: 1,
+          idempotencyKey: 'meal-resize-menu-content-race',
+          payload: { businessDate: EDIT_DATE, slot: 'dinner', multiplier: 1 }
+        });
+    await expect(request).rejects.toBeInstanceOf(VersionConflictError);
 
     expect(await harness.repository.read('user-a')).toEqual(before);
-  });
+    }
+  );
 
   test('rejects inventory and target token races without writing a successor', async () => {
     for (const race of ['inventory', 'target'] as const) {

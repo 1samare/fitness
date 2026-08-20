@@ -117,6 +117,15 @@ const mealPlanDayUpdatePayloadSchema = z.object({
   recipeTemplateVersionId: z.string().min(1).max(200)
 }).strict();
 
+const mealPlanPortionResizePayloadSchema = z.object({
+  businessDate: businessDateSchema,
+  slot: z.enum(['breakfast', 'lunch', 'dinner', 'snack']),
+  multiplier: z.number()
+    .min(0.5)
+    .max(1.5)
+    .refine((value) => Math.abs(value * 20 - Math.round(value * 20)) < 1e-9)
+}).strict();
+
 const trainingCompletionPayloadSchema = z.object({
   businessDate: businessDateSchema,
   completedDurationMinutes: z.number().int().min(0).max(300)
@@ -184,6 +193,10 @@ export const planningApiRequestSchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('updateMealPlanDay'),
     payload: writeEnvelopeSchema(mealPlanDayUpdatePayloadSchema)
+  }).strict(),
+  z.object({
+    action: z.literal('resizeMealPlanPortion'),
+    payload: writeEnvelopeSchema(mealPlanPortionResizePayloadSchema)
   }).strict(),
   z.object({
     action: z.literal('recordTrainingCompletion'),
@@ -781,6 +794,7 @@ const idempotencyRecordSchema = z.discriminatedUnion('operation', [
   singleResultIdempotencyRecordSchema('generateWeeklyMealPlan'),
   singleResultIdempotencyRecordSchema('setMealPlanDayLock'),
   singleResultIdempotencyRecordSchema('updateMealPlanDay'),
+  singleResultIdempotencyRecordSchema('resizeMealPlanPortion'),
   singleResultIdempotencyRecordSchema('recordTrainingCompletion'),
   singleResultIdempotencyRecordSchema('decideMealPlanCandidate'),
   singleResultIdempotencyRecordSchema('retryPendingRecalculation'),

@@ -206,6 +206,7 @@ function assertIdempotencyResult(
     record.operation === 'generateWeeklyMealPlan'
     || record.operation === 'setMealPlanDayLock'
     || record.operation === 'updateMealPlanDay'
+    || record.operation === 'resizeMealPlanPortion'
   ) {
     if (!entityIds.mealPlans.has(record.resultVersionId)) corrupt();
     return;

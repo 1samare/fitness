@@ -62,6 +62,7 @@ const knownActions = new Set([
   'generateWeeklyMealPlan',
   'setMealPlanDayLock',
   'updateMealPlanDay',
+  'resizeMealPlanPortion',
   'recordTrainingCompletion',
   'decideMealPlanCandidate',
   'retryPendingRecalculation',
@@ -82,6 +83,7 @@ const authenticatedActions = new Set([
   'generateWeeklyMealPlan',
   'setMealPlanDayLock',
   'updateMealPlanDay',
+  'resizeMealPlanPortion',
   'recordTrainingCompletion',
   'decideMealPlanCandidate',
   'retryPendingRecalculation',
@@ -486,6 +488,16 @@ async function executeAuthenticatedAction(
       throw new ProviderUnavailableError('meal_catalog_unavailable');
     }
     const version = await service.updateMealPlanDay(context.userId, request.payload);
+    return {
+      success: true,
+      data: { kind: 'meal_plan_updated', version: publicMealPlan(version) }
+    };
+  }
+  if (request.action === 'resizeMealPlanPortion') {
+    if (!('resizeMealPlanPortion' in service)) {
+      throw new ProviderUnavailableError('meal_catalog_unavailable');
+    }
+    const version = await service.resizeMealPlanPortion(context.userId, request.payload);
     return {
       success: true,
       data: { kind: 'meal_plan_updated', version: publicMealPlan(version) }

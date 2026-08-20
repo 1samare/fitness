@@ -819,8 +819,28 @@ describe('handlePlanningApi', () => {
     expect(edited.data.version.days.find((day) => (
       day.businessDate === '2026-08-19'
     ))).toMatchObject({ locked: true, manuallyModified: true });
-    expect(JSON.stringify({ context, locked, edited })).not.toContain('userId');
-    expect(JSON.stringify({ context, locked, edited })).not.toContain('trusted-user-a');
+    const currentMultiplier = edited.data.version.days.find((day) => (
+      day.businessDate === '2026-08-19'
+    ))?.meals.find((meal) => meal.slot === 'dinner')?.servingMultiplier;
+    if (currentMultiplier === undefined) throw new Error('Expected current serving multiplier');
+    const resized = await handler({
+      action: 'resizeMealPlanPortion',
+      payload: {
+        expectedVersion: 3,
+        idempotencyKey: 'meal-api-resize-001',
+        payload: {
+          businessDate: '2026-08-19',
+          slot: 'dinner',
+          multiplier: currentMultiplier
+        }
+      }
+    }, { userId: 'trusted-user-a' });
+    expect(resized).toMatchObject({
+      success: true,
+      data: { kind: 'meal_plan_updated', version: { version: 4 } }
+    });
+    expect(JSON.stringify({ context, locked, edited, resized })).not.toContain('userId');
+    expect(JSON.stringify({ context, locked, edited, resized })).not.toContain('trusted-user-a');
   });
 
   it('maps past meal facts and unlisted recipes to stable public errors', async () => {

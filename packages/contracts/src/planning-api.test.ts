@@ -402,7 +402,7 @@ describe('planning API contracts', () => {
     })).toThrow();
   });
 
-  it('accepts only strict server-selected meal lock and edit commands', () => {
+  it('accepts only strict server-selected meal lock, edit, and portion commands', () => {
     const lock = {
       action: 'setMealPlanDayLock',
       payload: {
@@ -423,12 +423,54 @@ describe('planning API contracts', () => {
         }
       }
     } as const;
+    const resize = {
+      action: 'resizeMealPlanPortion',
+      payload: {
+        expectedVersion: 1,
+        idempotencyKey: 'meal-resize-001',
+        payload: {
+          businessDate: '2026-08-19',
+          slot: 'dinner',
+          multiplier: 0.55
+        }
+      }
+    } as const;
 
     expect(planningApiRequestSchema.parse(lock)).toEqual(lock);
     expect(planningApiRequestSchema.parse(edit)).toEqual(edit);
+    expect(planningApiRequestSchema.parse(resize)).toEqual(resize);
+    for (const multiplier of [0.5, 1.5]) {
+      expect(planningApiRequestSchema.safeParse({
+        ...resize,
+        payload: {
+          ...resize.payload,
+          payload: { ...resize.payload.payload, multiplier }
+        }
+      }).success).toBe(true);
+    }
+    for (const multiplier of [0.49, 0.56, 0.551, 1.51]) {
+      expect(planningApiRequestSchema.safeParse({
+        ...resize,
+        payload: {
+          ...resize.payload,
+          payload: { ...resize.payload.payload, multiplier }
+        }
+      }).success).toBe(false);
+    }
     expect(() => planningApiRequestSchema.parse({
       ...lock,
       payload: { ...lock.payload, userId: 'attacker' }
+    })).toThrow();
+    expect(() => planningApiRequestSchema.parse({
+      ...resize,
+      payload: {
+        ...resize.payload,
+        payload: { ...resize.payload.payload, recipeTemplateVersionId: 'client-selected' }
+      }
+    })).toThrow();
+    expect(() => planningApiRequestSchema.parse({
+      ...resize,
+      payload: { ...resize.payload, userId: 'attacker' }
     })).toThrow();
     expect(() => planningApiRequestSchema.parse({
       ...edit,

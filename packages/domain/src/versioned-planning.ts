@@ -144,6 +144,7 @@ export type PlanningWriteOperation =
   | 'generateWeeklyMealPlan'
   | 'setMealPlanDayLock'
   | 'updateMealPlanDay'
+  | 'resizeMealPlanPortion'
   | 'recordTrainingCompletion'
   | 'decideMealPlanCandidate'
   | 'retryPendingRecalculation'
@@ -168,6 +169,7 @@ export type IdempotencyRecord =
   | SingleResultIdempotencyRecord<'generateWeeklyMealPlan'>
   | SingleResultIdempotencyRecord<'setMealPlanDayLock'>
   | SingleResultIdempotencyRecord<'updateMealPlanDay'>
+  | SingleResultIdempotencyRecord<'resizeMealPlanPortion'>
   | SingleResultIdempotencyRecord<'recordTrainingCompletion'>
   | SingleResultIdempotencyRecord<'decideMealPlanCandidate'>
   | SingleResultIdempotencyRecord<'retryPendingRecalculation'>
