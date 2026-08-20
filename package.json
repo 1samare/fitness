@@ -19,6 +19,7 @@
     "dry-run:assistant": "pnpm --filter @fitness/assistant-api build && pnpm --filter @fitness/assistant-api dry-run",
     "lint": "eslint .",
     "open:miniprogram": "pnpm build:miniprogram:local && powershell -ExecutionPolicy Bypass -File scripts/open-miniprogram.ps1",
+    "release:dataset": "pnpm --filter @fitness/providers build && node scripts/validate-reviewed-dataset.mjs",
     "smoke:api": "pnpm --filter @fitness/planning-api build && vitest run --config vitest.smoke.config.ts",
     "smoke:assistant": "pnpm --filter @fitness/assistant-api build && vitest run --config vitest.assistant-smoke.config.ts",
     "test": "vitest run",

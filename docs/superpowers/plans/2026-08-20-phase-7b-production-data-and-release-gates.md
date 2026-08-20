@@ -87,7 +87,7 @@ export function validateReviewedPlanningDataset(
 
 The checksum is lowercase 64-character SHA-256 over canonical sorted-key JSON with `checksumSha256` omitted.
 
-- [ ] **Step 1: Add RED schema and graph tests**
+- [x] **Step 1: Add RED schema and graph tests**
 
 Create a minimal fully closed approved dataset containing exactly seven daily menus and assert acceptance. Mutate it one case at a time and assert rejection for unknown keys, missing `approved`, `test_fixture`, activation after review, missing/invalid authorization evidence, neither-or-both authorization expiry/no-expiry basis, non-historical exit disposition, missing source reference, duplicate record IDs, checksum mismatch, expired `validUntil`, non-true cache/display permission, recipe→snapshot mismatch, menu→recipe mismatch, catalog→menu mismatch, not-exactly-seven menus, mismatched dataset/source metadata, and an unreferenced dangling record.
 
@@ -102,11 +102,11 @@ it('rejects a menu edge to a missing recipe', () => {
 
 The closed graph is exact: every catalog menu exists, every stored menu is catalog-reachable, every menu recipe exists, every stored recipe is menu-reachable, every recipe ingredient snapshot exists and matches its `foodId`, and every stored snapshot is recipe-reachable.
 
-- [ ] **Step 2: Add RED script behavior tests**
+- [x] **Step 2: Add RED script behavior tests**
 
 Invoke the script through an exported `validateDatasetFile({ inputPath, evidenceDirectory, now })`. A valid file writes `.build/release-evidence/dataset-validation.json` containing only schema version, dataset ID hash, dataset version, checksum, record counts, validation timestamp, and `status: 'passed'`. Invalid input exits non-zero and does not replace prior passing evidence.
 
-- [ ] **Step 3: Run focused tests and confirm RED**
+- [x] **Step 3: Run focused tests and confirm RED**
 
 Run:
 
@@ -116,11 +116,11 @@ pnpm.cmd test -- packages/contracts/src/reviewed-planning-dataset.test.ts script
 
 Expected: FAIL because the schema, canonicalizer, validator, and script do not exist.
 
-- [ ] **Step 4: Implement the contract, canonical checksum, and closed graph**
+- [x] **Step 4: Implement the contract, canonical checksum, and closed graph**
 
 Use strict Zod objects and existing domain-level scalar bounds. Canonical JSON sorts object keys recursively and preserves array order. Check ISO times lexically only after Zod date-time parsing; require `reviewedAt <= now < validUntil`. Check each record `datasetVersion` matches the envelope and each `sourceId` exists in `sourceReferences`.
 
-- [ ] **Step 5: Implement the offline evidence writer and package command**
+- [x] **Step 5: Implement the offline evidence writer and package command**
 
 Keep the strict schema/inferred DTO in `@fitness/contracts`, and keep checksum/graph/license validation in the Node-only `@fitness/providers` validator. Add:
 
@@ -134,7 +134,7 @@ Keep the strict schema/inferred DTO in `@fitness/contracts`, and keep checksum/g
 
 The executable reads only `FITNESS_REVIEWED_DATASET_FILE` and optional `FITNESS_RELEASE_NOW`; it never uploads or modifies an active dataset. Write evidence atomically via a temporary sibling file followed by rename.
 
-- [ ] **Step 6: Run tests and contract typecheck**
+- [x] **Step 6: Run tests and contract typecheck**
 
 Run:
 
@@ -145,7 +145,7 @@ pnpm.cmd --filter @fitness/contracts typecheck
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add packages/contracts scripts package.json

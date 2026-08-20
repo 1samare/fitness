@@ -5,6 +5,7 @@ export default defineConfig({
     environment: 'node',
     include: [
       'packages/**/*.test.ts',
+      'scripts/**/*.test.ts',
       'data/**/*.test.ts',
       'cloudfunctions/**/*.test.ts',
       'miniprogram/**/*.test.ts',
