@@ -42,7 +42,9 @@ export interface AssistantLanguageModelBackend {
 
 const snakeUsageSchema = z.object({
   input_tokens: z.number().int().nonnegative().optional(),
+  prompt_tokens: z.number().int().nonnegative().optional(),
   output_tokens: z.number().int().nonnegative().optional(),
+  completion_tokens: z.number().int().nonnegative().optional(),
   total_tokens: z.number().int().nonnegative().optional()
 }).strict();
 
@@ -55,6 +57,7 @@ const camelUsageSchema = z.object({
 const responseEnvelopeSchema = z.object({
   text: z.string().trim().min(1),
   usage: z.union([snakeUsageSchema, camelUsageSchema]).optional(),
+  messages: z.array(z.unknown()).max(30).optional(),
   rawResponses: z.array(z.unknown()).max(20).optional(),
   error: z.unknown().optional()
 }).strict();
@@ -82,8 +85,12 @@ function estimatedCostUnits(
   if (usage === undefined) return undefined;
   if ('total_tokens' in usage && usage.total_tokens !== undefined) return usage.total_tokens;
   if ('totalTokens' in usage && usage.totalTokens !== undefined) return usage.totalTokens;
-  if ('input_tokens' in usage || 'output_tokens' in usage) {
-    return (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+  if ('input_tokens' in usage
+    || 'prompt_tokens' in usage
+    || 'output_tokens' in usage
+    || 'completion_tokens' in usage) {
+    return (usage.input_tokens ?? usage.prompt_tokens ?? 0)
+      + (usage.output_tokens ?? usage.completion_tokens ?? 0);
   }
   if ('promptTokens' in usage || 'completionTokens' in usage) {
     return (usage.promptTokens ?? 0) + (usage.completionTokens ?? 0);

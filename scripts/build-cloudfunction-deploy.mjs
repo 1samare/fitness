@@ -4,10 +4,12 @@ import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cloudFunctionsBuildRoot = path.join(repositoryRoot, '.build', 'cloudfunctions');
-const functionAllowlist = ['planning-api', 'photo-cleanup'];
+const functionAllowlist = ['planning-api', 'assistant-api', 'photo-cleanup'];
 
 function sourceDirectory(functionName) {
-  return functionName === 'planning-api' ? path.join('dist', 'deploy') : 'dist';
+  return functionName === 'planning-api' || functionName === 'assistant-api'
+    ? path.join('dist', 'deploy')
+    : 'dist';
 }
 
 for (const functionName of functionAllowlist) {

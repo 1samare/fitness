@@ -11,6 +11,14 @@
       "installDependency": false
     },
     {
+      "name": "assistant-api",
+      "dir": "./.build/cloudfunctions/assistant-api",
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "timeout": 120,
+      "installDependency": false
+    },
+    {
       "name": "photo-cleanup",
       "dir": "./.build/cloudfunctions/photo-cleanup",
       "runtime": "Nodejs20.19",

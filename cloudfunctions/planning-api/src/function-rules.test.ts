@@ -23,8 +23,9 @@ function invokeRuleFor(functionName: string): unknown {
 }
 
 describe('CloudBase function rules', () => {
-  test('denies unlisted functions and requires authentication for planning-api', () => {
+  test('denies unlisted functions and requires authentication for public APIs', () => {
     expect(invokeRuleFor('unlisted-function')).toBe(false);
     expect(invokeRuleFor('planning-api')).toBe('auth != null');
+    expect(invokeRuleFor('assistant-api')).toBe('auth != null');
   });
 });

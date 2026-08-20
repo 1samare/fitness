@@ -17,13 +17,21 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-describe('CloudBase cleanup deployment boundaries', () => {
-  test('keeps the default two-function deployment trigger-free with direct cleanup invocation denied', () => {
+describe('CloudBase deployment boundaries', () => {
+  test('keeps the default three-function deployment trigger-free with direct cleanup invocation denied', () => {
     const config = asRecord(readJson('cloudbaserc.json'));
     const functions = config.functions;
     if (!Array.isArray(functions)) throw new Error('Expected functions');
     expect(functions).toEqual([
       expect.objectContaining({ name: 'planning-api' }),
+      expect.objectContaining({
+        name: 'assistant-api',
+        dir: './.build/cloudfunctions/assistant-api',
+        runtime: 'Nodejs20.19',
+        handler: 'index.main',
+        timeout: 120,
+        installDependency: false
+      }),
       expect.objectContaining({
         name: 'photo-cleanup',
         dir: './.build/cloudfunctions/photo-cleanup',
@@ -39,6 +47,7 @@ describe('CloudBase cleanup deployment boundaries', () => {
 
     const functionRules = asRecord(readJson('cloudbase/function.rules.json'));
     expect(asRecord(functionRules['planning-api']).invoke).toBe('auth != null');
+    expect(asRecord(functionRules['assistant-api']).invoke).toBe('auth != null');
     expect(asRecord(functionRules['photo-cleanup']).invoke).toBe(false);
   });
 
@@ -53,10 +62,11 @@ describe('CloudBase cleanup deployment boundaries', () => {
     if (!Array.isArray(defaultFunctions) || !Array.isArray(activationFunctions)) {
       throw new Error('Expected function arrays');
     }
-    expect(activationFunctions).toHaveLength(2);
+    expect(activationFunctions).toHaveLength(3);
     expect(activationFunctions[0]).toEqual(defaultFunctions[0]);
-    const defaultCleanup = asRecord(defaultFunctions[1]);
-    const activationCleanup = asRecord(activationFunctions[1]);
+    expect(activationFunctions[1]).toEqual(defaultFunctions[1]);
+    const defaultCleanup = asRecord(defaultFunctions[2]);
+    const activationCleanup = asRecord(activationFunctions[2]);
     const { triggers, ...activationCleanupBase } = activationCleanup;
     expect(activationCleanupBase).toEqual(defaultCleanup);
     expect(triggers).toEqual([{
@@ -78,12 +88,16 @@ describe('CloudBase cleanup deployment boundaries', () => {
     expect(JSON.stringify(storageRules)).not.toContain('resource.creator');
   });
 
-  test('builds an explicit isolated two-function allowlist without maps, fixtures, links, or stale functions', () => {
+  test('builds an explicit isolated three-function allowlist without maps, fixtures, links, or stale functions', () => {
     const executable = process.platform === 'win32' ? 'cmd.exe' : 'pnpm';
     const commandArguments = (workspace: string): readonly string[] => process.platform === 'win32'
       ? ['/d', '/s', '/c', `pnpm.cmd --filter ${workspace} build`]
       : ['--filter', workspace, 'build'];
     execFileSync(executable, commandArguments('@fitness/planning-api'), {
+      cwd: repositoryRoot,
+      stdio: 'pipe'
+    });
+    execFileSync(executable, commandArguments('@fitness/assistant-api'), {
       cwd: repositoryRoot,
       stdio: 'pipe'
     });
@@ -101,7 +115,11 @@ describe('CloudBase cleanup deployment boundaries', () => {
     });
 
     const buildRoot = path.join(repositoryRoot, '.build', 'cloudfunctions');
-    expect(readdirSync(buildRoot).sort()).toEqual(['photo-cleanup', 'planning-api']);
+    expect(readdirSync(buildRoot).sort()).toEqual([
+      'assistant-api',
+      'photo-cleanup',
+      'planning-api'
+    ]);
     const forbiddenFixtureSentinels = [
       'TEST_INGREDIENT_VISION_RESPONSE',
       'TEST_MEAL_PLANNING_NUTRITION_SNAPSHOTS',
@@ -111,7 +129,7 @@ describe('CloudBase cleanup deployment boundaries', () => {
       'FITNESS_RUNTIME_MODE',
       'FITNESS_LOCAL_USER_ID'
     ];
-    for (const functionName of ['photo-cleanup', 'planning-api']) {
+    for (const functionName of ['assistant-api', 'photo-cleanup', 'planning-api']) {
       const directory = path.join(buildRoot, functionName);
       expect(readdirSync(directory).sort()).toEqual(['index.js', 'package.json']);
       for (const entry of readdirSync(directory)) {

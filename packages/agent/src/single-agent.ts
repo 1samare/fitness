@@ -67,10 +67,6 @@ export interface FitnessAssistantAgentInput {
   readonly recentMessages: readonly AssistantConversationMessage[];
   readonly summary: AssistantConversationSummary;
   readonly authoritativeCommand?: AssistantValidatedCommand;
-}
-
-export interface FitnessAssistantAgentDependencies {
-  readonly provider: AssistantLanguageModelProvider;
   readonly authorizeCommand: (
     command: AssistantValidatedCommand
   ) => Promise<AssistantValidatedCommand>;
@@ -78,6 +74,10 @@ export interface FitnessAssistantAgentDependencies {
     readonly command: AssistantValidatedCommand['kind'];
     readonly message: string;
   }>;
+}
+
+export interface FitnessAssistantAgentDependencies {
+  readonly provider: AssistantLanguageModelProvider;
 }
 
 export interface FitnessAssistantAgent {
@@ -92,6 +92,8 @@ const AgentState = new StateSchema({
   latestMessage: z.string(),
   recentMessages: z.array(z.custom<AssistantConversationMessage>()),
   summary: z.custom<AssistantConversationSummary>(),
+  authorizeCommand: z.custom<FitnessAssistantAgentInput['authorizeCommand']>(),
+  executeCommand: z.custom<FitnessAssistantAgentInput['executeCommand']>(),
   authoritativeCommand: z.custom<AssistantValidatedCommand>().nullable().default(null),
   rawText: z.string().nullable().default(null),
   validation: z.custom<AssistantModelValidation>().nullable().default(null),
@@ -283,8 +285,8 @@ export function createFitnessAssistantAgent(
       }
       try {
         const authoritative = state.authoritativeCommand
-          ?? await dependencies.authorizeCommand(validation.command);
-        const executed = await dependencies.executeCommand(authoritative);
+          ?? await state.authorizeCommand(validation.command);
+        const executed = await state.executeCommand(authoritative);
         return {
           result: {
             kind: 'command_executed' as const,
@@ -326,6 +328,8 @@ export function createFitnessAssistantAgent(
         latestMessage: input.latestMessage,
         recentMessages: [...input.recentMessages],
         summary: input.summary,
+        authorizeCommand: input.authorizeCommand,
+        executeCommand: input.executeCommand,
         authoritativeCommand: input.authoritativeCommand ?? null
       });
       return state.result ?? unavailableResult('model_output_invalid');

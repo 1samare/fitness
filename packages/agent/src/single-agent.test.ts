@@ -38,13 +38,13 @@ function providerWith(...results: Array<string | Error>): AssistantLanguageModel
   };
 }
 
-function createDependencies(provider: AssistantLanguageModelProvider) {
+function createInvocationDependencies() {
   const authorizeCommand = vi.fn((command: AssistantValidatedCommand) => Promise.resolve(command));
   const executeCommand = vi.fn((command: AssistantValidatedCommand) => Promise.resolve({
     command: command.kind,
     message: `executed:${command.kind}`
   }));
-  return { provider, authorizeCommand, executeCommand };
+  return { authorizeCommand, executeCommand };
 }
 
 describe('createFitnessAssistantAgent', () => {
@@ -81,8 +81,8 @@ describe('createFitnessAssistantAgent', () => {
         targetDateText: '2026-08-25'
       }
     }));
-    const dependencies = createDependencies(provider);
-    const agent = createFitnessAssistantAgent(dependencies);
+    const dependencies = createInvocationDependencies();
+    const agent = createFitnessAssistantAgent({ provider });
     const recentMessages: AssistantConversationMessage[] = Array.from(
       { length: 20 },
       (_unused, index) => ({
@@ -97,7 +97,8 @@ describe('createFitnessAssistantAgent', () => {
       requestId,
       latestMessage: '把 2026-08-24 的训练移到 2026-08-25',
       recentMessages,
-      summary
+      summary,
+      ...dependencies
     })).resolves.toEqual({
       kind: 'command_executed',
       command: 'move_training_day',
@@ -126,14 +127,15 @@ describe('createFitnessAssistantAgent', () => {
         }
       })
     );
-    const dependencies = createDependencies(provider);
-    const agent = createFitnessAssistantAgent(dependencies);
+    const dependencies = createInvocationDependencies();
+    const agent = createFitnessAssistantAgent({ provider });
 
     await expect(agent.invoke({
       requestId,
       latestMessage: '把 2026-08-24 的训练移到 2026-08-25',
       recentMessages: [],
-      summary
+      summary,
+      ...dependencies
     })).resolves.toMatchObject({ kind: 'command_executed' });
     expect(provider.inputs).toHaveLength(2);
     expect(provider.inputs[1]).toMatchObject({
@@ -145,14 +147,15 @@ describe('createFitnessAssistantAgent', () => {
 
   it('fails closed after the repaired output is invalid and never calls a tool', async () => {
     const provider = providerWith('{bad', '{still bad');
-    const dependencies = createDependencies(provider);
-    const agent = createFitnessAssistantAgent(dependencies);
+    const dependencies = createInvocationDependencies();
+    const agent = createFitnessAssistantAgent({ provider });
 
     await expect(agent.invoke({
       requestId,
       latestMessage: '把训练改一下',
       recentMessages: [],
-      summary
+      summary,
+      ...dependencies
     })).resolves.toEqual({
       kind: 'assistant_unavailable',
       reason: 'model_output_invalid',
@@ -166,14 +169,15 @@ describe('createFitnessAssistantAgent', () => {
 
   it('maps Provider failure to a fixed result without exposing the supplier error', async () => {
     const provider = providerWith(new Error('secret supplier response'));
-    const dependencies = createDependencies(provider);
-    const agent = createFitnessAssistantAgent(dependencies);
+    const dependencies = createInvocationDependencies();
+    const agent = createFitnessAssistantAgent({ provider });
 
     await expect(agent.invoke({
       requestId,
       latestMessage: '把训练改一下',
       recentMessages: [],
-      summary
+      summary,
+      ...dependencies
     })).resolves.toEqual({
       kind: 'assistant_unavailable',
       reason: 'provider_unavailable',
@@ -186,21 +190,22 @@ describe('createFitnessAssistantAgent', () => {
 
   it('executes a persisted authoritative command with zero model calls', async () => {
     const provider = providerWith();
-    const dependencies = createDependencies(provider);
+    const dependencies = createInvocationDependencies();
     const authoritativeCommand: AssistantValidatedCommand = {
       kind: 'resize_meal_portion',
       businessDate: '2026-08-26',
       slot: 'dinner',
       multiplier: 1.1
     };
-    const agent = createFitnessAssistantAgent(dependencies);
+    const agent = createFitnessAssistantAgent({ provider });
 
     await expect(agent.invoke({
       requestId,
       latestMessage: 'ignored during recovery',
       recentMessages: [],
       summary,
-      authoritativeCommand
+      authoritativeCommand,
+      ...dependencies
     })).resolves.toEqual({
       kind: 'command_executed',
       command: 'resize_meal_portion',
@@ -222,7 +227,7 @@ describe('createFitnessAssistantAgent', () => {
         multiplierText: '110%'
       }
     }));
-    const dependencies = createDependencies(provider);
+    const dependencies = createInvocationDependencies();
     const authorized: AssistantValidatedCommand = {
       kind: 'resize_meal_portion',
       businessDate: '2026-08-26',
@@ -230,13 +235,14 @@ describe('createFitnessAssistantAgent', () => {
       multiplier: 1.05
     };
     dependencies.authorizeCommand.mockResolvedValueOnce(authorized);
-    const agent = createFitnessAssistantAgent(dependencies);
+    const agent = createFitnessAssistantAgent({ provider });
 
     await agent.invoke({
       requestId,
       latestMessage: '把 2026-08-26 午饭调成 110%',
       recentMessages: [],
-      summary
+      summary,
+      ...dependencies
     });
     expect(dependencies.executeCommand).toHaveBeenCalledWith(authorized);
   });
@@ -247,13 +253,14 @@ describe('createFitnessAssistantAgent', () => {
       intent: 'move_training_day',
       missingFields: ['target_date']
     }));
-    const clarifyDependencies = createDependencies(clarifyProvider);
-    const clarifyAgent = createFitnessAssistantAgent(clarifyDependencies);
+    const clarifyDependencies = createInvocationDependencies();
+    const clarifyAgent = createFitnessAssistantAgent({ provider: clarifyProvider });
     await expect(clarifyAgent.invoke({
       requestId,
       latestMessage: '把 2026-08-24 的训练挪一下',
       recentMessages: [],
-      summary
+      summary,
+      ...clarifyDependencies
     })).resolves.toEqual({
       kind: 'clarification_required',
       missingFields: ['target_date'],
@@ -270,13 +277,14 @@ describe('createFitnessAssistantAgent', () => {
       kind: 'reject',
       reason: 'unsafe_or_prohibited'
     }));
-    const rejectDependencies = createDependencies(rejectProvider);
-    const rejectAgent = createFitnessAssistantAgent(rejectDependencies);
+    const rejectDependencies = createInvocationDependencies();
+    const rejectAgent = createFitnessAssistantAgent({ provider: rejectProvider });
     await expect(rejectAgent.invoke({
       requestId,
       latestMessage: '给我医疗诊断',
       recentMessages: [],
-      summary
+      summary,
+      ...rejectDependencies
     })).resolves.toEqual({
       kind: 'request_rejected',
       reason: 'unsafe_or_prohibited',

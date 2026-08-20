@@ -32,6 +32,7 @@ describe('CloudBaseLanguageModelBackend', () => {
     const model = modelReturning({
       text: '{"kind":"reject","reason":"unsupported_request"}',
       usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      messages: [{ role: 'assistant', content: 'not observed by the adapter' }],
       rawResponses: [{ request_id: 'supplier-request-1', ignored: 'not observed' }]
     });
     const backend = new CloudBaseLanguageModelBackend({ providerId, modelName, model });

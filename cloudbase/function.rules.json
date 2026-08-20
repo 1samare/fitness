@@ -5,6 +5,9 @@
   "planning-api": {
     "invoke": "auth != null"
   },
+  "assistant-api": {
+    "invoke": "auth != null"
+  },
   "photo-cleanup": {
     "invoke": false
   }

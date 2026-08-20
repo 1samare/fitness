@@ -1,0 +1,29 @@
+{
+  "name": "@fitness/assistant-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsup && tsup --config tsup.deploy.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start:local": "tcb-ff --source=dist/index.js --target=main --logEventContext=false --logHeaderBody=false",
+    "dry-run": "tcb-ff --source=dist/index.js --target=main --dry-run",
+    "dev": "pnpm build && pnpm start:local"
+  },
+  "dependencies": {
+    "@cloudbase/node-sdk": "3.18.3",
+    "@fitness/agent": "workspace:*",
+    "@fitness/application": "workspace:*",
+    "@fitness/contracts": "workspace:*",
+    "@fitness/domain": "workspace:*",
+    "@fitness/persistence": "workspace:*",
+    "@fitness/providers": "workspace:*",
+    "wx-server-sdk": "^4.0.2"
+  },
+  "devDependencies": {
+    "@cloudbase/functions-framework": "^1.6.0",
+    "@fitness/nutrition-fixtures": "workspace:*",
+    "tsup": "^8.5.0"
+  }
+}
