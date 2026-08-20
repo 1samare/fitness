@@ -108,6 +108,13 @@ const supportedCommands: [
   'resize_meal_portion'
 ] as const;
 
+const unexpectedAgentFailure: AssistantTurnResult = {
+  kind: 'assistant_unavailable',
+  reason: 'internal_error',
+  message: '助手服务暂时不可用，请稍后重试或使用结构化页面。',
+  recoveryAction: 'retry'
+};
+
 function errorResponse(
   code: Extract<AssistantApiResponse, { readonly success: false }>['error']['code'],
   message: string,
@@ -217,6 +224,7 @@ export function createAssistantApiHandler(
         'retry'
       ));
     }
+    let activeTurnId: string | undefined;
     try {
       if (parsed.data.action === 'getAssistantConversation') {
         return assistantApiResponseSchema.parse(publicConversation(
@@ -234,6 +242,7 @@ export function createAssistantApiHandler(
         ));
       }
       const turn = begun.turn;
+      activeTurnId = turn.turnId;
       const result = await dependencies.agent.invoke({
         requestId: `${turn.turnId}-model`,
         latestMessage: turn.message,
@@ -265,6 +274,25 @@ export function createAssistantApiHandler(
         finalized.result
       ));
     } catch (error: unknown) {
+      if (activeTurnId !== undefined) {
+        try {
+          const conversation = await dependencies.conversation.getConversation(context.userId);
+          if (conversation.pendingTurn?.turnId === activeTurnId
+            && conversation.pendingTurn.status === 'received') {
+            const finalized = await dependencies.conversation.finalizeTurn(
+              context.userId,
+              activeTurnId,
+              unexpectedAgentFailure
+            );
+            return assistantApiResponseSchema.parse(completed(
+              finalized.conversationVersion,
+              finalized.result
+            ));
+          }
+        } catch {
+          // The authoritative pending state could not be recovered safely.
+        }
+      }
       return assistantApiResponseSchema.parse(mappedError(error));
     }
   };
