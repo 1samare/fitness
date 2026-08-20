@@ -400,6 +400,12 @@ TrainingPlanChanged
 
 候选导入、活动 ID 切换、备份与回滚的完整顺序见 [`docs/cloudbase/phase-7-reviewed-dataset.md`](docs/cloudbase/phase-7-reviewed-dataset.md)。当前 7B 只证明本地代码和发布工具就绪；真实来源/授权、数据集导入、CloudBase preflight、Provider 验收、双账号、恢复和设备仍未通过。
 
+### 受控内测发布与测试人员验收
+
+7C 发布手册已经按固定 `@cloudbase/cli@3.7.2` 的本机实际命令面校正，覆盖干净版本冻结、私有输入预检、审核数据导入、三函数部署、索引/规则/IAM/定时器、双账号与供应商故障、数据权利、日志/容量、备份恢复、回滚和真机验收；完整操作顺序见 [`docs/cloudbase/phase-7-controlled-beta-release.md`](docs/cloudbase/phase-7-controlled-beta-release.md)。测试人员在发布负责人明确通知环境就绪后，使用 [`docs/testing/phase-7-controlled-beta-checklist.md`](docs/testing/phase-7-controlled-beta-checklist.md) 执行双身份、设备和安全边界验收。
+
+当前真实预检能够识别固定 CLI 版本，但因真实私有审核数据、AppID/环境、公开隐私元数据、容量/恢复输入和外部审批尚未提供而安全失败；仓库未执行任何目标环境写入。因此当前状态是“本地代码与测试准备就绪”，不是“受控内测已发布”，测试人员暂不能开始真实云端验收。
+
 ## 测试与验收基线
 
 至少覆盖以下自动化测试：

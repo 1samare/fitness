@@ -356,7 +356,7 @@ Do not delete these targets as part of an implicit cleanup. Record whether clean
 - Consumes: every passing local and real gate from all three Phase 7 plans.
 - Produces: tester-ready instructions and the only valid Phase 7 completion update.
 
-- [ ] **Step 1: Write the tester checklist**
+- [x] **Step 1: Write the tester checklist**
 
 Include exact entry pages, supported healthy-adult boundary, test-data preparation, happy path, meal lock/manual confirmation, AI assistant supported commands, photo manual fallback, export inspection, irreversible deletion confirmation, expected fixed errors, privacy contact route, and evidence-redaction rules. State that diseases, pregnancy, minors, rehabilitation, medical advice, extreme goals, unsupported age/BMI, and missing health confirmation must not receive personalized energy adjustment.
 
