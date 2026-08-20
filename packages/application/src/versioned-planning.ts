@@ -740,6 +740,85 @@ function nutritionTargetsForEnergyTargets(
   });
 }
 
+export function currentPlanningContextFromState(
+  state: PlanningAggregateState
+): CurrentPlanningContext {
+  const bodyProfile = findById(state.bodyProfiles, state.activeBodyProfileVersionId);
+  const candidateGoal = findById(state.goals, state.activeGoalVersionId);
+  const goal = bodyProfile !== null && candidateGoal?.bodyProfileVersionId === bodyProfile.id
+    ? candidateGoal
+    : null;
+  const candidatePlan = findById(state.trainingPlans, state.activeTrainingPlanVersionId);
+  const trainingPlan = bodyProfile !== null
+    && goal !== null
+    && candidatePlan?.bodyProfileVersionId === bodyProfile.id
+    && candidatePlan.goalVersionId === goal.id
+    ? candidatePlan
+    : null;
+  const dailyEnergyTargets = bodyProfile === null || goal === null || trainingPlan === null
+    ? []
+    : latestTargetsForActivePlan(state, bodyProfile, goal, trainingPlan);
+  const dailyNutritionTargets = nutritionTargetsForEnergyTargets(state, dailyEnergyTargets);
+  const inventory = findById(state.inventories, state.activeInventoryVersionId);
+  const mealPlan = findById(state.mealPlans, state.activeMealPlanVersionId);
+  const decidedCandidateIds = new Set(
+    state.mealPlanDecisions.map((decision) => decision.candidateMealPlanVersionId)
+  );
+  const pendingMealPlanCandidate = [...state.mealPlans]
+    .filter((candidate) => (
+      pendingMealPlanCandidateMatchesCurrentContext(state, candidate)
+      && !decidedCandidateIds.has(candidate.id)
+    ))
+    .sort((left, right) => right.version - left.version)[0] ?? null;
+  const mealPlanStale = deriveMealPlanStale({
+    bodyProfile,
+    goal,
+    trainingPlan,
+    inventory,
+    mealPlan,
+    dailyNutritionTargets
+  });
+  const retryableRecalculationJob = [...state.recalculationJobs]
+    .reverse()
+    .find((job) => (
+      job.status === 'failed_retryable'
+      && recalculationJobCanRetryForCurrentContext(state, job)
+    )) ?? null;
+  const latestIngredientPhotos = latestIngredientPhotoVersions(state.ingredientPhotoVersions);
+  const ingredientPhoto = mostRecentlyCreatedIngredientPhoto(latestIngredientPhotos);
+  return {
+    bodyProfile,
+    goal,
+    trainingPlan,
+    dailyEnergyTargets,
+    dailyNutritionTargets,
+    inventory,
+    mealPlan,
+    mealPlanStale,
+    pendingMealPlanCandidate,
+    pendingMealPlanTargetDiffs: pendingMealPlanCandidate === null
+      ? []
+      : state.mealPlanTargetDiffs.filter((diff) => (
+          diff.candidateMealPlanVersionId === pendingMealPlanCandidate.id
+        )),
+    selectableRecipes: [],
+    selectableRecipesStatus: 'no_options',
+    retryableRecalculationJob,
+    ingredientPhoto,
+    latestVersions: {
+      bodyProfile: state.bodyProfiles.length,
+      goal: state.goals.length,
+      trainingPlan: state.trainingPlans.length,
+      inventory: state.inventories.length,
+      mealPlan: state.mealPlans.length,
+      mealPlanDecision: state.mealPlanDecisions.length,
+      trainingCompletion: state.trainingCompletionEvents.length,
+      recalculationJob: state.recalculationJobs.length,
+      ingredientPhoto: latestIngredientPhotos.length
+    }
+  };
+}
+
 export function createVersionedPlanningService(
   dependencies: VersionedPlanningServiceDependencies
 ) {
@@ -964,81 +1043,7 @@ export function createVersionedPlanningService(
     },
 
     async getCurrentContext(userId: string): Promise<CurrentPlanningContext> {
-      const state = await repository.read(userId);
-      const bodyProfile = findById(state.bodyProfiles, state.activeBodyProfileVersionId);
-      const candidateGoal = findById(state.goals, state.activeGoalVersionId);
-      const goal = bodyProfile !== null && candidateGoal?.bodyProfileVersionId === bodyProfile.id
-        ? candidateGoal
-        : null;
-      const candidatePlan = findById(state.trainingPlans, state.activeTrainingPlanVersionId);
-      const trainingPlan = bodyProfile !== null
-        && goal !== null
-        && candidatePlan?.bodyProfileVersionId === bodyProfile.id
-        && candidatePlan.goalVersionId === goal.id
-        ? candidatePlan
-        : null;
-      const dailyEnergyTargets = bodyProfile === null || goal === null || trainingPlan === null
-        ? []
-        : latestTargetsForActivePlan(state, bodyProfile, goal, trainingPlan);
-      const dailyNutritionTargets = nutritionTargetsForEnergyTargets(state, dailyEnergyTargets);
-      const inventory = findById(state.inventories, state.activeInventoryVersionId);
-      const mealPlan = findById(state.mealPlans, state.activeMealPlanVersionId);
-      const decidedCandidateIds = new Set(
-        state.mealPlanDecisions.map((decision) => decision.candidateMealPlanVersionId)
-      );
-      const pendingMealPlanCandidate = [...state.mealPlans]
-        .filter((candidate) => (
-          pendingMealPlanCandidateMatchesCurrentContext(state, candidate)
-          && !decidedCandidateIds.has(candidate.id)
-        ))
-        .sort((left, right) => right.version - left.version)[0] ?? null;
-      const mealPlanStale = deriveMealPlanStale({
-        bodyProfile,
-        goal,
-        trainingPlan,
-        inventory,
-        mealPlan,
-        dailyNutritionTargets
-      });
-      const retryableRecalculationJob = [...state.recalculationJobs]
-        .reverse()
-        .find((job) => (
-          job.status === 'failed_retryable'
-          && recalculationJobCanRetryForCurrentContext(state, job)
-        )) ?? null;
-      const latestIngredientPhotos = latestIngredientPhotoVersions(state.ingredientPhotoVersions);
-      const ingredientPhoto = mostRecentlyCreatedIngredientPhoto(latestIngredientPhotos);
-      return {
-        bodyProfile,
-        goal,
-        trainingPlan,
-        dailyEnergyTargets,
-        dailyNutritionTargets,
-        inventory,
-        mealPlan,
-        mealPlanStale,
-        pendingMealPlanCandidate,
-        pendingMealPlanTargetDiffs: pendingMealPlanCandidate === null
-          ? []
-          : state.mealPlanTargetDiffs.filter((diff) => (
-              diff.candidateMealPlanVersionId === pendingMealPlanCandidate.id
-            )),
-        selectableRecipes: [],
-        selectableRecipesStatus: 'no_options',
-        retryableRecalculationJob,
-        ingredientPhoto,
-        latestVersions: {
-          bodyProfile: state.bodyProfiles.length,
-          goal: state.goals.length,
-          trainingPlan: state.trainingPlans.length,
-          inventory: state.inventories.length,
-          mealPlan: state.mealPlans.length,
-          mealPlanDecision: state.mealPlanDecisions.length,
-          trainingCompletion: state.trainingCompletionEvents.length,
-          recalculationJob: state.recalculationJobs.length,
-          ingredientPhoto: latestIngredientPhotos.length
-        }
-      };
+      return currentPlanningContextFromState(await repository.read(userId));
     }
   };
 }

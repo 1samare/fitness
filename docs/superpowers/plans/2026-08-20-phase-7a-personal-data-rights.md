@@ -627,7 +627,7 @@ export function currentPlanningContextFromState(
 
 `finalizeTurn` and `finalizeReceivedTurn` derive assistant summary from the same aggregate instance passed to their final repository transaction.
 
-- [ ] **Step 1: Add the stale-summary race as a failing regression test**
+- [x] **Step 1: Add the stale-summary race as a failing regression test**
 
 Construct a repository whose state changes between a pre-transaction planning read and finalization. Assert the saved summary reflects the active training/meal versions and locked dates in the state locked by the final transaction:
 
@@ -643,7 +643,7 @@ expect(result.summary).toEqual({
 
 Add cloud assistant runtime tests that pending deletion rejects conversation reads/writes with `account_deletion_pending` and does not invoke the language provider.
 
-- [ ] **Step 2: Run focused tests and confirm RED**
+- [x] **Step 2: Run focused tests and confirm RED**
 
 Run:
 
@@ -653,7 +653,7 @@ pnpm.cmd test -- packages/application/src/assistant-conversation.test.ts cloudfu
 
 Expected: the race test FAILS because finalization currently obtains context before the transaction; guard composition tests also FAIL.
 
-- [ ] **Step 3: Extract the pure context selector and finalize inside one transaction**
+- [x] **Step 3: Extract the pure context selector and finalize inside one transaction**
 
 Make existing `getCurrentContext(userId)` call `repository.read` followed by `currentPlanningContextFromState`. In assistant finalization:
 
@@ -675,7 +675,7 @@ return repository.transact(userId, (state) => {
 
 Do the corresponding nullable transition for `finalizeReceivedTurn`. Remove the pre-transaction `planning.getCurrentContext` calls. Supply the guarded repository to every assistant application service in local and cloud compositions.
 
-- [ ] **Step 4: Run assistant and planning regressions**
+- [x] **Step 4: Run assistant and planning regressions**
 
 Run:
 
@@ -687,7 +687,7 @@ pnpm.cmd --filter @fitness/assistant-api typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add packages/application cloudfunctions/assistant-api tests/e2e/assistant-workflow.test.ts

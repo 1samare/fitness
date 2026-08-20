@@ -1,4 +1,7 @@
 import {
+  InMemoryPlanningRepository
+} from '@fitness/persistence';
+import {
   createFitnessAssistantAgent,
   type AssistantLanguageModelProvider
 } from '@fitness/agent';
@@ -6,6 +9,46 @@ import { describe, expect, it, vi } from 'vitest';
 import { createRuntimeAssistantHandler } from './runtime-handler';
 
 describe('local assistant runtime composition', () => {
+  it('blocks a deleting account before invoking the local language provider', async () => {
+    const rawRepository = new InMemoryPlanningRepository();
+    await rawRepository.transact('local-user-deleting', (state) => ({
+      nextState: {
+        ...state,
+        accountDeletion: {
+          status: 'pending',
+          idempotencyKey: 'delete-account-local-0001',
+          requestFingerprint: 'delete-fingerprint-local-0001',
+          snapshotToken: 'a'.repeat(64),
+          requestedAt: '2026-08-20T00:00:00.000Z',
+          privateFileIds: []
+        }
+      },
+      result: undefined
+    }));
+    const generateIntent = vi.fn(() => Promise.resolve({
+      rawText: JSON.stringify({ kind: 'reject', reason: 'unsupported_request' })
+    }));
+    const handler = createRuntimeAssistantHandler({
+      runtimeMode: 'local',
+      repository: rawRepository,
+      provider: { generateIntent },
+      now: () => '2026-08-20T00:00:00.000Z'
+    });
+
+    await expect(handler({
+      action: 'sendAssistantMessage',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'assistant-local-delete-0001',
+        message: '把 2026-08-24 的训练移到 2026-08-25'
+      }
+    }, { userId: 'local-user-deleting' })).resolves.toMatchObject({
+      success: false,
+      error: { code: 'account_deletion_pending' }
+    });
+    expect(generateIntent).not.toHaveBeenCalled();
+  });
+
   it('creates exactly one compiled Agent and reuses it across requests', async () => {
     const createAgent = vi.fn(createFitnessAssistantAgent);
     const handler = createRuntimeAssistantHandler({

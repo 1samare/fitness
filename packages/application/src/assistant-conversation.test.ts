@@ -1,6 +1,7 @@
 import type {
   AssistantTurnResult,
-  AssistantValidatedCommand
+  AssistantValidatedCommand,
+  PlanningAggregateState
 } from '@fitness/domain';
 import { InMemoryPlanningRepository } from '@fitness/persistence';
 import { describe, expect, it, vi } from 'vitest';
@@ -78,6 +79,159 @@ function turnInput(expectedVersion = 0, suffix = '0001') {
 }
 
 describe('assistant conversation lifecycle', () => {
+  it('derives the finalized summary from the aggregate locked by the final transaction', async () => {
+    const empty = await new InMemoryPlanningRepository().read('user-a');
+    const profile = {
+      kind: 'body_profile_version' as const,
+      id: 'profile-race-1',
+      userId: 'user-a',
+      version: 1,
+      createdAt: '2026-08-20T00:00:00.000Z',
+      payload: {
+        ageYears: 30,
+        sexCode: 0 as const,
+        heightCm: 175,
+        weightKg: 70,
+        healthScopeConfirmed: true,
+        nonTrainingActivity: 'light' as const,
+        allergens: [],
+        avoidFoods: [],
+        dietPreferences: [],
+        businessTimezone: 'Asia/Shanghai'
+      }
+    };
+    const goal = {
+      kind: 'goal_version' as const,
+      id: 'goal-race-1',
+      userId: 'user-a',
+      version: 1,
+      createdAt: '2026-08-20T00:00:00.000Z',
+      bodyProfileVersionId: profile.id,
+      payload: {
+        goal: 'maintain' as const,
+        effectiveDate: '2026-08-20',
+        targetDate: '2026-10-30'
+      }
+    };
+    const trainingPlans = [1, 2].map((version) => ({
+      kind: 'training_plan_version' as const,
+      id: `training-race-${String(version)}`,
+      userId: 'user-a',
+      version,
+      createdAt: '2026-08-20T00:00:00.000Z',
+      bodyProfileVersionId: profile.id,
+      goalVersionId: goal.id,
+      payload: {
+        weekStartDate: version === 1 ? '2026-08-17' : '2026-08-24',
+        businessTimezone: 'Asia/Shanghai',
+        sessions: []
+      }
+    }));
+    const inventory = {
+      kind: 'inventory_version' as const,
+      id: 'inventory-race-1',
+      userId: 'user-a',
+      version: 1,
+      createdAt: '2026-08-20T00:00:00.000Z',
+      items: []
+    };
+    const mealPlans = [1, 2, 3].map((version) => ({
+      kind: 'meal_plan_version' as const,
+      id: `meal-race-${String(version)}`,
+      userId: 'user-a',
+      version,
+      createdAt: '2026-08-20T00:00:00.000Z',
+      weekStartDate: '2026-08-24',
+      bodyProfileVersionId: profile.id,
+      goalVersionId: goal.id,
+      trainingPlanVersionId: 'training-race-2',
+      inventoryVersionId: inventory.id,
+      catalogVersionId: 'catalog-race-1',
+      generationPolicyVersion: 'weekly-meal-generation-v1' as const,
+      supersedesVersionId: version === 1 ? null : `meal-race-${String(version - 1)}`,
+      readiness: 'complete' as const,
+      days: [{
+        businessDate: '2026-08-26',
+        dailyNutritionTargetVersionId: 'target-race-1',
+        dailyMenuTemplateVersionId: 'menu-race-1',
+        locked: version === 3,
+        manuallyModified: false,
+        meals: [],
+        ingredientAmounts: [],
+        nutritionTotals: {
+          energyKcal: 0,
+          proteinG: 0,
+          fatG: 0,
+          carbohydrateG: 0,
+          fiberG: 0,
+          saturatedFatG: 0,
+          addedSugarG: 0
+        },
+        nutritionSourceSnapshotIds: []
+      }]
+    }));
+    const activeTrainingPlan = trainingPlans[1];
+    const activeMealPlan = mealPlans[2];
+    if (activeTrainingPlan === undefined || activeMealPlan === undefined) {
+      throw new Error('Expected active race fixtures');
+    }
+    const racedState = {
+      ...empty,
+      bodyProfiles: [profile],
+      goals: [goal],
+      trainingPlans,
+      inventories: [inventory],
+      mealPlans,
+      activeBodyProfileVersionId: profile.id,
+      activeGoalVersionId: goal.id,
+      activeTrainingPlanVersionId: activeTrainingPlan.id,
+      activeInventoryVersionId: inventory.id,
+      activeMealPlanVersionId: activeMealPlan.id
+    } as unknown as PlanningAggregateState;
+    let state = empty;
+    let transactionCount = 0;
+    const repository: PlanningRepository = {
+      read: () => Promise.resolve(structuredClone(state)),
+      transact: (_userId, operation) => {
+        transactionCount += 1;
+        if (transactionCount === 3) {
+          state = {
+            ...racedState,
+            assistantConversation: state.assistantConversation
+          };
+        }
+        const transition = operation(structuredClone(state));
+        state = structuredClone(transition.nextState);
+        return Promise.resolve(transition.result);
+      }
+    };
+    const service = createAssistantConversationService({
+      repository,
+      planning: {
+        getCurrentContext: () => Promise.resolve({
+          trainingPlan: null,
+          mealPlan: null,
+          latestVersions: { trainingPlan: 0, mealPlan: 0 }
+        })
+      },
+      now: () => '2026-08-20T00:00:00.000Z',
+      nextId: () => 'assistant-turn-race-1'
+    });
+    const begun = await service.beginTurn('user-a', turnInput());
+    if (begun.kind !== 'received') throw new Error('Expected received turn');
+    await service.authorizeCommand('user-a', begun.turn.turnId, movedCommand);
+
+    await service.finalizeTurn('user-a', begun.turn.turnId, successResult);
+
+    expect((await service.getConversation('user-a')).summary).toEqual({
+      activeWeekStartDate: '2026-08-24',
+      trainingPlanVersion: 2,
+      mealPlanVersion: 3,
+      lockedMealDates: ['2026-08-26'],
+      pendingClarification: null
+    });
+  });
+
   it('transitions empty to received to validated to a completed replayable receipt', async () => {
     const { service } = harness();
     const received = await service.beginTurn('user-a', turnInput());
@@ -209,10 +363,10 @@ describe('assistant conversation lifecycle', () => {
     expect(conversation.recentReceipts).toHaveLength(32);
     expect(conversation.recentReceipts[0]?.conversationVersion).toBe(2);
     expect(conversation.summary).toEqual({
-      activeWeekStartDate: '2026-08-24',
-      trainingPlanVersion: 3,
-      mealPlanVersion: 7,
-      lockedMealDates: ['2026-08-25', '2026-08-26'],
+      activeWeekStartDate: null,
+      trainingPlanVersion: 0,
+      mealPlanVersion: 0,
+      lockedMealDates: [],
       pendingClarification: {
         intent: 'move_training_day',
         sourceDate: '2026-08-24',

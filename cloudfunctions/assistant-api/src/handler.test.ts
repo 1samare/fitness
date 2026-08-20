@@ -1,4 +1,5 @@
 import {
+  AccountDeletionPendingError,
   AssistantConversationBusyError,
   AssistantConversationVersionConflictError,
   IdempotencyKeyReuseError,
@@ -322,6 +323,7 @@ describe('assistant API handler', () => {
   });
 
   it.each([
+    [new AccountDeletionPendingError(), 'account_deletion_pending'],
     [
       new AssistantConversationVersionConflictError(0, 1),
       'conversation_version_conflict'

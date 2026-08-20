@@ -5,6 +5,7 @@ import {
   type FitnessAssistantAgentDependencies
 } from '@fitness/agent';
 import {
+  AccountDeletionPendingError,
   createAssistantConversationService,
   createPlanningAssistantCommandService,
   AssistantConversationBusyError,
@@ -169,6 +170,13 @@ function completed(
 }
 
 function mappedError(error: unknown): AssistantApiResponse {
+  if (error instanceof AccountDeletionPendingError) {
+    return errorResponse(
+      error.code,
+      '账户正在删除，请重试删除操作或联系隐私支持。',
+      'retry'
+    );
+  }
   if (error instanceof AssistantConversationVersionConflictError) {
     return errorResponse(
       error.code,

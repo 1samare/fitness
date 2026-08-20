@@ -4,6 +4,7 @@ import type {
   AssistantLanguageModelResult
 } from '../../packages/agent/src/index';
 import {
+  createAccountDeletionGuardedRepository,
   createMealPlanRecalculationService,
   selectManualMealPortion,
   selectManualMealReplacement
@@ -138,7 +139,8 @@ function fixtureProviders() {
 }
 
 function createHarness() {
-  const repository = new InMemoryPlanningRepository();
+  const rawRepository = new InMemoryPlanningRepository();
+  const repository = createAccountDeletionGuardedRepository(rawRepository);
   const model = new ScenarioLanguageModel();
   let sequence = 0;
   const nextId = (prefix: string): string => `${prefix}-e2e-${String(++sequence)}`;
@@ -149,6 +151,7 @@ function createHarness() {
     nextId
   });
   return {
+    rawRepository,
     repository,
     model,
     planning,
@@ -472,6 +475,45 @@ function withoutAssistant(state: PlanningAggregateState) {
 }
 
 describe('bounded assistant end-to-end workflow', () => {
+  it('blocks all assistant access while account deletion is pending without invoking the model', async () => {
+    const harness = createHarness();
+    const userId = 'assistant-deleting-user';
+    await harness.rawRepository.transact(userId, (state) => ({
+      nextState: {
+        ...state,
+        accountDeletion: {
+          status: 'pending',
+          idempotencyKey: 'delete-account-e2e-0001',
+          requestFingerprint: 'delete-fingerprint-e2e-0001',
+          snapshotToken: 'a'.repeat(64),
+          requestedAt: NOW,
+          privateFileIds: []
+        }
+      },
+      result: undefined
+    }));
+
+    await expect(harness.assistantHandler(
+      { action: 'getAssistantConversation' },
+      { userId }
+    )).resolves.toMatchObject({
+      success: false,
+      error: { code: 'account_deletion_pending' }
+    });
+    await expect(harness.assistantHandler({
+      action: 'sendAssistantMessage',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'assistant-delete-e2e-0001',
+        message: `把 ${SOURCE_DATE} 的训练移到 ${TARGET_DATE}`
+      }
+    }, { userId })).resolves.toMatchObject({
+      success: false,
+      error: { code: 'account_deletion_pending' }
+    });
+    expect(harness.model.inputs).toHaveLength(0);
+  });
+
   it('executes all three commands, recomputes independently, replays once, and preserves locks', async () => {
     const harness = createHarness();
     const userId = 'assistant-e2e-user';

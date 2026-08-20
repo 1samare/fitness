@@ -3,6 +3,7 @@ import type {
   CloudBaseDocumentReference,
   CloudBaseTransaction
 } from '@fitness/persistence';
+import { CloudBasePlanningRepository } from '@fitness/persistence';
 import type { CloudBaseTextModel } from '@fitness/providers';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -64,6 +65,61 @@ function send(handler: ReturnType<typeof createCloudRuntimeAssistantHandler>, su
 }
 
 describe('cloud assistant runtime', () => {
+  it('blocks conversation reads and writes during account deletion without calling the model', async () => {
+    const database = new FakeDatabase();
+    const rawRepository = new CloudBasePlanningRepository(database);
+    const userId = 'cloud-user-deleting';
+    await rawRepository.transact(userId, (state) => ({
+      nextState: {
+        ...state,
+        accountDeletion: {
+          status: 'pending',
+          idempotencyKey: 'delete-account-0001',
+          requestFingerprint: 'delete-fingerprint-0001',
+          snapshotToken: 'a'.repeat(64),
+          requestedAt: '2026-08-20T00:00:00.000Z',
+          privateFileIds: []
+        }
+      },
+      result: undefined
+    }));
+    const generateText = vi.fn(() => Promise.resolve({
+      text: commandOutput,
+      messages: [],
+      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+      rawResponses: [{ request_id: 'supplier-request-delete-1' }]
+    }));
+    const handler = createCloudRuntimeAssistantHandler({
+      runtimeMode: 'cloud',
+      database,
+      environment: {
+        CLOUDBASE_ENV_ID: 'environment-1',
+        FITNESS_LLM_PROVIDER_ID: 'cloudbase',
+        FITNESS_LLM_MODEL: 'hunyuan-test'
+      },
+      createModel: () => ({ generateText }),
+      now: () => '2026-08-20T00:00:00.000Z'
+    });
+
+    await expect(handler({ action: 'getAssistantConversation' }, { userId }))
+      .resolves.toMatchObject({
+        success: false,
+        error: { code: 'account_deletion_pending' }
+      });
+    await expect(handler({
+      action: 'sendAssistantMessage',
+      payload: {
+        expectedVersion: 0,
+        idempotencyKey: 'assistant-cloud-delete-0001',
+        message: '把 2026-08-24 的训练移到 2026-08-25'
+      }
+    }, { userId })).resolves.toMatchObject({
+      success: false,
+      error: { code: 'account_deletion_pending' }
+    });
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['cloudbase', 'hunyuan-2.0-instruct-20251111'],
     ['cloudbase', 'deepseek-v4-flash'],

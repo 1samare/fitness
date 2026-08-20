@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import tcb from '@cloudbase/node-sdk';
 import {
   ProviderUnavailableError,
+  createAccountDeletionGuardedRepository,
   createMealPlanRecalculationService,
   type MealPlanningProviders
 } from '@fitness/application';
@@ -125,7 +126,8 @@ export function createCloudRuntimeAssistantHandler(
   const providerId = requiredIdentifier(options.environment.FITNESS_LLM_PROVIDER_ID);
   const modelName = requiredIdentifier(options.environment.FITNESS_LLM_MODEL);
   const model = options.createModel(providerId);
-  const repository = new CloudBasePlanningRepository(options.database);
+  const rawRepository = new CloudBasePlanningRepository(options.database);
+  const repository = createAccountDeletionGuardedRepository(rawRepository);
   const now = options.now ?? (() => new Date().toISOString());
   const nextId = options.nextId ?? ((prefix: string) => `${prefix}-${randomUUID()}`);
   const planning = createMealPlanRecalculationService({

@@ -8,11 +8,13 @@ import type {
   AssistantValidatedTurn,
   LatestPlanningVersions,
   MealPlanDay,
+  CurrentPlanningContext,
   PlanningAggregateState,
   TrainingPlanPayload
 } from '@fitness/domain';
 import { requestFingerprint } from './idempotency-fingerprint';
 import {
+  currentPlanningContextFromState,
   IdempotencyKeyReuseError,
   type PlanningRepository
 } from './versioned-planning';
@@ -145,7 +147,7 @@ function assertSameFingerprint(
 }
 
 function buildSummary(
-  context: Awaited<ReturnType<AssistantPlanningContextPort['getCurrentContext']>>,
+  context: CurrentPlanningContext,
   result: AssistantTurnResult
 ): AssistantConversationSummary {
   const lockedMealDates = [...new Set(
@@ -164,10 +166,6 @@ function buildSummary(
   };
 }
 
-type PlanningContext = Awaited<
-  ReturnType<AssistantPlanningContextPort['getCurrentContext']>
->;
-
 interface FinalizedAssistantTurn {
   readonly conversationVersion: number;
   readonly result: AssistantTurnResult;
@@ -175,7 +173,7 @@ interface FinalizedAssistantTurn {
 
 function finalizeTurnTransition(
   state: PlanningAggregateState,
-  context: PlanningContext,
+  context: CurrentPlanningContext,
   turnId: string,
   result: AssistantTurnResult,
   completedAt: string,
@@ -244,7 +242,7 @@ function finalizeTurnTransition(
 export function createAssistantConversationService(
   dependencies: AssistantConversationServiceDependencies
 ): AssistantConversationService {
-  const { repository, planning, now, nextId } = dependencies;
+  const { repository, now, nextId } = dependencies;
   return {
     async getConversation(userId) {
       return (await repository.read(userId)).assistantConversation;
@@ -355,12 +353,11 @@ export function createAssistantConversationService(
     },
 
     async finalizeTurn(userId, turnId, result) {
-      const context = await planning.getCurrentContext(userId);
       const completedAt = now();
       return repository.transact(userId, (state) => {
         const transition = finalizeTurnTransition(
           state,
-          context,
+          currentPlanningContextFromState(state),
           turnId,
           result,
           completedAt,
@@ -372,12 +369,11 @@ export function createAssistantConversationService(
     },
 
     async finalizeReceivedTurn(userId, turnId, result) {
-      const context = await planning.getCurrentContext(userId);
       const completedAt = now();
       return repository.transact(userId, (state) => {
         const transition = finalizeTurnTransition(
           state,
-          context,
+          currentPlanningContextFromState(state),
           turnId,
           result,
           completedAt,

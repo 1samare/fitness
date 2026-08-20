@@ -250,6 +250,7 @@ const assistantTurnCompletedDataSchema = z.object({
 export const assistantApiErrorCodeSchema = z.enum([
   'invalid_request',
   'unauthenticated',
+  'account_deletion_pending',
   'conversation_version_conflict',
   'conversation_busy',
   'model_output_invalid',

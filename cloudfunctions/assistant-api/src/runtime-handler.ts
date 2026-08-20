@@ -6,8 +6,10 @@ import type {
   FitnessAssistantAgentDependencies
 } from '@fitness/agent';
 import {
+  createAccountDeletionGuardedRepository,
   createMealPlanRecalculationService,
-  type MealPlanningProviders
+  type MealPlanningProviders,
+  type PlanningRepository
 } from '@fitness/application';
 import type { AssistantApiResponse } from '@fitness/contracts';
 import { InMemoryPlanningRepository } from '@fitness/persistence';
@@ -108,6 +110,7 @@ export interface LocalRuntimeAssistantHandlerOptions {
   readonly now?: (() => string) | undefined;
   readonly nextId?: ((prefix: string) => string) | undefined;
   readonly provider?: AssistantLanguageModelProvider | undefined;
+  readonly repository?: PlanningRepository | undefined;
   readonly createAgent?: ((
     dependencies: FitnessAssistantAgentDependencies
   ) => FitnessAssistantAgent) | undefined;
@@ -119,7 +122,8 @@ export function createRuntimeAssistantHandler(
   input: unknown,
   context?: TrustedAssistantRequestContext
 ) => Promise<AssistantApiResponse> {
-  const repository = new InMemoryPlanningRepository();
+  const rawRepository = options.repository ?? new InMemoryPlanningRepository();
+  const repository = createAccountDeletionGuardedRepository(rawRepository);
   const now = options.now ?? (() => new Date().toISOString());
   const nextId = options.nextId ?? ((prefix: string) => `${prefix}-${randomUUID()}`);
   const planning = createMealPlanRecalculationService({

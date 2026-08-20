@@ -254,4 +254,15 @@ describe('assistant API contracts', () => {
       }
     }).success).toBe(false);
   });
+
+  test('accepts the stable account deletion pending error', () => {
+    expect(assistantApiResponseSchema.safeParse({
+      success: false,
+      error: {
+        code: 'account_deletion_pending',
+        message: '账户正在删除，请重试删除操作或联系隐私支持。',
+        recoveryAction: 'retry'
+      }
+    }).success).toBe(true);
+  });
 });
