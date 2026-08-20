@@ -83,6 +83,16 @@ function completed(
   };
 }
 
+function failed(
+  code: 'conversation_version_conflict' | 'conversation_busy',
+  message: string
+): AssistantApiResponse {
+  return {
+    success: false,
+    error: { code, message, recoveryAction: 'retry' }
+  };
+}
+
 function pageInstance(): PageInstance {
   if (registeredPage === undefined) throw new Error('Page was not registered');
   return {
@@ -189,6 +199,76 @@ describe('assistant page controller', () => {
     expect(page.data.showMealPlanRecovery).toBe(true);
   });
 
+  it('refreshes a version conflict and waits for an explicit send with a new envelope', async () => {
+    assistantResponses.push(
+      failed('conversation_version_conflict', '对话已更新，请刷新后重试。'),
+      conversation(2),
+      completed(3),
+      conversation(3)
+    );
+    const page = pageInstance();
+    const message = '把 2026-08-21 的训练移到 2026-08-22';
+    page.onMessageInput.call(page, { detail: { value: message } });
+
+    await page.onSend.call(page);
+
+    const firstSend = assistantCalls[0];
+    expect(assistantCalls.map((request) => request.action)).toEqual([
+      'sendAssistantMessage', 'getAssistantConversation'
+    ]);
+    expect(storage.has('fitness.pendingAssistantCommand.v1')).toBe(false);
+    expect(page.data).toMatchObject({
+      conversationVersion: 2,
+      messageInput: message,
+      showRetryRecovery: false
+    });
+    expect(String(page.data.errorMessage)).toContain('核对后重新发送');
+
+    await page.onSend.call(page);
+
+    const secondSend = assistantCalls[2];
+    expect(firstSend).toMatchObject({
+      action: 'sendAssistantMessage', payload: { expectedVersion: 0, message }
+    });
+    expect(secondSend).toMatchObject({
+      action: 'sendAssistantMessage', payload: { expectedVersion: 2, message }
+    });
+    if (firstSend?.action !== 'sendAssistantMessage'
+      || secondSend?.action !== 'sendAssistantMessage') {
+      throw new Error('Expected two assistant send requests');
+    }
+    expect(secondSend.payload.idempotencyKey).not.toBe(firstSend.payload.idempotencyKey);
+  });
+
+  it('reads and compares the server pending turn before recovering a busy response', async () => {
+    const otherPending = {
+      expectedVersion: 0,
+      idempotencyKey: 'assistant-message-other-device',
+      message: '另一设备的原请求'
+    };
+    assistantResponses.push(
+      failed('conversation_busy', '上一条助手操作仍在处理中。'),
+      conversation(0, otherPending)
+    );
+    const page = pageInstance();
+    const message = '把 2026-08-21 的训练移到 2026-08-22';
+    page.onMessageInput.call(page, { detail: { value: message } });
+
+    await page.onSend.call(page);
+
+    expect(assistantCalls.map((request) => request.action)).toEqual([
+      'sendAssistantMessage', 'getAssistantConversation'
+    ]);
+    expect(storage.has('fitness.pendingAssistantCommand.v1')).toBe(false);
+    expect(page.data).toMatchObject({
+      messageInput: message,
+      showRetryRecovery: false,
+      showTrainingPlanRecovery: true,
+      showMealPlanRecovery: true
+    });
+    expect(String(page.data.errorMessage)).toContain('另一设备');
+  });
+
   it('navigates only to the fixed structured recovery pages', () => {
     const page = pageInstance();
 
@@ -213,6 +293,7 @@ describe('assistant page controller', () => {
     expect(wxml).toContain('0.5–1.5 倍');
     expect(wxml).toContain('maxlength="2000"');
     expect(wxml).toContain('disabled="{{sending || loadingConversation}}"');
+    expect(wxml).toContain('wx:key="messageKey"');
     expect(wxml).not.toMatch(/<rich-text|bindtap="onExample|provider|model|toolChoice|工具选择/);
     const appConfig: unknown = JSON.parse(appJson);
     const pages = typeof appConfig === 'object'

@@ -171,6 +171,69 @@ describe('validateAssistantModelOutput', () => {
   });
 
   it.each([
+    {
+      name: 'a replacement dish while the business date is absent',
+      message: '把午餐换成番茄牛肉',
+      raw: {
+        kind: 'clarify',
+        intent: 'replace_meal',
+        missingFields: ['business_date']
+      },
+      pendingClarification: {
+        intent: 'replace_meal',
+        businessDate: null,
+        slot: 'lunch',
+        dishNameZh: '番茄牛肉',
+        missingFields: ['business_date']
+      }
+    },
+    {
+      name: 'ambiguous training dates omitted by the model missing list',
+      message: '2026-08-24 和 2026-08-25 哪天是原训练日？',
+      raw: {
+        kind: 'clarify',
+        intent: 'move_training_day',
+        missingFields: ['target_date']
+      },
+      pendingClarification: {
+        intent: 'move_training_day',
+        sourceDate: null,
+        targetDate: null,
+        missingFields: ['source_date', 'target_date']
+      }
+    },
+    {
+      name: 'ambiguous multipliers omitted by the model missing list',
+      message: '把午餐调成 1 倍还是 1.2 倍？',
+      raw: {
+        kind: 'clarify',
+        intent: 'resize_meal_portion',
+        missingFields: ['business_date']
+      },
+      pendingClarification: {
+        intent: 'resize_meal_portion',
+        businessDate: null,
+        slot: 'lunch',
+        multiplier: null,
+        missingFields: ['business_date', 'multiplier']
+      }
+    }
+  ])('derives a schema-safe pending clarification for $name', ({
+    message,
+    raw,
+    pendingClarification
+  }) => {
+    expect(validateAssistantModelOutput(JSON.stringify(raw), {
+      latestMessage: message,
+      pendingClarification: null
+    })).toEqual({
+      kind: 'clarify',
+      missingFields: pendingClarification.missingFields,
+      pendingClarification
+    });
+  });
+
+  it.each([
     ['userId', 'victim'],
     ['tool', 'drop_database'],
     ['url', 'https://example.invalid'],

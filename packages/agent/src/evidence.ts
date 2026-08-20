@@ -150,10 +150,52 @@ function explicitMultipliers(message: string): number[] {
   return unique(candidates.filter((value): value is number => value !== null));
 }
 
+function explicitDishNames(message: string): string[] {
+  const candidates = Array.from(
+    message.matchAll(/(?:换成|换为)([^，。！？,!？\r\n]{1,120})(?:[，。！？,!？\r\n]|$)/g),
+    (match) => match[1]?.trim() ?? ''
+  );
+  return unique(candidates.filter((value) => value.length > 0 && value.length <= 120));
+}
+
+function moveMissingFields(input: {
+  readonly sourceDate: string | null;
+  readonly targetDate: string | null;
+}): ('source_date' | 'target_date')[] {
+  return [
+    ...(input.sourceDate === null ? ['source_date' as const] : []),
+    ...(input.targetDate === null ? ['target_date' as const] : [])
+  ];
+}
+
+function replaceMissingFields(input: {
+  readonly businessDate: string | null;
+  readonly slot: MealSlot | null;
+  readonly dishNameZh: string | null;
+}): ('business_date' | 'meal_slot' | 'dish_name')[] {
+  return [
+    ...(input.businessDate === null ? ['business_date' as const] : []),
+    ...(input.slot === null ? ['meal_slot' as const] : []),
+    ...(input.dishNameZh === null ? ['dish_name' as const] : [])
+  ];
+}
+
+function resizeMissingFields(input: {
+  readonly businessDate: string | null;
+  readonly slot: MealSlot | null;
+  readonly multiplier: number | null;
+}): ('business_date' | 'meal_slot' | 'multiplier')[] {
+  return [
+    ...(input.businessDate === null ? ['business_date' as const] : []),
+    ...(input.slot === null ? ['meal_slot' as const] : []),
+    ...(input.multiplier === null ? ['multiplier' as const] : [])
+  ];
+}
+
 function pendingForClarification(
   decision: Extract<RawAssistantDecision, { readonly kind: 'clarify' }>,
   context: AssistantEvidenceContext
-): AssistantPendingClarification {
+): AssistantPendingClarification | null {
   const previous = context.pendingClarification?.intent === decision.intent
     ? context.pendingClarification
     : null;
@@ -165,28 +207,34 @@ function pendingForClarification(
       ?? (!decision.missingFields.includes('source_date') && dates.length === 1 ? dates[0] ?? null : null);
     const targetDate = prior?.targetDate
       ?? (!decision.missingFields.includes('target_date') && dates.length === 1 ? dates[0] ?? null : null);
-    return {
+    const values = {
       intent: decision.intent,
       sourceDate,
-      targetDate,
-      missingFields: unique(decision.missingFields)
+      targetDate
     };
+    const missingFields = moveMissingFields(values);
+    return missingFields.length === 0 ? null : { ...values, missingFields };
   }
   if (decision.intent === 'replace_meal') {
     const prior = previous?.intent === decision.intent ? previous : null;
-    return {
+    const dishes = explicitDishNames(context.latestMessage);
+    const values = {
       intent: decision.intent,
       businessDate: prior?.businessDate
         ?? (!decision.missingFields.includes('business_date') && dates.length === 1 ? dates[0] ?? null : null),
       slot: prior?.slot
         ?? (!decision.missingFields.includes('meal_slot') && slots.length === 1 ? slots[0] ?? null : null),
-      dishNameZh: prior?.dishNameZh ?? null,
-      missingFields: unique(decision.missingFields)
+      dishNameZh: prior?.dishNameZh
+        ?? (!decision.missingFields.includes('dish_name') && dishes.length === 1
+          ? dishes[0] ?? null
+          : null)
     };
+    const missingFields = replaceMissingFields(values);
+    return missingFields.length === 0 ? null : { ...values, missingFields };
   }
   const prior = previous?.intent === decision.intent ? previous : null;
   const multipliers = explicitMultipliers(context.latestMessage);
-  return {
+  const values = {
     intent: decision.intent,
     businessDate: prior?.businessDate
       ?? (!decision.missingFields.includes('business_date') && dates.length === 1 ? dates[0] ?? null : null),
@@ -195,9 +243,10 @@ function pendingForClarification(
     multiplier: prior?.multiplier
       ?? (!decision.missingFields.includes('multiplier') && multipliers.length === 1
         ? multipliers[0] ?? null
-        : null),
-    missingFields: unique(decision.missingFields)
+        : null)
   };
+  const missingFields = resizeMissingFields(values);
+  return missingFields.length === 0 ? null : { ...values, missingFields };
 }
 
 function validateCommand(
@@ -281,9 +330,13 @@ export function validateAssistantModelOutput(
   if (parsed.data.kind === 'reject') {
     return { kind: 'reject', reason: parsed.data.reason };
   }
+  const pendingClarification = pendingForClarification(parsed.data, context);
+  if (pendingClarification === null) {
+    return { kind: 'invalid', feedback: 'unsupported_parameter' };
+  }
   return {
     kind: 'clarify',
-    missingFields: unique(parsed.data.missingFields),
-    pendingClarification: pendingForClarification(parsed.data, context)
+    missingFields: pendingClarification.missingFields,
+    pendingClarification
   };
 }

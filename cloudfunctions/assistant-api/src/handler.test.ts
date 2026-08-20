@@ -76,10 +76,19 @@ function dependencies(beginResult?: BeginAssistantTurnResult) {
     authorizeCommand,
     finalizeTurn
   };
-  const execute = vi.fn(() => Promise.resolve({
-    command: command.kind,
-    message: executed.message
-  }));
+  const execute = vi.fn((
+    _userId: string,
+    _command: AssistantValidatedCommand,
+    _idempotencyKey: string
+  ) => {
+    void _userId;
+    void _command;
+    void _idempotencyKey;
+    return Promise.resolve({
+      command: command.kind,
+      message: executed.message
+    });
+  });
   const commands: PlanningAssistantCommandService = {
     execute
   };
@@ -234,32 +243,70 @@ describe('assistant API handler', () => {
     expect(replayedDeps.finalizeTurn).not.toHaveBeenCalled();
   });
 
-  it('finalizes an unexpected Agent exception as a fixed internal failure', async () => {
+  it('returns a fixed retryable error without finalizing an unexpected Agent exception', async () => {
     const deps = dependencies();
     deps.invoke.mockRejectedValueOnce(new Error('secret stack and body'));
     const response = await createAssistantApiHandler(deps)(sendRequest, {
       userId: 'trusted-user'
     });
-    const failure: AssistantTurnResult = {
-      kind: 'assistant_unavailable',
-      reason: 'internal_error',
-      message: '助手操作未完成，请稍后重试或使用结构化页面。',
-      recoveryAction: 'retry'
-    };
     expect(response).toEqual({
-      success: true,
-      data: {
-        kind: 'assistant_turn_completed',
-        conversationVersion: 1,
-        result: failure
+      success: false,
+      error: {
+        code: 'internal_error',
+        message: '助手服务暂时不可用，请稍后重试。',
+        recoveryAction: 'retry'
       }
     });
-    expect(deps.finalizeTurn).toHaveBeenCalledWith(
-      'trusted-user',
-      receivedTurn.turnId,
-      failure
-    );
+    expect(deps.finalizeTurn).not.toHaveBeenCalled();
     expect(JSON.stringify(response)).not.toMatch(/secret|stack|body/i);
+  });
+
+  it('replays one validated domain command after a committed response is lost', async () => {
+    const deps = dependencies();
+    deps.beginTurn
+      .mockResolvedValueOnce({
+        kind: 'received',
+        turn: receivedTurn,
+        messages: [],
+        summary: emptyAssistantConversationState().summary
+      })
+      .mockResolvedValueOnce({
+        kind: 'validated',
+        turn: { ...receivedTurn, status: 'validated', command }
+      });
+    let committedWrites = 0;
+    deps.execute
+      .mockImplementationOnce(() => {
+        committedWrites += 1;
+        return Promise.reject(new Error('response lost after commit'));
+      })
+      .mockImplementationOnce(() => Promise.resolve({
+        command: command.kind,
+        message: executed.message
+      }));
+    const handler = createAssistantApiHandler(deps);
+
+    await expect(handler(sendRequest, { userId: 'trusted-user' }))
+      .resolves.toMatchObject({ success: false, error: { code: 'internal_error' } });
+    expect(committedWrites).toBe(1);
+    expect(deps.finalizeTurn).not.toHaveBeenCalled();
+
+    await expect(handler(sendRequest, { userId: 'trusted-user' }))
+      .resolves.toEqual({
+        success: true,
+        data: {
+          kind: 'assistant_turn_completed',
+          conversationVersion: 1,
+          result: executed
+        }
+      });
+    expect(deps.execute).toHaveBeenCalledTimes(2);
+    expect(deps.execute.mock.calls.map((call) => call[2])).toEqual([
+      'assistant-domain-assistant-turn-0001',
+      'assistant-domain-assistant-turn-0001'
+    ]);
+    expect(deps.authorizeCommand).toHaveBeenCalledOnce();
+    expect(deps.finalizeTurn).toHaveBeenCalledOnce();
   });
 
   it.each([

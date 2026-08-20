@@ -66,6 +66,24 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+const transientTransportCodes = new Set([
+  'ETIMEDOUT',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'EAI_AGAIN',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_SOCKET'
+]);
+
+function isAllowlistedTransientTransportError(error: unknown): boolean {
+  if (!isRecord(error)) return false;
+  const code = error.code;
+  return typeof code === 'string' && transientTransportCodes.has(code.toUpperCase());
+}
+
 function safeRequestId(rawResponses: readonly unknown[] | undefined): string | undefined {
   for (const response of rawResponses ?? []) {
     if (!isRecord(response)) continue;
@@ -128,7 +146,9 @@ export class CloudBaseLanguageModelBackend implements AssistantLanguageModelBack
       });
     } catch (error: unknown) {
       if (error instanceof LanguageModelBackendError) throw error;
-      throw new LanguageModelBackendError('transport_unavailable', true);
+      throw isAllowlistedTransientTransportError(error)
+        ? new LanguageModelBackendError('transport_unavailable', true)
+        : new LanguageModelBackendError('supplier_error', false);
     }
     const parsed = responseEnvelopeSchema.safeParse(response);
     if (!parsed.success) {

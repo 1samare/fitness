@@ -109,7 +109,7 @@ describe('CloudBaseLanguageModelBackend', () => {
     await expect(backend.generate(modelInput)).resolves.toEqual({ rawText: '{}' });
   });
 
-  it('maps model rejections to a stable transient transport error', async () => {
+  it('fails closed on an unclassified model rejection without retrying it as transport', async () => {
     const model: CloudBaseTextModel = {
       generateText: () => Promise.reject(new Error('API key=secret'))
     };
@@ -122,9 +122,32 @@ describe('CloudBaseLanguageModelBackend', () => {
     expect(error).toBeInstanceOf(LanguageModelBackendError);
     expect(error).toMatchObject({
       code: 'provider_unavailable',
+      reason: 'supplier_error',
+      transient: false
+    });
+    expect(String(error)).not.toContain('API key=secret');
+  });
+
+  it.each([
+    'ETIMEDOUT',
+    'ECONNRESET',
+    'EAI_AGAIN',
+    'UND_ERR_CONNECT_TIMEOUT'
+  ])('classifies only the allowlisted transport code %s as transient', async (code) => {
+    const supplierError = Object.assign(new Error('supplier secret'), { code });
+    const model: CloudBaseTextModel = {
+      generateText: () => Promise.reject(supplierError)
+    };
+    const backend = new CloudBaseLanguageModelBackend({
+      providerId: 'cloudbase',
+      modelName: 'deepseek-v4-flash',
+      model
+    });
+
+    await expect(backend.generate(modelInput)).rejects.toMatchObject({
+      code: 'provider_unavailable',
       reason: 'transport_unavailable',
       transient: true
     });
-    expect(String(error)).not.toContain('API key=secret');
   });
 });

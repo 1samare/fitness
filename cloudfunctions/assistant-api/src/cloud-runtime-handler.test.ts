@@ -135,6 +135,6 @@ describe('cloud assistant runtime', () => {
       }
     });
     expect(createModel).toHaveBeenCalledOnce();
-    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(generateText).toHaveBeenCalledOnce();
   });
 });

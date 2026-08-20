@@ -161,13 +161,6 @@ function completed(
   });
 }
 
-const internalFailure: AssistantTurnResult = {
-  kind: 'assistant_unavailable',
-  reason: 'internal_error',
-  message: '助手操作未完成，请稍后重试或使用结构化页面。',
-  recoveryAction: 'retry'
-};
-
 function mappedError(error: unknown): AssistantApiResponse {
   if (error instanceof AssistantConversationVersionConflictError) {
     return errorResponse(
@@ -241,32 +234,27 @@ export function createAssistantApiHandler(
         ));
       }
       const turn = begun.turn;
-      let result: AssistantTurnResult;
-      try {
-        result = await dependencies.agent.invoke({
-          requestId: `${turn.turnId}-model`,
-          latestMessage: turn.message,
-          recentMessages: begun.kind === 'received' ? begun.messages : [],
-          summary: begun.kind === 'received'
-            ? begun.summary
-            : (await dependencies.conversation.getConversation(context.userId)).summary,
-          ...(begun.kind === 'validated'
-            ? { authoritativeCommand: begun.turn.command }
-            : {}),
-          authorizeCommand: (candidate) => dependencies.conversation.authorizeCommand(
-            context.userId,
-            turn.turnId,
-            candidate
-          ),
-          executeCommand: (authoritative) => dependencies.commands.execute(
-            context.userId,
-            authoritative,
-            `assistant-domain-${turn.turnId}`
-          )
-        });
-      } catch {
-        result = internalFailure;
-      }
+      const result = await dependencies.agent.invoke({
+        requestId: `${turn.turnId}-model`,
+        latestMessage: turn.message,
+        recentMessages: begun.kind === 'received' ? begun.messages : [],
+        summary: begun.kind === 'received'
+          ? begun.summary
+          : (await dependencies.conversation.getConversation(context.userId)).summary,
+        ...(begun.kind === 'validated'
+          ? { authoritativeCommand: begun.turn.command }
+          : {}),
+        authorizeCommand: (candidate) => dependencies.conversation.authorizeCommand(
+          context.userId,
+          turn.turnId,
+          candidate
+        ),
+        executeCommand: (authoritative) => dependencies.commands.execute(
+          context.userId,
+          authoritative,
+          `assistant-domain-${turn.turnId}`
+        )
+      });
       const finalized = await dependencies.conversation.finalizeTurn(
         context.userId,
         turn.turnId,

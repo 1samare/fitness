@@ -19,6 +19,7 @@ export const ASSISTANT_CAPABILITY_EXAMPLES = [
 ] as const;
 
 export interface AssistantMessageViewModel {
+  readonly messageKey: string;
   readonly turnId: string;
   readonly role: 'user' | 'assistant';
   readonly roleLabel: '你' | '助手';
@@ -37,6 +38,7 @@ export function createAssistantConversationViewModel(
   return {
     conversationVersion: conversation.conversationVersion,
     messages: conversation.messages.slice(-12).map((message) => ({
+      messageKey: `${message.turnId}:${message.role}`,
       turnId: message.turnId,
       role: message.role,
       roleLabel: message.role === 'user' ? '你' : '助手',

@@ -162,10 +162,28 @@ function unavailableResult(reason: Exclude<TerminalFailure, null>): AssistantTur
       };
 }
 
-function rejectedExecution(error: unknown): AssistantTurnResult {
+const terminalCommandRejections = new Set([
+  'planning_context_unavailable',
+  'same_training_date',
+  'training_date_outside_active_week',
+  'past_fact_immutable',
+  'source_training_session_missing',
+  'target_training_session_occupied',
+  'recipe_not_selectable',
+  'recipe_name_ambiguous',
+  'nutrition_constraints_infeasible'
+]);
+
+function rejectedExecution(error: unknown): AssistantTurnResult | null {
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? (error as { readonly code?: unknown }).code
+    : null;
   const reason = typeof error === 'object' && error !== null && 'reason' in error
     ? (error as { readonly reason?: unknown }).reason
     : null;
+  if (code !== 'assistant_command_rejected'
+    || typeof reason !== 'string'
+    || !terminalCommandRejections.has(reason)) return null;
   if (reason === 'nutrition_constraints_infeasible') {
     return {
       kind: 'command_rejected',
@@ -296,7 +314,9 @@ export function createFitnessAssistantAgent(
           }
         };
       } catch (error: unknown) {
-        return { result: rejectedExecution(error) };
+        const rejected = rejectedExecution(error);
+        if (rejected === null) throw error;
+        return { result: rejected };
       }
     });
 

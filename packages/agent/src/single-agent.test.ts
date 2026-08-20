@@ -247,6 +247,69 @@ describe('createFitnessAssistantAgent', () => {
     expect(dependencies.executeCommand).toHaveBeenCalledWith(authorized);
   });
 
+  it.each([
+    ['an unknown execution failure', new Error('committed response was lost')],
+    ['a retryable Provider rejection', {
+      code: 'assistant_command_rejected',
+      reason: 'provider_unavailable'
+    }],
+    ['a retryable version conflict', {
+      code: 'assistant_command_rejected',
+      reason: 'version_conflict'
+    }]
+  ])('propagates %s so the validated turn remains recoverable', async (_name, failure) => {
+    const provider = providerWith();
+    const dependencies = createInvocationDependencies();
+    dependencies.executeCommand.mockRejectedValueOnce(failure);
+    const agent = createFitnessAssistantAgent({ provider });
+    const authoritativeCommand: AssistantValidatedCommand = {
+      kind: 'resize_meal_portion',
+      businessDate: '2026-08-26',
+      slot: 'dinner',
+      multiplier: 1.1
+    };
+
+    await expect(agent.invoke({
+      requestId,
+      latestMessage: 'ignored during recovery',
+      recentMessages: [],
+      summary,
+      authoritativeCommand,
+      ...dependencies
+    })).rejects.toBe(failure);
+    expect(provider.inputs).toHaveLength(0);
+    expect(dependencies.executeCommand).toHaveBeenCalledOnce();
+  });
+
+  it('terminalizes only a known deterministic command rejection', async () => {
+    const provider = providerWith();
+    const dependencies = createInvocationDependencies();
+    dependencies.executeCommand.mockRejectedValueOnce({
+      code: 'assistant_command_rejected',
+      reason: 'nutrition_constraints_infeasible'
+    });
+    const agent = createFitnessAssistantAgent({ provider });
+
+    await expect(agent.invoke({
+      requestId,
+      latestMessage: 'ignored during recovery',
+      recentMessages: [],
+      summary,
+      authoritativeCommand: {
+        kind: 'resize_meal_portion',
+        businessDate: '2026-08-26',
+        slot: 'dinner',
+        multiplier: 1.1
+      },
+      ...dependencies
+    })).resolves.toEqual({
+      kind: 'command_rejected',
+      reason: 'nutrition_constraints_infeasible',
+      message: '该修改无法同时满足营养、库存和安全约束。',
+      recoveryAction: 'review_meal_plan_changes'
+    });
+  });
+
   it('returns deterministic clarification and rejection results', async () => {
     const clarifyProvider = providerWith(JSON.stringify({
       kind: 'clarify',

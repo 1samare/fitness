@@ -29,7 +29,7 @@
     </view>
     <view wx:if="{{loadingConversation && messages.length === 0}}" class="empty-state" aria-live="polite">正在读取安全会话…</view>
     <view wx:elif="{{messages.length === 0}}" class="empty-state">还没有消息。请按上方格式描述一个修改。</view>
-    <view wx:for="{{messages}}" wx:key="turnId" class="message message--{{item.role}}">
+    <view wx:for="{{messages}}" wx:key="messageKey" class="message message--{{item.role}}">
       <text class="message__role">{{item.roleLabel}}</text>
       <text class="message__content" selectable="true">{{item.content}}</text>
     </view>

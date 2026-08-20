@@ -25,6 +25,7 @@ type AssistantTurnData = Extract<
   AssistantSuccessData,
   { kind: 'assistant_turn_completed' }
 >;
+type AssistantFailure = Extract<AssistantApiResponse, { success: false }>;
 
 interface TextValueEvent { readonly detail: { readonly value: string } }
 
@@ -141,6 +142,68 @@ async function refreshPlanningContext(): Promise<void> {
   }
 }
 
+async function reconcileLifecycleError(
+  page: AssistantPageContext,
+  pending: PendingAssistantCommand,
+  error: AssistantFailure['error']
+): Promise<void> {
+  wx.removeStorageSync(pendingAssistantCommandStorageKey);
+  page.setData({
+    messageInput: pending.message,
+    lastSubmittedMessage: '',
+    showRetryRecovery: false,
+    showTrainingPlanRecovery: false,
+    showMealPlanRecovery: false
+  });
+  let response: AssistantApiResponse;
+  try {
+    response = await assistantApiClient.call({ action: 'getAssistantConversation' });
+  } catch {
+    page.setData({
+      errorMessage: '无法刷新助手会话；原文已保留在输入框，请刷新后核对。',
+      showRetryRecovery: true
+    });
+    return;
+  }
+  if (!response.success) {
+    page.setData({
+      errorMessage: `${response.error.message} 原文已保留在输入框，请刷新后核对。`,
+      showRetryRecovery: true
+    });
+    return;
+  }
+  if (response.data.kind !== 'assistant_conversation') {
+    page.setData({
+      errorMessage: '助手会话读取未确认；原文已保留在输入框，请刷新后核对。',
+      showRetryRecovery: true
+    });
+    return;
+  }
+  applyConversation(page, response.data);
+  const serverPending = response.data.pendingTurn;
+  if (serverPending !== null && pendingAssistantCommandMatches(pending, serverPending)) {
+    wx.setStorageSync(pendingAssistantCommandStorageKey, pending);
+    page.setData({
+      errorMessage: '服务端已接收原请求，可安全重试同一请求。',
+      showRetryRecovery: true
+    });
+    return;
+  }
+  if (serverPending !== null) {
+    page.setData({
+      errorMessage: '另一设备有不同的助手请求正在处理；已保留本机原文，请先核对当前计划。',
+      showTrainingPlanRecovery: true,
+      showMealPlanRecovery: true
+    });
+    return;
+  }
+  page.setData({
+    errorMessage: error.code === 'conversation_version_conflict'
+      ? '会话已更新；原文已保留，请核对后重新发送。'
+      : '上一条操作状态已变化；原文已保留，请核对后重新发送。'
+  });
+}
+
 async function submitPending(
   page: AssistantPageContext,
   pending: PendingAssistantCommand
@@ -160,6 +223,11 @@ async function submitPending(
       payload: pending
     });
     if (!response.success) {
+      if (response.error.code === 'conversation_version_conflict'
+        || response.error.code === 'conversation_busy') {
+        await reconcileLifecycleError(page, pending, response.error);
+        return;
+      }
       page.setData({ errorMessage: response.error.message });
       setRecovery(page, response.error.recoveryAction);
       return;
