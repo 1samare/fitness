@@ -8,6 +8,7 @@ import type {
   AssistantValidatedTurn,
   LatestPlanningVersions,
   MealPlanDay,
+  PlanningAggregateState,
   TrainingPlanPayload
 } from '@fitness/domain';
 import { requestFingerprint } from './idempotency-fingerprint';
@@ -118,6 +119,14 @@ export interface AssistantConversationService {
     readonly conversationVersion: number;
     readonly result: AssistantTurnResult;
   }>;
+  finalizeReceivedTurn(
+    userId: string,
+    turnId: string,
+    result: AssistantTurnResult
+  ): Promise<{
+    readonly conversationVersion: number;
+    readonly result: AssistantTurnResult;
+  } | null>;
 }
 
 function turnFingerprint(input: BeginAssistantTurnInput): string {
@@ -152,6 +161,83 @@ function buildSummary(
     pendingClarification: result.kind === 'clarification_required'
       ? result.pendingClarification
       : null
+  };
+}
+
+type PlanningContext = Awaited<
+  ReturnType<AssistantPlanningContextPort['getCurrentContext']>
+>;
+
+interface FinalizedAssistantTurn {
+  readonly conversationVersion: number;
+  readonly result: AssistantTurnResult;
+}
+
+function finalizeTurnTransition(
+  state: PlanningAggregateState,
+  context: PlanningContext,
+  turnId: string,
+  result: AssistantTurnResult,
+  completedAt: string,
+  receivedOnly: boolean
+): {
+  readonly nextState: PlanningAggregateState;
+  readonly result: FinalizedAssistantTurn;
+} | null {
+  const conversation = state.assistantConversation;
+  const existing = conversation.recentReceipts.find(
+    (receipt) => receipt.turnId === turnId
+  );
+  if (existing !== undefined) {
+    return {
+      nextState: state,
+      result: {
+        conversationVersion: existing.conversationVersion,
+        result: existing.result
+      }
+    };
+  }
+  const pending = conversation.pendingTurn;
+  if (pending === null || pending.turnId !== turnId) {
+    throw new AssistantTurnNotPendingError();
+  }
+  if (receivedOnly && pending.status !== 'received') return null;
+  const conversationVersion = conversation.version + 1;
+  const messages: readonly AssistantConversationMessage[] = [
+    ...conversation.recentMessages,
+    {
+      turnId,
+      role: 'user',
+      content: pending.message,
+      createdAt: pending.startedAt
+    },
+    {
+      turnId,
+      role: 'assistant',
+      content: result.message,
+      createdAt: completedAt
+    }
+  ];
+  const receipt = {
+    turnId,
+    idempotencyKey: pending.idempotencyKey,
+    requestFingerprint: pending.requestFingerprint,
+    conversationVersion,
+    completedAt,
+    result
+  };
+  return {
+    nextState: {
+      ...state,
+      assistantConversation: {
+        version: conversationVersion,
+        recentMessages: messages.slice(-12),
+        summary: buildSummary(context, result),
+        pendingTurn: null,
+        recentReceipts: [...conversation.recentReceipts, receipt].slice(-32)
+      }
+    },
+    result: { conversationVersion, result }
   };
 }
 
@@ -272,60 +358,32 @@ export function createAssistantConversationService(
       const context = await planning.getCurrentContext(userId);
       const completedAt = now();
       return repository.transact(userId, (state) => {
-        const conversation = state.assistantConversation;
-        const existing = conversation.recentReceipts.find(
-          (receipt) => receipt.turnId === turnId
-        );
-        if (existing !== undefined) {
-          return {
-            nextState: state,
-            result: {
-              conversationVersion: existing.conversationVersion,
-              result: existing.result
-            }
-          };
-        }
-        const pending = conversation.pendingTurn;
-        if (pending === null || pending.turnId !== turnId) {
-          throw new AssistantTurnNotPendingError();
-        }
-        const conversationVersion = conversation.version + 1;
-        const messages: readonly AssistantConversationMessage[] = [
-          ...conversation.recentMessages,
-          {
-            turnId,
-            role: 'user',
-            content: pending.message,
-            createdAt: pending.startedAt
-          },
-          {
-            turnId,
-            role: 'assistant',
-            content: result.message,
-            createdAt: completedAt
-          }
-        ];
-        const receipt = {
+        const transition = finalizeTurnTransition(
+          state,
+          context,
           turnId,
-          idempotencyKey: pending.idempotencyKey,
-          requestFingerprint: pending.requestFingerprint,
-          conversationVersion,
+          result,
           completedAt,
-          result
-        };
-        return {
-          nextState: {
-            ...state,
-            assistantConversation: {
-              version: conversationVersion,
-              recentMessages: messages.slice(-12),
-              summary: buildSummary(context, result),
-              pendingTurn: null,
-              recentReceipts: [...conversation.recentReceipts, receipt].slice(-32)
-            }
-          },
-          result: { conversationVersion, result }
-        };
+          false
+        );
+        if (transition === null) throw new AssistantTurnNotPendingError();
+        return transition;
+      });
+    },
+
+    async finalizeReceivedTurn(userId, turnId, result) {
+      const context = await planning.getCurrentContext(userId);
+      const completedAt = now();
+      return repository.transact(userId, (state) => {
+        const transition = finalizeTurnTransition(
+          state,
+          context,
+          turnId,
+          result,
+          completedAt,
+          true
+        );
+        return transition ?? { nextState: state, result: null };
       });
     }
   };

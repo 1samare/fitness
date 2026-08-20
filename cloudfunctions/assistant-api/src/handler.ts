@@ -276,14 +276,12 @@ export function createAssistantApiHandler(
     } catch (error: unknown) {
       if (activeTurnId !== undefined) {
         try {
-          const conversation = await dependencies.conversation.getConversation(context.userId);
-          if (conversation.pendingTurn?.turnId === activeTurnId
-            && conversation.pendingTurn.status === 'received') {
-            const finalized = await dependencies.conversation.finalizeTurn(
-              context.userId,
-              activeTurnId,
-              unexpectedAgentFailure
-            );
+          const finalized = await dependencies.conversation.finalizeReceivedTurn(
+            context.userId,
+            activeTurnId,
+            unexpectedAgentFailure
+          );
+          if (finalized !== null) {
             return assistantApiResponseSchema.parse(completed(
               finalized.conversationVersion,
               finalized.result

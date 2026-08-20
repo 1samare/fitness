@@ -33,6 +33,13 @@ const providerFailure: AssistantTurnResult = {
   recoveryAction: 'retry'
 };
 
+const internalFailure: AssistantTurnResult = {
+  kind: 'assistant_unavailable',
+  reason: 'internal_error',
+  message: '助手服务暂时不可用，请稍后重试或使用结构化页面。',
+  recoveryAction: 'retry'
+};
+
 function harness(repository: PlanningRepository = new InMemoryPlanningRepository()) {
   let id = 0;
   let nowIndex = 0;
@@ -254,5 +261,31 @@ describe('assistant conversation lifecycle', () => {
     await service.finalizeTurn('user-a', begun.turn.turnId, providerFailure);
     await expect(service.finalizeTurn('user-a', begun.turn.turnId, successResult))
       .resolves.toEqual({ conversationVersion: 1, result: providerFailure });
+  });
+
+  it('atomically refuses a received-only failure after concurrent authorization wins', async () => {
+    const { service } = harness();
+    const begun = await service.beginTurn('user-a', turnInput());
+    if (begun.kind !== 'received') throw new Error('expected received');
+
+    const authorization = service.authorizeCommand(
+      'user-a',
+      begun.turn.turnId,
+      movedCommand
+    );
+    const failureFinalization = service.finalizeReceivedTurn(
+      'user-a',
+      begun.turn.turnId,
+      internalFailure
+    );
+
+    await expect(authorization).resolves.toEqual(movedCommand);
+    await expect(failureFinalization).resolves.toBeNull();
+    await expect(service.finalizeTurn('user-a', begun.turn.turnId, successResult))
+      .resolves.toEqual({ conversationVersion: 1, result: successResult });
+    await expect(service.beginTurn('user-a', turnInput())).resolves.toMatchObject({
+      kind: 'replayed',
+      result: successResult
+    });
   });
 });

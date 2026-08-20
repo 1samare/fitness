@@ -8,7 +8,7 @@ import type {
   PlanningAssistantContext
 } from '@fitness/application';
 import { InMemoryPlanningRepository } from '@fitness/persistence';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createAssistantApiComposition } from './handler';
 
 const now = () => '2026-08-20T00:00:00.000Z';
@@ -117,11 +117,12 @@ describe('assistant API real composition recovery', () => {
       }
       return Promise.resolve({});
     });
+    const generateIntent = vi.fn(commandProvider.generateIntent);
     let id = 0;
     const handler = createAssistantApiComposition({
       repository,
       planning,
-      provider: commandProvider,
+      provider: { generateIntent },
       now,
       nextId: (prefix) => `${prefix}-${String(++id).padStart(4, '0')}`
     });
@@ -147,6 +148,7 @@ describe('assistant API real composition recovery', () => {
       }
     });
     expect(saveAttempts).toBe(2);
+    expect(generateIntent).toHaveBeenCalledOnce();
     expect(committedKeys).toEqual(new Set(['assistant-domain-assistant-turn-0001']));
   });
 });

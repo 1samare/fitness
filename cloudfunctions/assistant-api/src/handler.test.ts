@@ -70,11 +70,22 @@ function dependencies(beginResult?: BeginAssistantTurnResult) {
       conversationVersion: 1,
       result
     }));
+  const finalizeReceivedTurn = vi.fn((
+    _userId: string,
+    _turnId: string,
+    result: AssistantTurnResult
+  ) => {
+    void _userId;
+    void _turnId;
+    void result;
+    return Promise.resolve(null);
+  });
   const conversation: AssistantConversationService = {
     getConversation,
     beginTurn,
     authorizeCommand,
-    finalizeTurn
+    finalizeTurn,
+    finalizeReceivedTurn
   };
   const execute = vi.fn((
     _userId: string,
@@ -115,6 +126,7 @@ function dependencies(beginResult?: BeginAssistantTurnResult) {
     beginTurn,
     authorizeCommand,
     finalizeTurn,
+    finalizeReceivedTurn,
     execute,
     invoke
   } satisfies AssistantApiHandlerDependencies & Record<string, unknown>;
