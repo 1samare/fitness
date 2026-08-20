@@ -196,7 +196,7 @@ export class CloudBaseReviewedPlanningDataProvider
 - `RuntimeEnvironment.FITNESS_REVIEWED_DATASET_ID` is required and has no fallback.
 - Cache TTL is fixed at 60 seconds in production composition.
 
-- [ ] **Step 1: Write RED provider tests**
+- [x] **Step 1: Write RED provider tests**
 
 Test concurrent cold calls share one in-flight source promise, one source read within TTL, immutable clones on every return, refresh after TTL, a 2,000 ms read timeout, fail-closed missing document/database failure, invalid graph/checksum/license on cold load, failed candidates not cached, and license expiry on every request even while the cached object is warm:
 
@@ -213,11 +213,11 @@ it('fails when a warm cached dataset crosses its license boundary', async () => 
 
 Also assert `resolveCanonicalName` canonicalizes the input using the current existing food-name rules and returns null for ambiguous/missing aliases rather than guessing.
 
-- [ ] **Step 2: Add RED cloud runtime composition tests**
+- [x] **Step 2: Add RED cloud runtime composition tests**
 
 Assert cloud handler creation rejects blank/missing `FITNESS_REVIEWED_DATASET_ID`, never constructs unavailable or fixture providers, reads collection `planning_reviewed_datasets` with exactly the configured document ID, and both planning and assistant compositions use the same provider policy. Provider errors map to existing `provider_unavailable` without exposing dataset contents.
 
-- [ ] **Step 3: Run focused tests and confirm RED**
+- [x] **Step 3: Run focused tests and confirm RED**
 
 Run:
 
@@ -227,11 +227,11 @@ pnpm.cmd test -- packages/providers/src/cloudbase-reviewed-planning-data-provide
 
 Expected: FAIL because the CloudBase provider and environment setting do not exist.
 
-- [ ] **Step 4: Implement validated cache lookup**
+- [x] **Step 4: Implement validated cache lookup**
 
 Every public method calls `loadValidDataset()`. A warm cache still checks `now() < validUntil`; after 60 seconds it re-reads and revalidates checksum/license/graph. Clone returned records with `structuredClone`. Convert any source/read/schema error to `ReviewedDatasetUnavailableError` with stable code `reviewed_dataset_unavailable`; do not retain a failed candidate in cache.
 
-- [ ] **Step 5: Replace unavailable cloud providers**
+- [x] **Step 5: Replace unavailable cloud providers**
 
 Create a source adapter that calls:
 
@@ -260,7 +260,7 @@ const providers = {
 
 Remove `unavailableNutritionProvider`, `unavailableRecipeProvider`, and `unavailableMenuProvider` from cloud runtime code. Local/smoke fixtures remain isolated in local runtime only.
 
-- [ ] **Step 6: Run provider, cloud runtime, and meal regressions**
+- [x] **Step 6: Run provider, cloud runtime, and meal regressions**
 
 Run:
 
@@ -273,7 +273,7 @@ pnpm.cmd --filter @fitness/assistant-api typecheck
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add packages/providers cloudfunctions/planning-api cloudfunctions/assistant-api

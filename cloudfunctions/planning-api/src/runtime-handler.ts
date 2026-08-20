@@ -103,8 +103,15 @@ function unavailablePrivatePhotoStorage(): PrivatePhotoStorage {
   };
 }
 
-export function createRuntimeMealPlanningProviders(mode: 'local' | 'cloud'): MealPlanningProviders {
-  return mode === 'cloud' ? createCloudRuntimeMealPlanningProviders() : lazyLocalProviders();
+export function createRuntimeMealPlanningProviders(
+  options: RuntimePlanningHandlerOptions
+): MealPlanningProviders {
+  if (options.runtimeMode === 'local') return lazyLocalProviders();
+  return createCloudRuntimeMealPlanningProviders({
+    database: options.database,
+    datasetId: options.environment?.FITNESS_REVIEWED_DATASET_ID ?? '',
+    now: options.now ?? (() => new Date().toISOString())
+  });
 }
 
 function createLocalRuntimePlanningHandler(

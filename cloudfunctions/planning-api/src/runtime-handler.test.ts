@@ -91,6 +91,9 @@ const completeSetup = {
 } as const;
 
 const PHOTO_PREFIX = 'cloud://runtime-photo.bucket/';
+const CLOUD_DATASET_ENVIRONMENT = {
+  FITNESS_REVIEWED_DATASET_ID: 'missing-reviewed-dataset'
+} as const;
 
 const fakeLocalPhotoStorage: PrivatePhotoStorage = {
   inspectPrivateFile: () => Promise.resolve({ mediaType: 'image/jpeg', sizeBytes: 3 }),
@@ -140,6 +143,7 @@ describe('runtime planning handler', () => {
     const first = createRuntimePlanningHandler({
       runtimeMode: 'cloud',
       database,
+      environment: CLOUD_DATASET_ENVIRONMENT,
       now: () => '2026-08-03T08:00:00.000Z',
       nextId: () => 'profile-1'
     });
@@ -148,6 +152,7 @@ describe('runtime planning handler', () => {
     const afterColdStart = createRuntimePlanningHandler({
       runtimeMode: 'cloud',
       database,
+      environment: CLOUD_DATASET_ENVIRONMENT,
       now: () => '2026-08-03T08:00:00.000Z',
       nextId: () => 'unused'
     });
@@ -168,6 +173,7 @@ describe('runtime planning handler', () => {
     const first = createRuntimePlanningHandler({
       runtimeMode: 'cloud',
       database,
+      environment: CLOUD_DATASET_ENVIRONMENT,
       now: () => '2026-08-07T00:00:00.000Z',
       nextId: (prefix) => `${prefix}-${String(++sequence)}`
     });
@@ -177,6 +183,7 @@ describe('runtime planning handler', () => {
     const afterColdStart = createRuntimePlanningHandler({
       runtimeMode: 'cloud',
       database,
+      environment: CLOUD_DATASET_ENVIRONMENT,
       now: () => '2026-08-07T00:00:00.000Z',
       nextId: (prefix) => `${prefix}-unused`
     });
@@ -216,7 +223,8 @@ describe('runtime planning handler', () => {
 
     const cloud = createRuntimePlanningHandler({
       runtimeMode: 'cloud',
-      database: new FakeDatabase()
+      database: new FakeDatabase(),
+      environment: { FITNESS_REVIEWED_DATASET_ID: 'missing-reviewed-dataset' }
     });
     const cloudResolution = await cloud({
       action: 'resolveFoodName',
@@ -238,18 +246,22 @@ describe('runtime planning handler', () => {
     });
     try {
       const runtime = await import('./runtime-handler');
-      const cloudProviders = runtime.createRuntimeMealPlanningProviders('cloud');
+      const cloudProviders = runtime.createRuntimeMealPlanningProviders({
+        runtimeMode: 'cloud',
+        database: new FakeDatabase(),
+        environment: { FITNESS_REVIEWED_DATASET_ID: 'missing-reviewed-dataset' }
+      });
       expect(cloudProviders.allowTestFixtures).toBe(false);
       await expect(cloudProviders.nutrition.resolveCanonicalName('fixture'))
-        .rejects.toThrow('production nutrition provider unavailable');
+        .rejects.toMatchObject({ code: 'reviewed_dataset_unavailable' });
       await expect(cloudProviders.nutrition.getSnapshot('snapshot-fixture-rice-v1'))
-        .rejects.toThrow('production nutrition provider unavailable');
+        .rejects.toMatchObject({ code: 'reviewed_dataset_unavailable' });
       await expect(cloudProviders.recipes.getByVersionId('recipe-version-fixture-day-1-breakfast-v1'))
-        .rejects.toThrow('production recipe provider unavailable');
+        .rejects.toMatchObject({ code: 'reviewed_dataset_unavailable' });
       await expect(cloudProviders.menus.getActiveCatalog())
-        .rejects.toThrow('production menu provider unavailable');
+        .rejects.toMatchObject({ code: 'reviewed_dataset_unavailable' });
       await expect(cloudProviders.menus.getMenuByVersionId('daily-menu-version-fixture-day-1-v1'))
-        .rejects.toThrow('production menu provider unavailable');
+        .rejects.toMatchObject({ code: 'reviewed_dataset_unavailable' });
     } finally {
       vi.doUnmock('@fitness/nutrition-fixtures');
       vi.resetModules();
@@ -279,7 +291,11 @@ describe('runtime planning handler', () => {
         }
       };
       database.seed(documentKey, stored);
-      const handler = createRuntimePlanningHandler({ runtimeMode: 'cloud', database });
+      const handler = createRuntimePlanningHandler({
+        runtimeMode: 'cloud',
+        database,
+        environment: CLOUD_DATASET_ENVIRONMENT
+      });
 
       const response = await handler({ action: 'getCurrentContext' }, { userId });
 
@@ -304,6 +320,7 @@ describe('runtime planning handler', () => {
     const handler = createRuntimePlanningHandler({
       runtimeMode: 'cloud',
       database,
+      environment: CLOUD_DATASET_ENVIRONMENT,
       now: () => instant,
       nextId: (prefix) => `${prefix}-${String(++sequence)}`
     });
@@ -350,7 +367,10 @@ describe('runtime planning handler', () => {
   test('fixture vision is available only in explicit local mode', async () => {
     const runtime = createRuntimePlanningHandler({
       runtimeMode: 'local',
-      environment: { CLOUDBASE_STORAGE_FILE_ID_PREFIX: PHOTO_PREFIX },
+      environment: {
+        ...CLOUD_DATASET_ENVIRONMENT,
+        CLOUDBASE_STORAGE_FILE_ID_PREFIX: PHOTO_PREFIX
+      },
       storage: fakeLocalPhotoStorage,
       now: () => '2026-08-19T00:00:00.000Z'
     });
@@ -381,7 +401,10 @@ describe('runtime planning handler', () => {
         }),
         deleteFile: () => Promise.resolve({ fileList: [{ code: 'SUCCESS' }] })
       },
-      environment: { CLOUDBASE_STORAGE_FILE_ID_PREFIX: PHOTO_PREFIX },
+      environment: {
+        ...CLOUD_DATASET_ENVIRONMENT,
+        CLOUDBASE_STORAGE_FILE_ID_PREFIX: PHOTO_PREFIX
+      },
       now: () => '2026-08-19T00:00:00.000Z'
     });
 
@@ -420,6 +443,7 @@ describe('runtime planning handler', () => {
         deleteFile: () => Promise.resolve({ fileList: [{ code: 'SUCCESS' }] })
       },
       environment: {
+        ...CLOUD_DATASET_ENVIRONMENT,
         CLOUDBASE_STORAGE_FILE_ID_PREFIX: PHOTO_PREFIX,
         FITNESS_VISION_FUNCTION_NAME: 'fitness-vision'
       },
@@ -522,9 +546,11 @@ describe('runtime planning handler', () => {
     const previousRuntimeMode = process.env.FITNESS_RUNTIME_MODE;
     const previousStoragePrefix = process.env.CLOUDBASE_STORAGE_FILE_ID_PREFIX;
     const previousVisionFunction = process.env.FITNESS_VISION_FUNCTION_NAME;
+    const previousDatasetId = process.env.FITNESS_REVIEWED_DATASET_ID;
     process.env.FITNESS_RUNTIME_MODE = 'cloud';
     process.env.CLOUDBASE_STORAGE_FILE_ID_PREFIX = PHOTO_PREFIX;
     process.env.FITNESS_VISION_FUNCTION_NAME = 'fitness-vision';
+    process.env.FITNESS_REVIEWED_DATASET_ID = 'missing-reviewed-dataset';
     vi.resetModules();
     vi.doMock('wx-server-sdk', () => ({
       init: vi.fn(),
@@ -576,6 +602,8 @@ describe('runtime planning handler', () => {
       else process.env.CLOUDBASE_STORAGE_FILE_ID_PREFIX = previousStoragePrefix;
       if (previousVisionFunction === undefined) delete process.env.FITNESS_VISION_FUNCTION_NAME;
       else process.env.FITNESS_VISION_FUNCTION_NAME = previousVisionFunction;
+      if (previousDatasetId === undefined) delete process.env.FITNESS_REVIEWED_DATASET_ID;
+      else process.env.FITNESS_REVIEWED_DATASET_ID = previousDatasetId;
       vi.doUnmock('wx-server-sdk');
       vi.resetModules();
     }
@@ -593,8 +621,11 @@ describe('runtime planning handler', () => {
         deleteFile: vi.fn()
       },
       environment: prefix === undefined
-        ? {}
-        : { CLOUDBASE_STORAGE_FILE_ID_PREFIX: prefix }
+        ? CLOUD_DATASET_ENVIRONMENT
+        : {
+            ...CLOUD_DATASET_ENVIRONMENT,
+            CLOUDBASE_STORAGE_FILE_ID_PREFIX: prefix
+          }
     });
 
     const response = await runtime({
@@ -621,7 +652,7 @@ describe('runtime planning handler', () => {
         downloadFile: vi.fn(),
         deleteFile: vi.fn()
       },
-      environment: {}
+      environment: CLOUD_DATASET_ENVIRONMENT
     });
     const request = {
       action: 'createIngredientPhotoUpload',
@@ -656,6 +687,7 @@ describe('runtime planning handler', () => {
         deleteFile: () => Promise.resolve({ fileList: [{ code: 'SUCCESS' }] })
       },
       environment: {
+        ...CLOUD_DATASET_ENVIRONMENT,
         CLOUDBASE_STORAGE_FILE_ID_PREFIX: PHOTO_PREFIX,
         FITNESS_VISION_FUNCTION_NAME: 'attacker/function/name'
       }

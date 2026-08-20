@@ -7,23 +7,23 @@ import {
   type MealPlanningProviders
 } from '@fitness/application';
 import { planningApiRequestSchema, type PlanningApiResponse } from '@fitness/contracts';
-import type {
-  DailyMenuCatalogProvider,
-  NutritionProvider,
-  RecipeTemplateProvider,
-  VisionProvider
-} from '@fitness/domain';
+import type { VisionProvider } from '@fitness/domain';
 import { CloudBasePlanningRepository, type CloudBaseDatabase } from '@fitness/persistence';
 import {
   CloudBaseFunctionVisionBackend,
   CloudBasePrivatePhotoStorage,
+  CloudBaseReviewedPlanningDataProvider,
   ResilientVisionProvider,
   UnavailableVisionProvider,
+  requireReviewedDatasetId,
   type CloudBasePrivateFileClient,
   type ProviderObservation
 } from '@fitness/providers';
 import { createPlanningApiHandler, type TrustedRequestContext } from './handler';
-import { adaptWxCloudBaseDatabase } from './wx-database-adapter';
+import {
+  adaptWxCloudBaseDatabase,
+  createCloudBaseReviewedDatasetSource
+} from './wx-database-adapter';
 
 interface CommonRuntimeOptions {
   readonly now?: (() => string) | undefined;
@@ -35,6 +35,7 @@ interface CommonRuntimeOptions {
 export interface RuntimeEnvironment {
   readonly CLOUDBASE_STORAGE_FILE_ID_PREFIX?: string | undefined;
   readonly FITNESS_VISION_FUNCTION_NAME?: string | undefined;
+  readonly FITNESS_REVIEWED_DATASET_ID?: string | undefined;
 }
 
 export interface RuntimeCloudClient extends CloudBasePrivateFileClient {
@@ -61,26 +62,6 @@ export interface CloudRuntimePlanningHandlerOptions extends CommonRuntimeOptions
   readonly runtimeMode: 'cloud';
   readonly database: CloudBaseDatabase;
   readonly cloud?: RuntimeCloudClient | undefined;
-}
-
-function unavailableNutritionProvider(): NutritionProvider {
-  return {
-    getSnapshot: () => Promise.reject(new Error('production nutrition provider unavailable')),
-    resolveCanonicalName: () => Promise.reject(new Error('production nutrition provider unavailable'))
-  };
-}
-
-function unavailableRecipeProvider(): RecipeTemplateProvider {
-  return {
-    getByVersionId: () => Promise.reject(new Error('production recipe provider unavailable'))
-  };
-}
-
-function unavailableMenuProvider(): DailyMenuCatalogProvider {
-  return {
-    getActiveCatalog: () => Promise.reject(new Error('production menu provider unavailable')),
-    getMenuByVersionId: () => Promise.reject(new Error('production menu provider unavailable'))
-  };
 }
 
 function defaultCloudClient(): RuntimeCloudClient {
@@ -121,11 +102,23 @@ function isIngredientPhotoAction(input: unknown): boolean {
     || action === 'confirmIngredientCandidate';
 }
 
-export function createCloudRuntimeMealPlanningProviders(): MealPlanningProviders {
+export function createCloudRuntimeMealPlanningProviders(input: {
+  readonly database: CloudBaseDatabase;
+  readonly datasetId: string;
+  readonly now: () => string;
+}): MealPlanningProviders {
+  const reviewed = new CloudBaseReviewedPlanningDataProvider({
+    datasetId: requireReviewedDatasetId(input.datasetId),
+    source: createCloudBaseReviewedDatasetSource(input.database),
+    now: input.now,
+    nowMs: () => Date.now(),
+    cacheTtlMs: 60_000,
+    loadTimeoutMs: 2_000
+  });
   return {
-    nutrition: unavailableNutritionProvider(),
-    recipes: unavailableRecipeProvider(),
-    menus: unavailableMenuProvider(),
+    nutrition: reviewed,
+    recipes: reviewed,
+    menus: reviewed,
     allowTestFixtures: false
   };
 }
@@ -135,7 +128,12 @@ export function createCloudRuntimePlanningHandler(
 ): (input: unknown, context?: TrustedRequestContext) => Promise<PlanningApiResponse> {
   const rawRepository = new CloudBasePlanningRepository(options.database);
   const repository = createAccountDeletionGuardedRepository(rawRepository);
-  const providers = createCloudRuntimeMealPlanningProviders();
+  const now = options.now ?? (() => new Date().toISOString());
+  const providers = createCloudRuntimeMealPlanningProviders({
+    database: options.database,
+    datasetId: requireReviewedDatasetId(options.environment?.FITNESS_REVIEWED_DATASET_ID),
+    now
+  });
   const storagePrefix = options.environment?.CLOUDBASE_STORAGE_FILE_ID_PREFIX;
   const storageConfigurationValid = validStorageFileIdPrefix(storagePrefix);
   const safeStoragePrefix = storageConfigurationValid
@@ -162,7 +160,6 @@ export function createCloudRuntimePlanningHandler(
       vision = new UnavailableVisionProvider();
     }
   }
-  const now = options.now ?? (() => new Date().toISOString());
   const planning = createIngredientPhotoPlanningService({
     repository,
     providers,
@@ -204,7 +201,8 @@ export function createDefaultCloudRuntimePlanningHandler() {
     database: adaptWxCloudBaseDatabase(cloud.database()),
     environment: {
       CLOUDBASE_STORAGE_FILE_ID_PREFIX: process.env.CLOUDBASE_STORAGE_FILE_ID_PREFIX,
-      FITNESS_VISION_FUNCTION_NAME: process.env.FITNESS_VISION_FUNCTION_NAME
+      FITNESS_VISION_FUNCTION_NAME: process.env.FITNESS_VISION_FUNCTION_NAME,
+      FITNESS_REVIEWED_DATASET_ID: process.env.FITNESS_REVIEWED_DATASET_ID
     },
     observeProvider: createProviderObservationSink(cloud.logger())
   });

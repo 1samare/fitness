@@ -1,24 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import tcb from '@cloudbase/node-sdk';
 import {
-  ProviderUnavailableError,
   createAccountDeletionGuardedRepository,
   createMealPlanRecalculationService,
   type MealPlanningProviders
 } from '@fitness/application';
 import type { AssistantApiResponse } from '@fitness/contracts';
-import type {
-  DailyMenuCatalogProvider,
-  NutritionProvider,
-  RecipeTemplateProvider
-} from '@fitness/domain';
 import {
   CloudBasePlanningRepository,
   type CloudBaseDatabase
 } from '@fitness/persistence';
 import {
   CloudBaseLanguageModelBackend,
+  CloudBaseReviewedPlanningDataProvider,
   ResilientLanguageModelProvider,
+  requireReviewedDatasetId,
   type CloudBaseTextModel,
   type LanguageModelProviderObservation
 } from '@fitness/providers';
@@ -27,12 +23,16 @@ import {
   createAssistantApiComposition,
   type TrustedAssistantRequestContext
 } from './handler';
-import { adaptWxCloudBaseDatabase } from './wx-database-adapter';
+import {
+  adaptWxCloudBaseDatabase,
+  createCloudBaseReviewedDatasetSource
+} from './wx-database-adapter';
 
 export interface AssistantRuntimeEnvironment {
   readonly CLOUDBASE_ENV_ID?: string | undefined;
   readonly FITNESS_LLM_PROVIDER_ID?: string | undefined;
   readonly FITNESS_LLM_MODEL?: string | undefined;
+  readonly FITNESS_REVIEWED_DATASET_ID?: string | undefined;
 }
 
 export class AssistantRuntimeConfigurationError extends Error {
@@ -77,41 +77,23 @@ function requiredIdentifier(value: string | undefined): string {
   return normalized;
 }
 
-function unavailableNutrition(): NutritionProvider {
+export function createCloudRuntimeAssistantMealPlanningProviders(input: {
+  readonly database: CloudBaseDatabase;
+  readonly datasetId: string;
+  readonly now: () => string;
+}): MealPlanningProviders {
+  const reviewed = new CloudBaseReviewedPlanningDataProvider({
+    datasetId: requireReviewedDatasetId(input.datasetId),
+    source: createCloudBaseReviewedDatasetSource(input.database),
+    now: input.now,
+    nowMs: () => Date.now(),
+    cacheTtlMs: 60_000,
+    loadTimeoutMs: 2_000
+  });
   return {
-    getSnapshot: () => Promise.reject(
-      new ProviderUnavailableError('nutrition_source_unavailable')
-    ),
-    resolveCanonicalName: () => Promise.reject(
-      new ProviderUnavailableError('nutrition_source_unavailable')
-    )
-  };
-}
-
-function unavailableRecipes(): RecipeTemplateProvider {
-  return {
-    getByVersionId: () => Promise.reject(
-      new ProviderUnavailableError('meal_catalog_unavailable')
-    )
-  };
-}
-
-function unavailableMenus(): DailyMenuCatalogProvider {
-  return {
-    getActiveCatalog: () => Promise.reject(
-      new ProviderUnavailableError('meal_catalog_unavailable')
-    ),
-    getMenuByVersionId: () => Promise.reject(
-      new ProviderUnavailableError('meal_catalog_unavailable')
-    )
-  };
-}
-
-function cloudMealPlanningProviders(): MealPlanningProviders {
-  return {
-    nutrition: unavailableNutrition(),
-    recipes: unavailableRecipes(),
-    menus: unavailableMenus(),
+    nutrition: reviewed,
+    recipes: reviewed,
+    menus: reviewed,
     allowTestFixtures: false
   };
 }
@@ -125,6 +107,7 @@ export function createCloudRuntimeAssistantHandler(
   requiredIdentifier(options.environment.CLOUDBASE_ENV_ID);
   const providerId = requiredIdentifier(options.environment.FITNESS_LLM_PROVIDER_ID);
   const modelName = requiredIdentifier(options.environment.FITNESS_LLM_MODEL);
+  const datasetId = requireReviewedDatasetId(options.environment.FITNESS_REVIEWED_DATASET_ID);
   const model = options.createModel(providerId);
   const rawRepository = new CloudBasePlanningRepository(options.database);
   const repository = createAccountDeletionGuardedRepository(rawRepository);
@@ -132,7 +115,11 @@ export function createCloudRuntimeAssistantHandler(
   const nextId = options.nextId ?? ((prefix: string) => `${prefix}-${randomUUID()}`);
   const planning = createMealPlanRecalculationService({
     repository,
-    providers: cloudMealPlanningProviders(),
+    providers: createCloudRuntimeAssistantMealPlanningProviders({
+      database: options.database,
+      datasetId,
+      now
+    }),
     now,
     nextId
   });
@@ -157,7 +144,8 @@ export function createDefaultCloudRuntimeAssistantHandler() {
   const environment: AssistantRuntimeEnvironment = {
     CLOUDBASE_ENV_ID: process.env.CLOUDBASE_ENV_ID,
     FITNESS_LLM_PROVIDER_ID: process.env.FITNESS_LLM_PROVIDER_ID,
-    FITNESS_LLM_MODEL: process.env.FITNESS_LLM_MODEL
+    FITNESS_LLM_MODEL: process.env.FITNESS_LLM_MODEL,
+    FITNESS_REVIEWED_DATASET_ID: process.env.FITNESS_REVIEWED_DATASET_ID
   };
   const environmentId = requiredIdentifier(environment.CLOUDBASE_ENV_ID);
   cloud.init();

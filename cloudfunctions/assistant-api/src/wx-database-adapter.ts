@@ -3,6 +3,7 @@ import type {
   CloudBaseDocumentReference,
   CloudBaseTransaction
 } from '@fitness/persistence';
+import type { ReviewedPlanningDatasetSource } from '@fitness/providers';
 
 interface RawDocumentReference {
   get(): unknown;
@@ -116,6 +117,20 @@ export function adaptWxCloudBaseDatabase(value: unknown): CloudBaseDatabase {
         throw new Error('CloudBase transaction completed without a callback result');
       }
       return callbackResult.value;
+    }
+  };
+}
+
+export function createCloudBaseReviewedDatasetSource(
+  database: CloudBaseDatabase
+): ReviewedPlanningDatasetSource {
+  return {
+    async read(datasetId) {
+      const result = await database
+        .collection('planning_reviewed_datasets')
+        .doc(datasetId)
+        .get();
+      return result.data ?? null;
     }
   };
 }

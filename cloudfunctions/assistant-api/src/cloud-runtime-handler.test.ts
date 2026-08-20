@@ -4,10 +4,14 @@ import type {
   CloudBaseTransaction
 } from '@fitness/persistence';
 import { CloudBasePlanningRepository } from '@fitness/persistence';
-import type { CloudBaseTextModel } from '@fitness/providers';
+import {
+  ReviewedDatasetConfigurationError,
+  type CloudBaseTextModel
+} from '@fitness/providers';
 import { describe, expect, it, vi } from 'vitest';
 import {
   AssistantRuntimeConfigurationError,
+  createCloudRuntimeAssistantMealPlanningProviders,
   createCloudRuntimeAssistantHandler
 } from './cloud-runtime-handler';
 
@@ -65,6 +69,35 @@ function send(handler: ReturnType<typeof createCloudRuntimeAssistantHandler>, su
 }
 
 describe('cloud assistant runtime', () => {
+  it.each([undefined, '', '   '])('fails closed for missing reviewed dataset ID: %s', (datasetId) => {
+    const createModel = vi.fn();
+    expect(() => createCloudRuntimeAssistantHandler({
+      runtimeMode: 'cloud',
+      database: new FakeDatabase(),
+      environment: {
+        CLOUDBASE_ENV_ID: 'environment-1',
+        FITNESS_LLM_PROVIDER_ID: 'cloudbase',
+        FITNESS_LLM_MODEL: 'hunyuan-test',
+        FITNESS_REVIEWED_DATASET_ID: datasetId
+      },
+      createModel
+    })).toThrow(ReviewedDatasetConfigurationError);
+    expect(createModel).not.toHaveBeenCalled();
+  });
+
+  it('composes one fail-closed reviewed provider for all meal interfaces', async () => {
+    const providers = createCloudRuntimeAssistantMealPlanningProviders({
+      database: new FakeDatabase(),
+      datasetId: 'missing-reviewed-dataset',
+      now: () => '2026-08-20T00:00:00.000Z'
+    });
+    expect(providers.nutrition).toBe(providers.recipes);
+    expect(providers.recipes).toBe(providers.menus);
+    await expect(providers.menus.getActiveCatalog()).rejects.toMatchObject({
+      code: 'reviewed_dataset_unavailable'
+    });
+  });
+
   it('blocks conversation reads and writes during account deletion without calling the model', async () => {
     const database = new FakeDatabase();
     const rawRepository = new CloudBasePlanningRepository(database);
@@ -95,7 +128,8 @@ describe('cloud assistant runtime', () => {
       environment: {
         CLOUDBASE_ENV_ID: 'environment-1',
         FITNESS_LLM_PROVIDER_ID: 'cloudbase',
-        FITNESS_LLM_MODEL: 'hunyuan-test'
+        FITNESS_LLM_MODEL: 'hunyuan-test',
+        FITNESS_REVIEWED_DATASET_ID: 'reviewed-planning-cn-v1'
       },
       createModel: () => ({ generateText }),
       now: () => '2026-08-20T00:00:00.000Z'
@@ -142,7 +176,8 @@ describe('cloud assistant runtime', () => {
       environment: {
         CLOUDBASE_ENV_ID: 'environment-1',
         FITNESS_LLM_PROVIDER_ID: providerId,
-        FITNESS_LLM_MODEL: modelName
+        FITNESS_LLM_MODEL: modelName,
+        FITNESS_REVIEWED_DATASET_ID: 'reviewed-planning-cn-v1'
       },
       createModel,
       now: () => '2026-08-20T00:00:00.000Z'
@@ -182,7 +217,8 @@ describe('cloud assistant runtime', () => {
       environment: {
         CLOUDBASE_ENV_ID: 'environment-1',
         FITNESS_LLM_PROVIDER_ID: 'custom-deepseek-production',
-        FITNESS_LLM_MODEL: 'deepseek-chat'
+        FITNESS_LLM_MODEL: 'deepseek-chat',
+        FITNESS_REVIEWED_DATASET_ID: 'reviewed-planning-cn-v1'
       },
       createModel,
       now: () => '2026-08-20T00:00:00.000Z'
