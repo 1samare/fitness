@@ -26,12 +26,12 @@
 | 4. 一周餐单与联动闭环 | 第 7–8 周 | 已完成 | 手动库存、确定性七天餐单、锁定/手改保护、训练变更与完成度重算闭环已实现并验证 |
 | 5. 食材图片与 Provider | 第 9 周 | 已完成 | 私有上传、受控候选、明确确认、Provider 韧性、原图清理和本地端到端证据已进入 `feat/v1.0` 并通过 fresh 主线门禁；真实云/Provider/设备仍是外部门禁 |
 | 6. 单 Agent 有限对话 | 第 10 周 | 已完成 | 固定单图、三项白名单命令、有界会话、混元/DeepSeek 显式接入、恢复与降级均已进入 `feat/v1.0` 并通过 fresh 主线门禁和独立复审 |
-| 7. 云端集成与内测发布 | 第 11–12 周 | 进行中 | 已批准真实受控内测设计；正在固化 schema v8 数据权利、审核数据接入、发布工具及真实云端验收方案，尚未关闭任何实现或外部门禁 |
+| 7. 云端集成与内测发布 | 第 11–12 周 | 进行中 | 7A 个人数据权利已完成本地实现和完整质量门禁；7B 生产审核数据/发布门禁与 7C 真实受控发布尚待执行，外部验收项均未关闭 |
 
 ## 当前阶段
 
 - 当前阶段：阶段 7“云端集成与内测发布”（进行中）。
-- 开发入口：用户已复核并批准 `docs/superpowers/specs/2026-08-20-phase-7-cloud-integration-controlled-beta-design.md`；实施拆为 `docs/superpowers/plans/2026-08-20-phase-7a-personal-data-rights.md`、`docs/superpowers/plans/2026-08-20-phase-7b-production-data-and-release-gates.md` 和 `docs/superpowers/plans/2026-08-20-phase-7c-controlled-beta-rollout.md`。阶段五、六的真实 CloudBase、供应商、双账号和设备事项继续作为阶段七/发布门禁，当前尚未勾选任何阶段七验收项。
+- 开发入口：用户已复核并批准 `docs/superpowers/specs/2026-08-20-phase-7-cloud-integration-controlled-beta-design.md`；实施拆为 `docs/superpowers/plans/2026-08-20-phase-7a-personal-data-rights.md`、`docs/superpowers/plans/2026-08-20-phase-7b-production-data-and-release-gates.md` 和 `docs/superpowers/plans/2026-08-20-phase-7c-controlled-beta-rollout.md`。7A 已完成本地实现、自动化和交付说明；下一步执行 7B。阶段五、六的真实 CloudBase、供应商、双账号和设备事项继续作为阶段七/发布门禁，当前仍未勾选任何阶段七高层验收项。
 
 ## 生产上线前待办
 
@@ -249,12 +249,16 @@
 ### 代码与验证证据
 
 - 阶段二的 CloudBase 基础部署和双账号隔离已完成，但不代表完整 MVP 的阶段七发布验收完成。
-- 2026-08-20 用户批准“同一阶段完成代码就绪与真实受控发布”的方向并复核书面设计；三份实施计划分别固定数据权利、生产审核数据与发布门禁、真实受控发布/测试交接。代码和外部验收均尚未完成。
+- 2026-08-20 用户批准“同一阶段完成代码就绪与真实受控发布”的方向并复核书面设计；三份实施计划分别固定数据权利、生产审核数据与发布门禁、真实受控发布/测试交接。
+- 7A 已进入 `feat/v1.0` 的实现提交：`d6eb3f9`（schema v8 删除边界）、`4ccc199`（容量与 pending 全局阻断）、`45238ec`（严格导出与三阶段账户删除）、`d347d40`（authenticated API）、`cc479b4`（助手摘要事务一致性）、`f054ee0`（隐私/个人数据页面与发布元数据）。
+- 7A 最终 E2E 使用真实 application/handler 组合和两个可信身份，覆盖完整历史的公开数值复算、跨用户令牌拒绝、对象删除一次失败、pending 期间规划/助手全局阻断且不调用模型、同命令重试删除、另一账户聚合 JSON 字节不变、账户重建和旧命令冲突。
+- 2026-08-20 fresh 7A 门禁：`pnpm.cmd lint`、`pnpm.cmd typecheck`、`pnpm.cmd test`（92/92 文件、897/897 测试）、`pnpm.cmd build`、`pnpm.cmd dry-run:api`、`pnpm.cmd dry-run:assistant`、`pnpm.cmd smoke:api`（2/2）、`pnpm.cmd smoke:assistant`（1/1）和 `git diff --check` 均退出 0。
+- 7A 用户、测试和运维语义见 `docs/cloudbase/phase-7-personal-data-rights.md`。上述证据仅证明本地代码就绪，不替代 7B/7C 的生产审核数据、真实 CloudBase、供应商、双账号、恢复、合规和设备验收。
 
 ### 剩余工作
 
-- 按已批准设计执行阶段 7A、7B、7C 实施计划；完成代码、本地发布门禁后，再进入真实 CloudBase 与测试人员验收。
-- 本阶段全部代码、自动化、本地发布门禁、真实 CloudBase 部署、双账号/设备、供应商、恢复、容量和合规验收项。
+- 7A 无本地代码剩余项；按已批准设计执行 7B 生产审核数据与发布门禁，以及 7C 真实受控发布和测试人员交接。
+- 生产审核数据/授权证据、真实 CloudBase 部署、双账号/设备、供应商、备份恢复、容量、日志与合规验收仍全部待关闭。
 
 ### 外部阻塞
 
@@ -272,6 +276,7 @@
 
 | 日期 | 分支/基线 | 更新 |
 |---|---|---|
+| 2026-08-20 | `feat/v1.0` / 7A 个人数据权利实现 | 完成 schema v8 严格导出与三阶段账户删除、pending 全局阻断、助手摘要事务一致性、隐私/个人数据页面和双身份账户生命周期 E2E；fresh 门禁为 92 文件、897 测试及全部构建/dry-run/smoke。阶段七保持进行中，7B/7C 与真实云、供应商、恢复、合规和设备验收均未关闭 |
 | 2026-08-20 | `feat/v1.0` / `5e2865b` 后阶段七实施计划 | 用户复核书面设计；实施拆为数据权利、生产审核数据/发布门禁、真实受控发布三份 TDD 计划，外部证据仍是同一阶段的强制退出条件，尚未勾选实现或发布验收项 |
 | 2026-08-20 | `feat/v1.0` / `3fcc522` 后阶段七设计启动 | 用户批准真实受控内测方向；阶段七改为进行中，书面设计覆盖 schema v8 数据权利、生产审核数据、同事务助手摘要、隐私/AI 标识、发布工具及真实云端证据；尚未勾选任何实现或发布验收项 |
 | 2026-08-20 | `feat/v1.0` / `5c54b0d` 阶段六最终复审 | 完成固定 LangGraph.js 单 Agent、三项白名单命令、严格证据与一次修复、schema v7 有界会话、混元/DeepSeek 显式单 Provider 配置、原子恢复和原生助手页；fresh 门禁为 81 文件、842 测试、三函数 dry-run、smoke 2/2 + 1/1，独立复审无 Critical/Important。真实云、供应商、双账号、合规和设备事项进入阶段七门禁 |

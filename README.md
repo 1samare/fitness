@@ -380,6 +380,18 @@ TrainingPlanChanged
 - 公开上线前核查小程序隐私保护指引、个人信息保护要求、生成式 AI 应用登记、模型备案号公示和 AI 内容标识要求。
 - 所有页面明确说明结果仅供一般健身和膳食规划参考；出现疾病、伤痛、进食障碍或极端目标时停止个性化建议。
 
+### 个人数据查看、导出与删除
+
+阶段七的数据权利实现提供三个 authenticated `planning-api` 动作：
+
+- `getPersonalDataSummary`：返回数据是否存在、当前活动版本计数、记录计数、删除状态、容量状态和一次性快照令牌。
+- `exportPersonalData`：只接受当前快照令牌，返回 `personal-data-export-v1` 严格 JSON；每条记录标注 `user`、`ai_assisted` 或 `deterministic` 来源，并携带策略及审核数据版本引用。
+- `deleteAccount`：要求当前快照令牌、新幂等键和精确确认词 `DELETE_MY_ACCOUNT`。删除开始后，普通规划与助手读写全部返回 `account_deletion_pending`，必须使用同一删除请求重试，直至私有文件和聚合文档都完成删除。
+
+公开导出明确排除可信身份、CloudBase 文档 ID、私有文件 ID/路径、供应商请求 ID、请求指纹、幂等回执、删除内部状态和清理调度字段。小程序导出只在用户直接点击后复制到剪贴板，或写入 `USER_DATA_PATH` 临时 JSON 并在分享完成回调中删除；不会保存到本地键值存储或 CloudBase 存储。账户删除终态会先执行 `wx.clearStorageSync()`，再回到建档页。
+
+聚合自助处理上限为 UTF-8 JSON `3,000,000` 字节。超限时返回 `account_capacity_exceeded`/`admin_recovery_required`，不允许截断历史、放宽隐私约束或由客户端直接修复。完整操作、测试步骤、删除重试语义和人工恢复边界见 [`docs/cloudbase/phase-7-personal-data-rights.md`](docs/cloudbase/phase-7-personal-data-rights.md)。当前仅完成 7A 本地代码与门禁，不代表阶段七真实受控内测已经发布。
+
 ## 测试与验收基线
 
 至少覆盖以下自动化测试：

@@ -844,11 +844,11 @@ git commit -m "feat: add privacy and personal data pages"
 - Consumes: all Phase 7A tasks.
 - Produces: a code-ready personal-data subsystem and an operator/tester explanation that does not mark Phase 7 complete.
 
-- [ ] **Step 1: Add the final account-lifecycle E2E scenarios**
+- [x] **Step 1: Add the final account-lifecycle E2E scenarios**
 
 In a single E2E file, create two authenticated identities. Build user A planning/meal/photo/assistant history, export it, verify every visible numeric record is reproducible from the public values, trigger one storage failure, verify all A normal APIs are blocked, retry deletion, and verify A is absent while B is byte-for-byte unchanged. Recreate A and prove the old command conflicts.
 
-- [ ] **Step 2: Run the Phase 7A gate**
+- [x] **Step 2: Run the Phase 7A gate**
 
 Run:
 
@@ -866,11 +866,11 @@ git diff --check
 
 Expected: every command exits 0.
 
-- [ ] **Step 3: Document exact user and operator behavior**
+- [x] **Step 3: Document exact user and operator behavior**
 
 Document API actions, export exclusions, pending-deletion retry semantics, response-loss behavior, local cache purge, and admin recovery for `account_capacity_exceeded`. In `DEVELOPMENT_PROGRESS.md`, record commands and results under Phase 7 but keep production-data, real deployment, two-account, provider, backup/restore, and device acceptance unchecked.
 
-- [ ] **Step 4: Audit the diff**
+- [x] **Step 4: Audit the diff**
 
 Run:
 
@@ -883,7 +883,7 @@ rg -n "userId|expectedPrivateFileId|requestFingerprint|idempotencyRecords|accoun
 
 Expected: the export projector contains no emitted banned fields; `.pnpm-store/` remains untouched and untracked.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add README.md docs/cloudbase/phase-7-personal-data-rights.md DEVELOPMENT_PROGRESS.md tests/e2e

@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
+import type { PlanningAggregateState } from '@fitness/domain';
 import { InMemoryPlanningRepository } from '@fitness/persistence';
 import { createAccountDeletionGuardedRepository } from './account-deletion-guarded-repository';
 
@@ -19,7 +20,10 @@ describe('account deletion guarded repository', () => {
       result: undefined
     }));
     const guarded = createAccountDeletionGuardedRepository(raw);
-    const operation = vi.fn((state) => ({ nextState: state, result: undefined }));
+    const operation = vi.fn((state: PlanningAggregateState) => ({
+      nextState: state,
+      result: undefined
+    }));
 
     await expect(guarded.read('user-a')).rejects.toMatchObject({
       code: 'account_deletion_pending'

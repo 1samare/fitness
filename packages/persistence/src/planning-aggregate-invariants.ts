@@ -31,8 +31,7 @@ function assertAccountDeletion(
   if (accountDeletion === null) return;
   const requestedAt = Date.parse(accountDeletion.requestedAt);
   if (
-    accountDeletion.status !== 'pending'
-    || accountDeletion.idempotencyKey.length === 0
+    accountDeletion.idempotencyKey.length === 0
     || accountDeletion.requestFingerprint.length === 0
     || accountDeletion.snapshotToken.length === 0
     || !Number.isFinite(requestedAt)

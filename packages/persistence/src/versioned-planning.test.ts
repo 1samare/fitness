@@ -739,13 +739,7 @@ describe('versioned planning service', () => {
   });
 
   test('serializes privileged reads and deletion with normal in-memory transactions', async () => {
-    const repository = new InMemoryPlanningRepository() as InMemoryPlanningRepository & {
-      readExisting(userId: string): Promise<import('@fitness/domain').PlanningAggregateState | null>;
-      deleteExisting<TResult>(
-        userId: string,
-        operation: (current: import('@fitness/domain').PlanningAggregateState) => TResult
-      ): Promise<TResult>;
-    };
+    const repository = new InMemoryPlanningRepository();
 
     await expect(repository.readExisting('user-a')).resolves.toBeNull();
     const write = repository.transact('user-a', (state) => ({

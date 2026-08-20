@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { PlanningAggregateState } from '@fitness/domain';
 import { InMemoryPlanningRepository } from '@fitness/persistence';
 import {
+  AccountCapacityExceededError,
   PLANNING_AGGREGATE_MAX_UTF8_BYTES,
   assertPlanningAggregateCapacity,
   assertPlanningAggregateCapacityTransition,
@@ -75,10 +76,9 @@ describe('planning aggregate capacity', () => {
     } satisfies PlanningAggregateState;
 
     expect(planningAggregateUtf8Bytes(exact)).toBe(PLANNING_AGGREGATE_MAX_UTF8_BYTES);
-    expect(() => assertPlanningAggregateCapacity(exact)).not.toThrow();
-    expect(() => assertPlanningAggregateCapacity(over)).toThrowError(expect.objectContaining({
-      code: 'account_capacity_exceeded'
-    }));
+    expect(() => { assertPlanningAggregateCapacity(exact); }).not.toThrow();
+    expect(() => { assertPlanningAggregateCapacity(over); })
+      .toThrow(AccountCapacityExceededError);
   });
 
   test('allows an oversized legacy state to add only its pending deletion marker', async () => {
@@ -107,8 +107,8 @@ describe('planning aggregate capacity', () => {
       }
     };
 
-    expect(() => assertPlanningAggregateCapacityTransition(legacy, pending)).not.toThrow();
-    expect(() => assertPlanningAggregateCapacityTransition(legacy, {
+    expect(() => { assertPlanningAggregateCapacityTransition(legacy, pending); }).not.toThrow();
+    expect(() => { assertPlanningAggregateCapacityTransition(legacy, {
       ...pending,
       bodyProfiles: [{
         kind: 'body_profile_version',
@@ -129,6 +129,6 @@ describe('planning aggregate capacity', () => {
           businessTimezone: 'Asia/Shanghai'
         }
       }]
-    })).toThrowError(expect.objectContaining({ code: 'account_capacity_exceeded' }));
+    }); }).toThrow(AccountCapacityExceededError);
   });
 });

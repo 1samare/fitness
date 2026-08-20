@@ -1,4 +1,5 @@
 import type {
+  AssistantLanguageModelInput,
   AssistantLanguageModelProvider,
   FitnessAssistantAgent
 } from '@fitness/agent';
@@ -117,7 +118,9 @@ describe('assistant API real composition recovery', () => {
       }
       return Promise.resolve({});
     });
-    const generateIntent = vi.fn(commandProvider.generateIntent);
+    const generateIntent = vi.fn((input: AssistantLanguageModelInput) => (
+      commandProvider.generateIntent(input)
+    ));
     let id = 0;
     const handler = createAssistantApiComposition({
       repository,

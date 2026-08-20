@@ -68,8 +68,8 @@ export class PersonalDataSnapshotConflictError extends Error {
   }
 }
 
-function activeVersion<T extends { readonly id: string; readonly version: number }>(
-  records: readonly T[],
+function activeVersion(
+  records: readonly { readonly id: string; readonly version: number }[],
   activeId: string | null
 ): number {
   if (activeId === null) return 0;
@@ -176,9 +176,6 @@ export function createPersonalDataService(input: {
     },
 
     async deleteAccount(userId, command) {
-      if (command.confirmation !== 'DELETE_MY_ACCOUNT') {
-        throw new TypeError('Exact account deletion confirmation is required');
-      }
       if (await input.repository.readExisting(userId) === null) {
         return { kind: 'account_already_absent', deletedPrivateFileCount: 0 };
       }

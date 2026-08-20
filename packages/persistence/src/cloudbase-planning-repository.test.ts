@@ -453,7 +453,7 @@ describe('CloudBasePlanningRepository', () => {
       nextState: {
         ...state,
         accountDeletion
-      } as unknown as PlanningAggregateState,
+      },
       result: undefined
     }));
 

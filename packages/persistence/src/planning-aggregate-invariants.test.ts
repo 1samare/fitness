@@ -541,7 +541,7 @@ describe('planning aggregate invariants', () => {
       }
     } as unknown as PlanningAggregateState;
 
-    expect(() => assertPlanningAggregateInvariants(pending, 'user-a')).not.toThrow();
+    expect(() => { assertPlanningAggregateInvariants(pending, 'user-a'); }).not.toThrow();
   });
 
   test.each([
