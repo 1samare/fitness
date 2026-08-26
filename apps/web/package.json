@@ -1,0 +1,49 @@
+{
+  "name": "@fitness/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:test": "vite build --mode test",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:integration": "vitest run src/features/planning/PlanningExperience.e2e.test.tsx src/features/meals/MealExperience.e2e.test.tsx src/features/assistant/AssistantExperience.e2e.test.tsx src/features/ingredient-photo/IngredientPhotoExperience.e2e.test.tsx",
+    "test:e2e": "playwright test",
+    "install:browsers": "playwright install chromium webkit",
+    "install:webkit": "playwright install webkit",
+    "scan:secrets": "node scripts/scan-web-secrets.cjs",
+    "scan:boundaries": "node scripts/scan-runtime-boundaries.cjs",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@fitness/agent": "workspace:*",
+    "@fitness/application": "workspace:*",
+    "@fitness/contracts": "workspace:*",
+    "@fitness/domain": "workspace:*",
+    "@fitness/met-sessions": "workspace:*",
+    "@fitness/nutrition-fixtures": "workspace:*",
+    "@fitness/persistence": "workspace:*",
+    "@fitness/providers": "workspace:*",
+    "dexie": "^4.0.11",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.30.1",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.4.1",
+    "fake-indexeddb": "^6.2.4",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.9.2",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4"
+  }
+}

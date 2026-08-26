@@ -1,48 +1,43 @@
 import { describe, expect, test } from 'vitest';
 import type { IngredientPhotoVersion } from './ingredient-photo';
-import { deriveNextPhotoCleanupAt, latestIngredientPhotoVersions } from './ingredient-photo';
+import { latestIngredientPhotoVersions } from './ingredient-photo';
 
-function photo(input: Partial<IngredientPhotoVersion> & Pick<IngredientPhotoVersion, 'id' | 'revision'>): IngredientPhotoVersion {
+function photo(input: {
+  readonly id: string;
+  readonly photoId?: string;
+  readonly revision: number;
+}): IngredientPhotoVersion {
   return {
     kind: 'ingredient_photo_version',
     id: input.id,
     photoId: input.photoId ?? 'photo-a',
-    userId: 'user-a',
+    userId: 'local-default',
     revision: input.revision,
-    createdAt: '2026-08-19T00:00:00.000Z',
-    uploadCreatedAt: '2026-08-19T00:00:00.000Z',
-    deleteDueAt: '2026-08-19T23:00:00.000Z',
-    expectedCloudPath: 'ingredient-photos/photo-a/upload-a.jpg',
-    expectedPrivateFileId: 'cloud://env.bucket/ingredient-photos/photo-a/upload-a.jpg',
+    createdAt: '2026-08-26T00:00:00.000Z',
     mediaType: 'image/jpeg',
-    workflowStatus: 'awaiting_upload',
-    storageStatus: input.storageStatus ?? 'retained',
-    candidates: [],
-    confirmedCandidateId: null,
-    confirmedGrams: null,
-    inventoryVersionId: null,
-    recognitionFailureCode: null,
-    cleanupAttemptCount: 0,
-    nextCleanupAt: input.nextCleanupAt ?? '2026-08-19T23:00:00.000Z',
-    lastCleanupFailureCode: null,
-    deletedAt: null
+    workflowStatus: 'confirmed',
+    candidates: [{
+      id: 'candidate-a',
+      foodId: 'fixture-rice',
+      nutritionSnapshotId: 'snapshot-fixture-rice-v1',
+      canonicalNameZh: '测试米饭',
+      confidence: 0.97,
+      foodState: 'cooked'
+    }],
+    confirmedCandidateId: 'candidate-a',
+    confirmedGrams: 180,
+    inventoryVersionId: 'inventory-a'
   };
 }
 
-describe('ingredient photo derived state', () => {
+describe('local ingredient candidate confirmation versions', () => {
   test('keeps only the latest revision for each logical photo', () => {
-    expect(latestIngredientPhotoVersions([
-      photo({ id: 'v1', revision: 1 }),
-      photo({ id: 'v2', revision: 2 }),
-      photo({ id: 'b1', photoId: 'photo-b', revision: 1 })
-    ]).map((value) => value.id)).toEqual(['v2', 'b1']);
-  });
+    const latest = latestIngredientPhotoVersions([
+      photo({ id: 'a-v1', revision: 1 }),
+      photo({ id: 'b-v1', photoId: 'photo-b', revision: 1 }),
+      photo({ id: 'a-v2', revision: 2 })
+    ]);
 
-  test('derives the earliest outstanding cleanup time and ignores deleted storage', () => {
-    expect(deriveNextPhotoCleanupAt([
-      photo({ id: 'a', revision: 1, nextCleanupAt: '2026-08-19T23:15:00.000Z' }),
-      photo({ id: 'b', photoId: 'photo-b', revision: 1, nextCleanupAt: '2026-08-19T23:00:00.000Z' }),
-      photo({ id: 'c', photoId: 'photo-c', revision: 1, storageStatus: 'deleted', nextCleanupAt: null })
-    ])).toBe('2026-08-19T23:00:00.000Z');
+    expect(latest.map((version) => version.id).sort()).toEqual(['a-v2', 'b-v1']);
   });
 });

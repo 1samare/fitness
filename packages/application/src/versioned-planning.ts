@@ -164,8 +164,8 @@ function mostRecentlyCreatedIngredientPhoto(
   for (const photo of photos) {
     if (
       latest === null
-      || photo.uploadCreatedAt > latest.uploadCreatedAt
-      || (photo.uploadCreatedAt === latest.uploadCreatedAt && photo.photoId > latest.photoId)
+      || photo.createdAt > latest.createdAt
+      || (photo.createdAt === latest.createdAt && photo.photoId > latest.photoId)
     ) {
       latest = photo;
     }

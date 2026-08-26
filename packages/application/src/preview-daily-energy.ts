@@ -1,6 +1,12 @@
 import { calculateDailyEnergy, findReviewedTrainingSession } from '@fitness/calculation';
-import type { PreviewDailyEnergyRequest } from '@fitness/contracts';
-import type { DailyEnergyResult } from '@fitness/domain';
+import type { DailyEnergyCommand, DailyEnergyResult } from '@fitness/domain';
+
+export type PreviewDailyEnergyPayload = Omit<DailyEnergyCommand, 'training'> & {
+  readonly training?: {
+    readonly sessionCode: string;
+    readonly durationMinutes: number;
+  };
+};
 
 export class UnknownTrainingSessionError extends Error {
   public readonly code = 'unknown_training_session' as const;
@@ -12,7 +18,7 @@ export class UnknownTrainingSessionError extends Error {
 }
 
 export function previewDailyEnergy(
-  payload: PreviewDailyEnergyRequest['payload']
+  payload: PreviewDailyEnergyPayload
 ): DailyEnergyResult {
   const { training, ...command } = payload;
   if (training === undefined) return calculateDailyEnergy(command);

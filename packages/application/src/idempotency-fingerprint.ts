@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { sha256HexUtf8 } from './sync-sha256';
 
 type CanonicalJson =
   | null
@@ -40,7 +40,7 @@ function canonicalizeJson(value: unknown): CanonicalJson {
 
 function sha256Fingerprint(value: unknown, version: 'v2' | 'v3'): string {
   const serialized = JSON.stringify(canonicalizeJson(value));
-  const digest = createHash('sha256').update(serialized, 'utf8').digest('hex');
+  const digest = sha256HexUtf8(serialized);
   return `${version}:sha256:${digest}`;
 }
 

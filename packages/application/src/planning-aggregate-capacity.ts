@@ -27,23 +27,9 @@ export function assertPlanningAggregateCapacity(state: PlanningAggregateState): 
   }
 }
 
-function businessStateJson(state: PlanningAggregateState): string {
-  const { accountDeletion, ...businessState } = state;
-  void accountDeletion;
-  return JSON.stringify(businessState);
-}
-
 export function assertPlanningAggregateCapacityTransition(
-  current: PlanningAggregateState,
+  _current: PlanningAggregateState,
   next: PlanningAggregateState
 ): void {
-  if (planningAggregateUtf8Bytes(next) <= PLANNING_AGGREGATE_MAX_UTF8_BYTES) return;
-  const isLegacyDeletionOnlyTransition = (
-    planningAggregateUtf8Bytes(current) > PLANNING_AGGREGATE_MAX_UTF8_BYTES
-    && next.accountDeletion !== null
-    && businessStateJson(current) === businessStateJson(next)
-  );
-  if (!isLegacyDeletionOnlyTransition) {
-    throw new AccountCapacityExceededError(planningAggregateUtf8Bytes(next));
-  }
+  assertPlanningAggregateCapacity(next);
 }

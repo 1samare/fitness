@@ -2,7 +2,7 @@ import {
   PersonalDataDocumentNotFoundError,
   assertPlanningAggregateCapacityTransition,
   type PersonalDataRepository
-} from '@fitness/application';
+} from '@fitness/application/browser';
 import {
   emptyAssistantConversationState,
   type PlanningAggregateState
@@ -11,7 +11,6 @@ import { parseAndAssertPlanningState } from './planning-aggregate-invariants';
 
 const emptyState: PlanningAggregateState = {
   assistantConversation: emptyAssistantConversationState(),
-  accountDeletion: null,
   bodyProfiles: [],
   goals: [],
   trainingPlans: [],
@@ -30,8 +29,7 @@ const emptyState: PlanningAggregateState = {
   activeGoalVersionId: null,
   activeTrainingPlanVersionId: null,
   activeInventoryVersionId: null,
-  activeMealPlanVersionId: null,
-  nextPhotoCleanupAt: null
+  activeMealPlanVersionId: null
 };
 
 function copyState(state: PlanningAggregateState): PlanningAggregateState {

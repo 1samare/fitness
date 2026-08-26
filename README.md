@@ -1,475 +1,122 @@
-# Fitness 饮食与训练规划助手
+# Fitness Local-First Web Test
 
-> 项目状态：以 [`DEVELOPMENT_PROGRESS.md`](DEVELOPMENT_PROGRESS.md) 为唯一动态进度真源
-> 目标平台：面向中国大陆健康成年人的微信小程序  
-> 架构基线日期：2026-07-30
+> 项目状态：虚拟数据 Web 内测已交付，非生产。
+> 动态进度真源：[`DEVELOPMENT_PROGRESS.md`](DEVELOPMENT_PROGRESS.md)
+> 架构决策：[`ADR-0001-local-first-web-test-application.md`](docs/decisions/ADR-0001-local-first-web-test-application.md)
 
-## 开发主线与进度
+## 项目目标
 
-后续开发和推送固定在 `feat/v1.0`，不再新增开发分支或 Git 工作区。开始开发前必须读取 [`DEVELOPMENT_PROGRESS.md`](DEVELOPMENT_PROGRESS.md)，完成阶段工作后同步更新其中的验收项、验证证据、剩余工作和阻塞项；该文件是唯一动态进度清单。
+本仓库提供面向中国大陆健康成年人的一周健身与饮食规划内部测试应用。流程固定为：
 
-历史阶段分支继续保留作审计与参考，但未进入 `feat/v1.0` 的实现不计入当前进度。原有设计和路线图仍是规划依据，具体状态不在 README 重复维护。
+```text
+身体档案/偏好 -> 目标 -> 一周训练计划 -> 每日营养目标 -> 七日餐单 -> 执行反馈
+```
 
-## 第二阶段本地与云端运行
+当前交付只使用合成测试数据，最多供 5 名已授权内部测试人员使用。它不是医疗产品，不支持疾病、孕期、未成年人、康复、进食障碍或极端节食建议，也不代表生产上线就绪。
 
-环境要求：Node.js `20` 或 `22`、pnpm `9.15.x`，以及用于打开客户端的微信开发者工具。
+## 当前架构
 
-在仓库根目录依次执行：
+- 客户端：React 18、TypeScript、Vite。
+- 本地数据库：IndexedDB + Dexie，仅限当前浏览器 origin。
+- 领域与计算：仓库内纯 TypeScript，热量、营养和克数不由模型产生。
+- Agent：LangGraph.js 单 Agent，仅在访问助手页时动态加载。
+- AI：普通构建完全禁用；显式测试构建可从浏览器调用一个 OpenAI-compatible 文本/视觉端点。
+- 图片：只在内存中解码、缩放和发送；不写入 IndexedDB、备份或文件系统。
+- 测试数据：版本化、带 checksum 的本地合成营养和餐单 fixture。
+- 备份：`fitness-local-backup-v1` JSON；恢复要求数据集身份匹配和明确覆盖确认。
+
+仓库没有小程序、云函数、远程数据库、云端对象存储、服务端身份或 CloudBase 运行时。
+
+## 本地运行
+
+环境：Node.js `20` 或 `22`，pnpm `9.15.x`。
 
 ```powershell
-pnpm.cmd install
-pnpm.cmd lint
-pnpm.cmd typecheck
-pnpm.cmd test
-pnpm.cmd build
-pnpm.cmd dev:api
+pnpm install --offline
+pnpm dev:web
 ```
 
-`pnpm.cmd dev:api` 会构建并启动 CloudBase 兼容的本地规划函数服务，监听 `http://127.0.0.1:3000/`。使用助手时另开终端运行 `pnpm.cmd dev:assistant`，监听 `http://127.0.0.1:3001/`。保持所需终端运行，再执行 `pnpm.cmd open:miniprogram`；该命令会显式生成本地 API 构建并通过微信开发者工具打开仓库项目。若工具未注册开始菜单快捷方式，可将 `WECHAT_DEVTOOLS_CLI` 设置为 `cli.bat` 的绝对路径。
+普通构建不接受测试模型 Key：
 
-常规 `pnpm.cmd build` 同时生成云端小程序构建，以及 `planning-api`、`assistant-api`、`photo-cleanup` 三个可部署单文件制品。客户端通过 `wx.cloud.callFunction` 调用前两个已认证函数，用户身份只取自云函数运行时的可信 OpenID；普通客户端不能调用清理函数或直接读写数据库。仓库不提交 AppID、环境 ID 或密钥。基础部署与双身份验收见 [`docs/cloudbase/phase-2-deployment.md`](docs/cloudbase/phase-2-deployment.md)，阶段六模型与助手部署见 [`docs/cloudbase/phase-6-bounded-assistant-deployment.md`](docs/cloudbase/phase-6-bounded-assistant-deployment.md)。
-
-无需打开小程序也可以执行 `pnpm.cmd smoke:api` 和 `pnpm.cmd smoke:assistant`：它们会在隔离端口启动真实函数进程，验证结构化规划与有限对话场景，然后回收子进程。对应的 `dry-run:api`、`dry-run:photo-cleanup` 和 `dry-run:assistant` 用于确认三个函数构建产物可被本地运行框架加载。
-
-自动化验收覆盖 lint、类型检查、单元测试、构建、CloudBase 本地加载和真实 HTTP 进程烟雾测试。`pnpm.cmd open:miniprogram` 只负责构建并请求已安装的微信开发者工具打开项目；页面在 IDE 内的实际渲染，以及受支持/不受支持两次表单交互，仍需人工确认，不能由命令退出码替代。
-
-当前实现用一个原子命令保存身体档案、目标、一周训练计划、受影响日期的能量目标与营养目标、幂等结果和 `TrainingPlanChanged` outbox 事件；请求在响应丢失后会复用同一幂等键安全重试。独立编辑会使旧的下游活动指针失效，当前上下文只返回一致的活动版本链，同时返回各实体的历史版本计数。
-
-同周训练变更只为发生新增、移动、取消或时长变化的未来日期追加能量与营养目标版本；过去事实不改写。每个营养目标精确引用对应的每日能量目标以及 `calculation-policy-v2`、`nutrition-policy-v1`。CloudBase 聚合当前写入 schema v8；读取既有 schema v2–v7 时只做结构性迁移，其中 v4 缺失的重算冲突详情明确标记为 `legacy_unavailable`，v5→v6 只补空图片历史和 null 清理指针，v6→v7 只补空助手会话，v7→v8 只补 null 账户删除状态，不推断或伪造历史照片、对话、fileID、候选、清理结果、营养、库存、餐单、完成度事实或失败原因。
-
-`nutrition-policy-v1` 由确定性 TypeScript 代码计算蛋白质、脂肪、碳水、纤维、饱和脂肪和添加糖边界，并在约束交集为空时返回结构化 `nutrition_constraints_infeasible`。食谱候选校验会从每 100 克审核快照和实际克数复算营养汇总，并把过敏原、忌口、库存、食物多样性和来源完整性作为硬约束。
-
-当前已实现手动食材库存快照和确定性七天餐单：用户输入普通中文食材名与可用克数，服务端解析到固定营养快照，使用 `weekly-meal-generation-v1` 生成完整七天、每日四餐的餐单版本。页面展示菜名、实际食材克数和从每 100 克数据复算的估算营养汇总；任一天的来源、库存、过敏原、忌口、多样性或营养约束失败时，不会激活部分餐单。
-
-从小程序规划建档页的“一周餐单与执行”入口可进入 `pages/meal-execution/index`。该页支持按天锁定、从服务端备选列表结构化换菜和录入实际训练分钟。手动换菜成功后自动锁定当天。训练变更或当天完成度变化时，未受保护日可在完整生成成功后原子激活新版本；锁定或手改日只生成 stale 提示、待确认候选和结构化差异，由用户选择保留或覆盖，后台不静默覆盖。完成度事实先独立保存；Provider 失败时旧活动餐单继续可用，重算任务可显式重试，幂等重放不增长版本计数。
-
-planning API 已提供 `resolveFoodName`、`saveInventory`、`generateWeeklyMealPlan`、`setMealPlanDayLock`、`updateMealPlanDay`、`resizeMealPlanPortion`、`recordTrainingCompletion`、`decideMealPlanCandidate`、`retryPendingRecalculation`、`createIngredientPhotoUpload`、`registerIngredientPhotoUpload`、`recognizeIngredientPhoto`、`confirmIngredientCandidate` 和扩展后的 `getCurrentContext`。本地运行只使用显式标记的合成 `test_fixture` 餐单/营养数据；其中可执行的均衡餐单 fixture 从营养快照、食谱、每日菜单到目录均使用独立且闭合的稳定 ID、版本和来源链，不会改写原始营养 fixture 的身份或数值。生产部署制品不包含 fixture 或本地身份路径，且当前没有可用的生产餐单 Provider。
-
-食材拍照页只接受 JPEG/PNG 和最多 10 MiB 的对象。服务端先创建不含用户标识的随机私有路径，小程序上传后登记完整 fileID；服务端核对预期 fileID、对象签名、媒体类型和大小后才允许识别。视觉结果最多展示五个已映射到审核营养快照的名称、置信度和食物状态候选，不估算克数或营养值，也不自动选择。用户必须明确选择候选并输入正整数克数，确认事务才会同时追加不可变图片 revision 和库存版本；确认前库存、营养目标、餐单、重算任务和 outbox 均不改变，确认本身也不自动生成餐单。识别不可用时页面始终保留手动库存录入。
-
-原图在上传会话创建后 23 小时进入应用清理队列，为 24 小时上限保留调度余量；确认后私有清理时间会提前到确认时刻。独立 `photo-cleanup` 云函数删除失败 15 分钟后重试，存储 `NOT_FOUND` 按幂等成功处理，未完成登记的孤儿对象仍通过创建会话时持久化的预期 fileID 清理。默认 `cloudbaserc.json` 不创建定时器；只有索引、可信身份、规则/IAM 和双账号检查通过后，管理员才使用独立 `cloudbaserc.photo-cleanup-timer.json` 激活每 15 分钟任务。服务端环境只使用 `CLOUDBASE_STORAGE_FILE_ID_PREFIX` 和 `FITNESS_VISION_FUNCTION_NAME` 两个配置名称；部署、复合索引、early-v6 可信身份硬门禁、权限与回滚见 [`docs/cloudbase/phase-5-ingredient-photo-deployment.md`](docs/cloudbase/phase-5-ingredient-photo-deployment.md)。
-
-小程序的“受限计划助手”页面只支持移动训练日、按精确中文菜名换菜和按 `0.50–1.50`、`0.05` 步长调整餐量。独立 `assistant-api` 只编译并复用一个固定 LangGraph.js 状态图；模型输出必须通过严格联合 schema 和用户原文证据校验，最多修复一次，之后才可转换为公开应用服务命令。训练消耗、食材克数、营养值、版本、过敏原和锁定保护始终由确定性代码决定。
-
-会话只在当前用户聚合内保存最近 12 条消息、一个待恢复 turn、非敏感结构化摘要和最近 32 个幂等回执。云端只读取 `CLOUDBASE_ENV_ID`、`FITNESS_LLM_PROVIDER_ID`、`FITNESS_LLM_MODEL` 和 `FITNESS_REVIEWED_DATASET_ID`；混元、CloudBase 托管 DeepSeek 或自有 DeepSeek Provider 均须显式选择目标环境实际启用的模型 ID，planning/assistant 也必须显式选择同一审核数据集，缺少配置时失败关闭，运行时不自动跨供应商或数据集回退。模型 Provider 单次尝试 20 秒、仅对传输/超时重试一次，连续三个完整操作失败后熔断 60 秒；审核数据读取超时 2 秒、成功缓存 60 秒但每次仍复核许可窗口；日志只记录字段白名单。
-
-助手执行前的内部异常只会在同一仓库事务确认 turn 仍为 `received` 后终结；一旦命令已经 `validated`，异常响应会保留该 turn，并在客户端重试时跳过模型、复用同一领域幂等键。客户端遇到对话版本冲突或 busy 时先读取服务端 pending，不会盲目循环旧请求。
-
-阶段五、六的本地固定桩、契约、进程 smoke、构建和恢复证据不代表真实云端已经验收。生产审核餐单/营养数据及授权、阶段三至六能力的 CloudBase 部署、真实混元/DeepSeek 合同与权限、自有 DeepSeek Provider、备案/登记、AI 内容标识、双账号规则、定时器、复合索引、微信 IDE/真机交互仍未完成；生产上线前也须复核正式 `CN-DRI-2023` 表格。因此当前不宣称 production ready。
-
-## 项目简介
-
-Fitness 是一款目标驱动的健身与饮食规划应用。它不是一次性回答“今天吃什么”的聊天机器人，而是维护一条持续联动的规划链路：
-
-```text
-身体数据与偏好 → 健身目标 → 一周训练计划 → 每日能量/营养目标 → 食谱与克数 → 实际完成记录 → 后续计划修正
+```powershell
+pnpm build:web
 ```
 
-用户录入身体数据、健身目标和一周训练计划，并通过表单或照片登记现有食材。系统根据每天的训练负荷推荐食谱及食材用量；当训练计划或实际完成情况改变时，系统重新计算受影响日期的能量目标和食谱，而不是继续沿用已经失效的饮食建议。
+测试模型只允许配置在被忽略的 `.env.test.local`：
 
-本产品只服务自述健康的成年人，提供一般性的健身与膳食规划，不提供疾病诊断、治疗、康复、孕期营养或未成年人营养建议。受当前中国人群基础代谢研究适用范围限制，MVP 只有在用户年龄为 18–45 岁且 BMI 为 `18.5–<24.0` 时，才自动生成个性化维持、减脂或增肌能量目标；范围外用户只能使用不带能量盈亏的均衡食谱与食材管理功能。
-
-## MVP 核心场景
-
-1. 用户录入年龄、性别、身高、体重、日常活动水平、过敏原、忌口和饮食偏好。
-2. 用户选择减脂、增肌或维持目标，并设置目标周期。
-3. 用户通过结构化表单创建一周训练计划，包括训练日、动作、组次、时长和主观强度。
-4. 系统估算每日能量消耗，并生成与训练负荷相匹配的每日营养目标。
-5. 用户手动录入或拍照识别现有食材；照片识别结果必须经用户确认。
-6. 系统从已验证的食谱模板和营养数据中推荐食谱、食材克数及营养汇总。
-7. 用户可通过有限对话换菜、调整份量或移动训练日。
-8. 用户确认实际训练完成度后，系统修正当天或后续日期的饮食计划。
-
-## MVP 范围
-
-包含：
-
-- 微信登录与用户数据隔离。
-- 身体档案、目标、一周训练计划和版本历史。
-- 训练计划结构化录入，不支持训练截图或视频识别。
-- 食材手动录入与照片辅助识别。
-- 每日热量和蛋白质、脂肪、碳水目标。
-- 自动个性化能量目标仅覆盖 18–45 岁、BMI `18.5–<24.0` 且通过健康范围确认的用户。
-- 基于现有食材、过敏原、忌口和营养目标的食谱推荐。
-- 一周饮食计划、换菜、调份量和有限对话修改。
-- 计划变更联动、实际完成度反馈、失败降级与来源说明。
-
-首版不包含：
-
-- 医疗营养、疾病管理、孕妇、未成年人或康复训练。
-- 可穿戴设备、心率或连续运动数据接入。
-- 训练动作视频识别、姿态纠正或自动计数。
-- 完全开放式的健康问答和自主多 Agent 决策。
-- 仅凭照片自动估算精确食材重量。
-- 社区、商城、私教、付费订阅和广告系统。
-
-## 核心产品规则
-
-以下规则属于不可破坏的业务约束：
-
-1. **目标先于计划，计划先于推荐。** 没有有效目标和训练计划时，不生成个性化一周食谱。
-2. **训练与饮食必须通过日期和计划版本关联。** 每个每日营养目标都能追溯到身体档案版本、目标版本、训练计划版本和计算策略版本。
-3. **变更只影响应当改变的数据。** 过去日期不改写；未来未锁定日期自动重算；用户已经确认或手动修改的餐单先展示变化差异，再由用户决定是否覆盖。
-4. **数值由代码计算。** 大模型不得直接决定热量、宏量营养素或克数，也不得把自然语言输出当作结构化事实写入数据库。
-5. **识图结果必须确认。** 视觉模型只返回候选食材、置信度和可能的规格，用户确认后才能进入库存和营养计算。
-6. **过敏原是硬约束。** 任何推荐都不得为了满足热量目标而放宽过敏原限制。
-7. **显示估算性质。** 热量消耗和摄入均以估算值或区间展示，不宣称医疗级精度。
-8. **先检查适用范围。** 年龄、BMI、健康确认或必要输入不满足策略要求时，不生成个性化能量盈亏数值。
-9. **证据不足时关闭输出。** 缺少可核验来源、来源超出适用人群或营养约束无解时，返回明确原因，不由模型或代码默认值补齐。
-
-## 技术选型
-
-| 层级 | 选择 | 原因 |
-|---|---|---|
-| 客户端 | 微信原生小程序 + TypeScript | 只面向微信，减少跨端框架和适配层 |
-| UI | 微信原生组件，按需引入小程序组件库 | 保持包体、可访问性和交互可控 |
-| 后端 | 腾讯云开发 CloudBase Node.js 云函数 | 无需管理服务器，原生连接微信身份、数据库和存储 |
-| Agent 编排 | LangGraph.js 单 Agent 状态图 | 流程可测试、可恢复、可版本化，适合 Codex 辅助开发 |
-| 大模型 | CloudBase AI+ 显式接入腾讯混元或 DeepSeek | 服务端按目标环境配置单一 Provider/模型，不自动跨供应商回退 |
-| 图像理解 | 混元视觉模型，供应商适配器封装 | 识别多种候选食材；服务可替换 |
-| 业务数据库 | CloudBase 文档型数据库 | JSON 结构灵活，支持事务、索引和快速迭代 |
-| 文件存储 | CloudBase 私有云存储 | 保存待识别图片并实施生命周期清理 |
-| 知识库 | CloudBase AI+ 知识库 | 用于低频更新的指南、动作说明和解释性内容 |
-| 营养接口 | TianAPI 营养成分表，经过本地标准化与缓存 | MVP 优先覆盖国内常见食物，不让运行时完全依赖第三方 |
-| 动作数据 | 自建并版本化经典动作库 | 保证中文质量、授权、稳定性和 MET 映射一致性 |
-| 热量计算 | 自建 TypeScript 计算引擎 | 计算可追溯、可测试，不依赖 LLM 或黑盒计算 API |
-
-CloudBase 支持数据库、云存储、身份认证、云函数和 AI 能力，并提供 LangGraph 的 Agent 部署路径，满足“不自建服务器”的要求。
-
-## 总体架构
-
-```mermaid
-flowchart TD
-    U["微信小程序"] --> AUTH["微信登录 / CloudBase 身份"]
-    U --> API["CloudBase 云函数 API"]
-    U --> STORE["私有云存储"]
-
-    API --> GRAPH["LangGraph.js 规划编排"]
-    API --> DOMAIN["确定性领域服务"]
-    GRAPH --> LLM["CloudBase AI+ / 腾讯混元"]
-    GRAPH --> DOMAIN
-
-    DOMAIN --> DB["CloudBase 文档数据库"]
-    DOMAIN --> FOOD["营养数据适配器"]
-    DOMAIN --> CALC["能量与营养计算引擎"]
-    DOMAIN --> RECIPE["食谱匹配与约束验证器"]
-
-    STORE --> VISION["食材图像识别适配器"]
-    VISION --> LLM
-    VISION --> U
-
-    GRAPH --> KB["指南与动作说明知识库"]
-    FOOD --> CACHE["标准化营养数据缓存"]
-    CACHE --> DB
+```dotenv
+VITE_TEST_LLM_BASE_URL=https://example.invalid/v1
+VITE_TEST_LLM_API_KEY=replace-with-short-lived-test-key
+VITE_TEST_LLM_MODEL=explicit-test-model-id
 ```
 
-小程序不直接持有第三方密钥，也不直接执行营养计算或写入 Agent 生成的任意 JSON。所有外部调用、参数校验、权限检查和最终写入都发生在云函数侧。
+显式授权后才运行：
 
-## Agent 的职责边界
-
-MVP 使用一个固定编排 Agent，而不是多个互相对话的 Agent。阶段六的 LangGraph 状态图只负责：
-
-- 从最新用户消息识别 `move_training_day`、`replace_meal`、`resize_meal_portion` 三项意图。
-- 在缺少日期、餐次、菜名或份量倍数时返回固定澄清提示。
-- 对严格模型 JSON 做一次可控修复，并从用户原文重新验证所有参数证据。
-- 把验证后的命令交给绑定可信身份、版本和幂等键的公开应用服务。
-- 在模型、版本或领域约束失败时返回固定安全结果和结构化页面恢复入口。
-
-三项白名单命令映射为：
-
-- 移动训练日 → 读取当前上下文并保存新的训练计划版本。
-- 替换菜品 → 通过当前可选食谱的精确中文名执行结构化换菜。
-- 调整餐量 → 使用当前审核食谱与营养快照重新计算克数和营养。
-
-目标建档、食材照片、训练完成记录和候选确认仍通过既有结构化页面/API 完成，不向 Agent 暴露任意工具名、数据库查询、URL、用户身份或数值计算入口。
-
-Agent 不得直接操作集合、拼接数据库查询、运行任意代码或绕过领域服务。
-
-## 记忆与知识库
-
-### 长期记忆：结构化数据库
-
-长期状态包括身体档案、目标、偏好、过敏原、计划版本、实际完成记录、食材库存和用户确认过的替换。它们是业务事实，必须存入数据库并带版本、来源和时间戳。
-
-建议的首批集合：
-
-- `users`
-- `body_profile_versions`
-- `goals`
-- `training_plan_versions`
-- `training_completion_events`
-- `daily_nutrition_targets`
-- `inventory_items`
-- `exercise_catalog`
-- `nutrition_foods`
-- `recipe_templates`
-- `meal_plan_versions`
-- `conversation_summaries`
-- `recalculation_jobs`
-
-### 短期记忆：有限会话上下文
-
-对话只保留完成当前修改所需的最近消息和结构化摘要。默认最多向模型发送最近 12 条消息；长期偏好从数据库读取，不依赖无限增长的聊天记录。
-
-### 知识库：解释性内容
-
-知识库只用于回答“为什么这样安排”、动作说明和一般膳食原则。营养数值、用户状态、计划版本和过敏原不得仅存在向量知识库中。知识文档必须记录标题、发布者、发布日期、许可/使用条件、导入日期和原始链接。
-
-## 外部 API 与数据策略
-
-### 食材照片
-
-1. 小程序把照片上传到用户私有路径。
-2. 云函数取得临时访问权限并调用视觉模型。
-3. 模型返回候选食材列表，不估算精确克数。
-4. 用户确认名称、状态（生/熟/可食部分）和可用重量或份数。
-5. 后端把名称映射到标准食材 ID，再查询营养数据。
-6. 原图默认在识别完成后 24 小时内删除，只保留用户确认后的结构化结果。
-
-可选降级：视觉模型不可用时允许手动录入；后续可接入百度果蔬/通用物体识别作为第二供应商。
-
-### 营养数据
-
-TianAPI 只通过 `NutritionProvider` 适配器访问。每条标准化记录至少保存：
-
-- 标准食材 ID、供应商名称和供应商原始 ID。
-- 中文名称、别名、食物类别和生熟状态。
-- 每 100 克可食部分的能量、蛋白质、脂肪和碳水。
-- 微量营养素、单位、可食部比例（可获得时）。
-- 数据来源、抓取时间、供应商版本和质量状态。
-
-对外展示和计算优先使用已审核缓存。正式商业上线前必须确认接口的数据来源、商业授权、缓存许可、SLA 和退出机制；无法证明来源的记录不得标记为“权威数据”。
-
-### 训练动作
-
-首版动作目录已收录 80 个版本化经典动作，保存中文名称、别名、动作模式、目标肌群、辅助肌群、器械、难度、步骤、常见错误和禁忌提示。动作条目不携带自行编造的单动作 MET；能量计算只使用独立审核的会话级 2024 Adult Compendium 来源代码。图片和视频尚未纳入当前目录；后续素材必须为原创、已购买授权或许可清晰。
-
-### 供应商隔离
-
-外部服务必须通过接口适配器调用，领域层不得引用供应商字段：
-
-```text
-VisionProvider
-NutritionProvider
-LanguageModelProvider
-KnowledgeRetriever
+```powershell
+pnpm web:test:preflight
+pnpm build:web:test
 ```
 
-所有调用设置超时、一次有限重试、熔断和可观测日志；测试环境使用固定桩数据，不依赖实时供应商。
+预检只输出可用性、延迟、请求 ID 是否存在和 token 总数，不记录 Key、请求正文或响应正文。测试结束后必须撤销 Key，并删除私有环境文件、测试构建和浏览器站点数据。
 
-## 计算原则
+## 验证命令
 
-MVP 的确定性计算策略版本为 `calculation-policy-v2`。策略输出是规划起点而非人体测量值；间接测热才是基础代谢测量的参考方法，任何公式都存在个体误差。
-
-每次计算结果必须引用策略版本和证据来源 ID。策略对象至少保存 `policyVersion`、`sourceIds`、`applicableAgeRange`、`applicableBmiRange`、`effectiveDate` 和 `reviewedAt`；不得把公式、阈值或来源只写在提示词中。
-
-### 适用范围门禁
-
-自动个性化能量目标仅在以下条件全部满足时启用：
-
-- 年龄为 18–45 岁。
-- BMI 为 `18.5–<24.0`。
-- 用户以最小化排除项确认自己不属于疾病治疗、孕期/哺乳期、进食障碍、伤病康复或其他需要专业营养管理的人群；不收集详细诊断和病历。
-- 身高、体重、年龄、公式所需性别变量、日常非训练活动等级和训练计划完整且通过范围校验。
-
-不满足时返回 `unsupported_for_personalized_energy`，不得悄悄切换公式。用户仍可使用食材管理和依据《中国居民膳食指南（2022）》的一般均衡食谱，但不得得到自动减脂或增肌热量。
-
-### 基础消耗与日常活动
-
-在上述范围内，使用针对中国正常体重成年人的公式估算基础代谢：
-
-```text
-估算 BMR(kcal/日) = 14.52 × 体重(kg) - 155.88 × S + 565.79
-S：男性 = 0，女性 = 1
+```powershell
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm test:web
+pnpm build:web
+pnpm build:web:test
+pnpm test:web:e2e
+pnpm scan:web-secrets
+pnpm scan:web-boundaries
+git diff --check
 ```
 
-该公式来自 18–45 岁、正常体重中国成年人的研究，独立验证样本较小且报告准确率为 75.6%，因此界面只显示“初始估算”及适用范围，不使用“精准基础代谢”。公式中的性别变量必须由用户提供，不得由姓名、头像或模型推断。
+Playwright 使用 Chromium 与 WebKit，自动化模型请求只命中本机固定桩，不访问实时付费模型。完整交接与最多 5 人签收表见 [`docs/testing/local-web-internal-test-handoff.md`](docs/testing/local-web-internal-test-handoff.md)。
 
-日常活动等级只评价工作、通勤和家务，不包含已经录入训练计划的运动，采用中国居民参考 PAL：轻 `1.50`、中 `1.75`、重 `2.00`。
+## 产品与安全边界
 
-```text
-非训练基线消耗 = 估算 BMR × 非训练 PAL
-估算维持消耗 = 非训练基线消耗 + 当日计划训练净消耗
-```
+- 自动个性化能量目标仅支持 18-45 岁、BMI `18.5-<24.0` 且完成最小化健康排除项确认的健康成年人。
+- 训练和 PAL 分开计算，避免重复计入。
+- 训练计划变化只重算生效日起的未来日期；过去事实不改写。
+- 锁定或手改餐单不会被静默覆盖。
+- 过敏原、忌口、来源完整性和营养可行性是硬约束。
+- 约束无解时返回 `nutrition_constraints_infeasible`，不得伪造数值或放宽安全边界。
+- 所有写入使用预期版本和幂等键；并发旧版本写入必须失败。
+- 备份不包含测试 API Key、原始图片、图片 data URL 或浏览器临时状态。
+- 删除要求精确短语 `DELETE LOCAL DATA`，并清除 IndexedDB、页面草稿和助手恢复状态。
 
-### 训练消耗
+## 计算策略登记
 
-根据 2024 Adult Compendium 的会话级活动类别、用户主观强度和有效时长映射 MET：
+当前确定性策略为 `calculation-policy-v2` 与 `nutrition-policy-v1`：
 
-```text
-净训练千卡 = (MET - 1) × 3.5 × 体重(kg) ÷ 200 × 分钟
-```
+- BMR：`14.52 x weightKg - 155.88 x sexCode + 565.79`，男性 `0`、女性 `1`。
+- 非训练 PAL：轻 `1.50`、中 `1.75`、重 `2.00`。
+- 净训练消耗：`(MET - 1) x 3.5 x kg / 200 x minutes`。
+- 维持、减脂、增肌初始调整：`0%`、`-10%`、`+5%`。
+- 蛋白质：无计划训练采用成年人 RNI；一般运动/耐力 `1.4 g/kg/day`；规律抗阻/增肌 `1.6 g/kg/day`；自动推荐不超过 `2.0 g/kg/day`。
+- 脂肪 `20%-30%E`，默认中点 `25%E`；饱和脂肪 `<10%E`。
+- 碳水同时满足 `50%-65%E` 与至少 `120 g/day`。
+- 膳食纤维 `25-30 g/day`，添加糖 `<10%E`。
 
-力量训练的组次只用于辅助推断有效时长和强度档位，不假装能从“重量 × 次数”得到精确消耗。动作库不得为单个力量动作自行编造 MET；只能引用经过人工审核的 Compendium 会话类别和来源代码。存在多个合理类别时输出估算区间。用户实际完成度按 0–100% 修正有效时长，但不会改写已经发生的事实记录。
+科学证据登记：
 
-### 目标与宏量营养素
+- `CN-DRI-2023`：《中国居民膳食营养素参考摄入量（2023 版）》；生产使用前仍需复核正式表格。
+- `WS/T-428-2013`：成人体重判定相关行业标准，用于 BMI 范围边界。
+- `ADULT-COMPENDIUM-2024`：2024 Adult Compendium 会话活动类别和来源代码，用于审核后的 MET 数据。
+- 公式、常数、适用范围、生效日期、来源 ID 与复核时间均保存在版本化策略对象中；历史结果不会因策略更新被静默改写。
 
-- 维持：以估算日消耗为中心值。
-- 减脂：初始能量调整为估算维持消耗的 `-10%`；目标体重不得使 BMI 低于 `18.5`。
-- 增肌：初始能量调整为估算维持消耗的 `+5%`；研究支持把 `5%–20%` 作为需按训练经验个体化的保守盈余范围，但 MVP 不自动扩大盈余。
-- MVP 不提供任何自动扩大能量盈亏的逻辑。除训练计划变化导致的确定性重算外，体重趋势只产生复核提示，不自动继续增减热量。
-- 若用户提供了可用的体重记录，观察到每周下降超过 `0.5 kg`、增肌期每周增长超过当前体重的 `0.5%`，或目标即将越过 BMI 门禁时，停止继续下调或上调并要求重新评估。
-- 无计划训练时，蛋白质采用中国成年人 RNI：男性 `65 g/日`、女性 `55 g/日`；一般运动或耐力训练使用 `1.4 g/kg/日`；规律抗阻训练或增肌使用 `1.6 g/kg/日`。MVP 不自动推荐超过 `2.0 g/kg/日`。
-- 脂肪以目标能量的 `25%` 为中点，并强制处于 `20%–30%E`；饱和脂肪 `<10%E`。
-- 碳水化合物不得只是“剩余热量”，必须同时满足 `50%–65%E` 和至少 `120 g/日`。
-- 膳食纤维目标为 `25–30 g/日`，添加糖 `<10%E`；食谱还要满足食物多样性和过敏原硬约束。
-- 如果蛋白质、脂肪、碳水、纤维、食材可用量和总能量无法同时满足，返回 `nutrition_constraints_infeasible` 并解释冲突，不放宽健康与过敏原约束。
-
-蛋白质的训练规则来自健康运动人群研究，不得扩展到肾病等不在产品范围内的人群。宏量营养素、膳食纤维、添加糖和饱和脂肪的公开可核验基线采用 WS/T 578.1—2017；生产上线前必须与《中国居民膳食营养素参考摄入量（2023 版）》正式表格再次核对，并通过新策略版本记录任何差异。后续策略升级只影响新生成的计划，历史计划保留原策略版本。
-
-### 科学证据登记
-
-| 来源 ID | 用途 | 适用范围与限制 |
-|---|---|---|
-| `CN-DRI-2023` | 当前中国 DRIs 总体依据及上线前复核 | 中国居民群体或个体；精确常量只从正式表格录入，不从二手网页抄录 |
-| `CN-DRI-MACRO-2017` | PAL、RNI、宏量营养素、纤维、添加糖和饱和脂肪公开基线 | 健康中国居民；升级时必须检查 2023 版差异 |
-| `CN-BMR-2023` | 中国正常体重成年人 BMR 初始公式 | 18–45 岁、BMI `18.5–<24.0`；独立验证样本小，不能外推 |
-| `CN-RMR-2019` | 公式误差与中国成年人适用性复核 | 预测公式有明显个体误差，支持只显示估算值 |
-| `MET-COMPENDIUM-2024` | 会话级训练 MET 映射 | 无显著影响代谢疾病或残障的成年人；不是个体测量值 |
-| `PROTEIN-MORTON-2018` | 抗阻训练蛋白质 `1.6 g/kg/日` | 健康抗阻训练成年人，不能作为全人群常量 |
-| `ISSN-PROTEIN-2017` | 一般运动人群 `1.4–2.0 g/kg/日`范围 | 健康运动人群；MVP 取保守默认并设自动上限 |
-| `NHC-WEIGHT-2024` | 减重速度和停止复核 | 国家卫健委体重管理原则；本产品不开展肥胖临床治疗 |
-| `ENERGY-SURPLUS-2023` | 增肌盈余和增重速度 | 抗阻训练人群；`+5%` 是保守产品起点，不是生理定律 |
-| `IOC-REDS-2023` | 低能量可用风险提示 | 运动人群；产品只做风险停止提示，不作 REDs 诊断 |
-
-### 食谱匹配
-
-食谱推荐以模板筛选和约束求解为主：先执行过敏原、忌口、食材可用性等硬过滤，再按热量和宏量营养素误差排序。LLM 可以解释选择或生成口语化步骤，但不能凭空增加食材、营养值或克数。
-
-## 训练变更与饮食联动
-
-训练计划每次保存都创建不可变版本，并产生带生效日期的领域事件：
-
-```text
-TrainingPlanChanged
-  → 找出变更日期及受影响的未来日期
-  → 计算新旧计划每周训练净消耗差值
-  → 按训练日期重新估算每日训练消耗
-  → 创建新的每日营养目标版本
-  → 重新匹配未锁定餐单
-  → 对已锁定餐单生成差异提示
-  → 用户确认后激活新的一周计划版本
-```
-
-过去日期永不回写。当天尚未训练或用餐时可以提示重算；已经完成的记录保持事实不变。重算任务必须幂等，同一变更事件重复投递不得生成多个有效版本。
-
-训练计划联动必须满足：
-
-```text
-每周训练消耗变化 = Σ新计划净训练消耗 - Σ旧计划净训练消耗
-```
-
-增加、取消、移动训练或修改有效时长/强度都必须改变相应未来日期的营养目标；只移动训练日时保持整周训练净消耗不变，只重新分配日期。系统不得用模型解释文本代替该差值计算。
-
-## 异常与降级
-
-- 识图失败：保留照片上传状态，切换为手动食材录入。
-- 营养 API 失败：优先读取审核缓存；没有可靠数据时要求用户换用可识别食材，不让 LLM补数值。
-- 模型失败：结构化表单、计算和既有计划仍可用；有限对话暂时不可用。
-- 重算失败：旧计划继续保持有效，新版本标记为失败并允许重试。
-- 数据冲突：通过版本号和幂等键拒绝覆盖较新的用户修改。
-- 无可行食谱：明确指出缺失的食材或营养缺口，不放宽过敏原约束。
-
-## 隐私、安全与合规
-
-- 只收集完成推荐所必需的数据，不收集详细病史和诊断信息；健康范围只使用最小化排除项确认。
-- 身体数据、目标和照片默认私有；按用户 ID 执行最小权限访问。
-- 涉及身体与健康相关信息时提供清晰告知、同意、导出、更正和删除入口。
-- API Key 和供应商密钥只保存在 CloudBase 服务端密钥配置中。
-- 日志不得记录原始照片、完整身体档案、访问令牌或用户自由文本全文。
-- 公开上线前核查小程序隐私保护指引、个人信息保护要求、生成式 AI 应用登记、模型备案号公示和 AI 内容标识要求。
-- 所有页面明确说明结果仅供一般健身和膳食规划参考；出现疾病、伤痛、进食障碍或极端目标时停止个性化建议。
-
-### 个人数据查看、导出与删除
-
-阶段七的数据权利实现提供三个 authenticated `planning-api` 动作：
-
-- `getPersonalDataSummary`：返回数据是否存在、当前活动版本计数、记录计数、删除状态、容量状态和一次性快照令牌。
-- `exportPersonalData`：只接受当前快照令牌，返回 `personal-data-export-v1` 严格 JSON；每条记录标注 `user`、`ai_assisted` 或 `deterministic` 来源，并携带策略及审核数据版本引用。
-- `deleteAccount`：要求当前快照令牌、新幂等键和精确确认词 `DELETE_MY_ACCOUNT`。删除开始后，普通规划与助手读写全部返回 `account_deletion_pending`，必须使用同一删除请求重试，直至私有文件和聚合文档都完成删除。
-
-公开导出明确排除可信身份、CloudBase 文档 ID、私有文件 ID/路径、供应商请求 ID、请求指纹、幂等回执、删除内部状态和清理调度字段。小程序导出只在用户直接点击后复制到剪贴板，或写入 `USER_DATA_PATH` 临时 JSON 并在分享完成回调中删除；不会保存到本地键值存储或 CloudBase 存储。账户删除终态会先执行 `wx.clearStorageSync()`，再回到建档页。
-
-聚合自助处理上限为 UTF-8 JSON `3,000,000` 字节。超限时返回 `account_capacity_exceeded`/`admin_recovery_required`，不允许截断历史、放宽隐私约束或由客户端直接修复。完整操作、测试步骤、删除重试语义和人工恢复边界见 [`docs/cloudbase/phase-7-personal-data-rights.md`](docs/cloudbase/phase-7-personal-data-rights.md)。当前仅完成 7A 本地代码与门禁，不代表阶段七真实受控内测已经发布。
-
-### 生产审核数据与发布门禁
-
-云端餐单不再使用 unavailable 占位或 fixture 回退。planning/assistant 只按服务端 `FITNESS_REVIEWED_DATASET_ID` 精确读取 `planning_reviewed_datasets` 中一份 `reviewed-planning-dataset-v1` 文档，并校验审批/质量、来源授权、缓存/展示许可、有效期、SHA-256、版本元数据和目录→七日菜单→菜谱→营养快照的完整闭合图。缺失、超时、授权到期、checksum 或引用图错误统一失败关闭为公开 `provider_unavailable`。
-
-发布工具提供 `release:dataset`（私有候选离线校验）、`build:miniprogram:release`（受控内测公开元数据构建）、`release:preflight`（真实 AppID/环境/CLI/配置名/数据集证据）、`release:capacity`（3 MB 与 10×30 本地基线）、`release:scan`（三函数/小程序/匿名证据扫描）和按固定顺序 fail-fast 的 `release:check`。证据只写入已忽略的 `.build/release-evidence`，不包含 ID、联系信息、健康数据、自由文本、图片/fileID、密钥或供应商正文。
-
-候选导入、活动 ID 切换、备份与回滚的完整顺序见 [`docs/cloudbase/phase-7-reviewed-dataset.md`](docs/cloudbase/phase-7-reviewed-dataset.md)。当前 7B 只证明本地代码和发布工具就绪；真实来源/授权、数据集导入、CloudBase preflight、Provider 验收、双账号、恢复和设备仍未通过。
-
-### 受控内测发布与测试人员验收
-
-7C 发布手册已经按固定 `@cloudbase/cli@3.7.2` 的本机实际命令面校正，覆盖干净版本冻结、私有输入预检、审核数据导入、三函数部署、索引/规则/IAM/定时器、双账号与供应商故障、数据权利、日志/容量、备份恢复、回滚和真机验收；完整操作顺序见 [`docs/cloudbase/phase-7-controlled-beta-release.md`](docs/cloudbase/phase-7-controlled-beta-release.md)。测试人员在发布负责人明确通知环境就绪后，使用 [`docs/testing/phase-7-controlled-beta-checklist.md`](docs/testing/phase-7-controlled-beta-checklist.md) 执行双身份、设备和安全边界验收。
-
-当前真实预检能够识别固定 CLI 版本，但因真实私有审核数据、AppID/环境、公开隐私元数据、容量/恢复输入和外部审批尚未提供而安全失败；仓库未执行任何目标环境写入。因此当前状态是“本地代码与测试准备就绪”，不是“受控内测已发布”，测试人员暂不能开始真实云端验收。
-
-## 测试与验收基线
-
-至少覆盖以下自动化测试：
-
-- 能量公式、单位换算、舍入和策略版本单元测试。
-- 18/45 岁和 BMI `18.5/24.0` 边界、缺失输入及不支持人群测试。
-- BMR 来源与性别编码、PAL 排除显式训练及 MET 来源完整性测试。
-- 减脂/增肌默认值、停止条件和禁止自动扩大盈亏测试。
-- 蛋白质分支、脂肪/碳水/纤维上下限及无可行解测试。
-- 训练计划变更影响范围与幂等重算测试。
-- 食谱营养汇总等于各食材营养之和。
-- 过敏原、忌口和食材可用量的属性测试。
-- LLM/视觉/营养供应商适配器契约测试。
-- 视觉候选未确认时不得进入库存的流程测试。
-- 旧计划在新计划生成失败时仍保持有效。
-- 不同用户之间的数据权限隔离测试。
-
-MVP 验收必须证明：移动某个训练日后，受影响日期的训练消耗、营养目标和未锁定食谱同步变化且整周总训练消耗不凭空改变；过去记录和无关日期不被改写；页面展示的营养总数能够由已存食材数据复算得到；不支持的人群、缺少来源的数据和无可行营养解都不会生成伪造数值。
-
-## 建议目录结构
+## 目录
 
 ```text
 fitness/
-├─ miniprogram/                 # 微信小程序
-├─ cloudfunctions/              # CloudBase 云函数入口
-├─ packages/
-│  ├─ domain/                   # 领域实体、策略与领域事件
-│  ├─ calculation/              # 能量和营养计算
-│  ├─ agent/                    # LangGraph 状态图与受控工具
-│  ├─ providers/                # 模型、视觉、营养、知识库适配器
-│  ├─ contracts/                # 跨端 DTO 与运行时校验
-│  └─ test-fixtures/            # 固定测试数据
-├─ data/
-│  ├─ exercises/                # 版本化动作数据
-│  └─ recipes/                  # 已验证食谱模板
-├─ docs/
-│  ├─ decisions/                # ADR 架构决策记录
-│  └─ superpowers/specs/        # 已确认设计稿
-├─ AGENTS.md
-└─ README.md
+|- apps/web/                 # 本地优先 Web 应用与 Playwright
+|- packages/                 # domain/application/calculation/agent/providers/persistence/contracts
+|- data/                     # 版本化动作与合成营养 fixture
+|- docs/decisions/           # ADR
+|- docs/superpowers/         # 历史设计与实施审计
+|- docs/testing/             # 当前 Web 内测交接
+|- DEVELOPMENT_PROGRESS.md   # 唯一动态进度真源
 ```
-
-目录只是实施基线；在编写实施计划前，不创建空壳模块或引入依赖。
-
-## 参考资料
-
-- [腾讯云开发 CloudBase 产品概述](https://cloud.tencent.com/document/product/876/18431)
-- [CloudBase AI+ 与 Agent 开发](https://cloud.tencent.com/document/product/876/130727)
-- [CloudBase 数据库与知识库对比](https://docs.cloudbase.net/ai/agent/data-model)
-- [CloudBase 知识库](https://docs.cloudbase.net/ai/agent/knowledgebase)
-- [腾讯混元 Function Calling](https://cloud.tencent.com/document/product/1729/111007)
-- [TianAPI 营养成分表](https://www.tianapi.com/apiview/121-2)
-- [TianAPI 食物营养识别](https://www.tianapi.com/apiview/248)
-- [百度菜品识别](https://ai.baidu.com/tech/imagerecognition/dish/)
-- [中国居民膳食营养素参考摄入量（2023）](https://www.cnsoc.org/drpostand/)
-- [WS/T 578.1—2017 中国居民膳食营养素参考摄入量：宏量营养素](https://www.nhc.gov.cn/ewebeditor/uploadfile/2017/10/20171017152901174.pdf)
-- [中国居民膳食指南（2022）](https://dg.cnsoc.org/)
-- [中国正常体重成年人基础代谢预测公式研究（2023）](https://pmc.ncbi.nlm.nih.gov/articles/PMC10574416/)
-- [中国大陆成年人静息代谢公式验证研究（2019）](https://pubmed.ncbi.nlm.nih.gov/31374849/)
-- [2024 Adult Compendium of Physical Activities](https://pmc.ncbi.nlm.nih.gov/articles/PMC10818145/)
-- [抗阻训练蛋白质补充系统综述与荟萃分析（2018）](https://bjsm.bmj.com/content/52/6/376)
-- [ISSN 蛋白质与运动立场文件（2017）](https://pmc.ncbi.nlm.nih.gov/articles/PMC5477153/)
-- [国家卫生健康委体重管理指导原则（2024）](https://www.nhc.gov.cn/cms-search/downFiles/f932c5c0004f4959b92613dd1024483c.pdf)
-- [国家卫生健康委居民体重管理核心知识释义（2024）](https://www.nhc.gov.cn/cms-search/downFiles/5e20de34c0fe45bb9fcac0636b21ad98.pdf)
-- [抗阻训练者不同能量盈余研究（2023）](https://pmc.ncbi.nlm.nih.gov/articles/PMC10620361/)
-- [IOC 运动中相对能量不足共识（2023）](https://bjsm.bmj.com/content/57/17/1073)
-- [生成式人工智能服务管理暂行办法](https://www.cac.gov.cn/2023-07/13/c_1690898327029107.htm)

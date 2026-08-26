@@ -8,7 +8,7 @@ import {
   LanguageModelBackendError,
   type AssistantLanguageModelBackend,
   type AssistantLanguageModelBackendResult
-} from './cloudbase-language-model-backend';
+} from './language-model-backend';
 
 const LANGUAGE_MODEL_POLICY = {
   timeoutMs: 20_000,

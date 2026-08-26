@@ -430,33 +430,6 @@ function expectCorrupt(state: PlanningAggregateState): void {
   });
 }
 
-function validPhotoVersion(userId: string): IngredientPhotoVersion {
-  return {
-    kind: 'ingredient_photo_version',
-    id: 'ingredient-photo-version-1',
-    photoId: 'ingredient-photo-1',
-    userId,
-    revision: 1,
-    createdAt: '2026-08-19T00:00:00.000Z',
-    uploadCreatedAt: '2026-08-19T00:00:00.000Z',
-    deleteDueAt: '2026-08-19T23:00:00.000Z',
-    expectedCloudPath: 'ingredient-photos/ingredient-photo-1/upload-1.jpg',
-    expectedPrivateFileId: 'cloud://env.bucket/ingredient-photos/ingredient-photo-1/upload-1.jpg',
-    mediaType: 'image/jpeg',
-    workflowStatus: 'awaiting_upload',
-    storageStatus: 'retained',
-    candidates: [],
-    confirmedCandidateId: null,
-    confirmedGrams: null,
-    inventoryVersionId: null,
-    recognitionFailureCode: null,
-    cleanupAttemptCount: 0,
-    nextCleanupAt: '2026-08-19T23:00:00.000Z',
-    lastCleanupFailureCode: null,
-    deletedAt: null
-  };
-}
-
 const photoCandidate = {
   id: 'ingredient-candidate-1',
   foodId: 'fixture-food',
@@ -466,25 +439,25 @@ const photoCandidate = {
   foodState: 'raw' as const
 };
 
-function recognizedPhotoVersions(userId: string): readonly IngredientPhotoVersion[] {
-  const awaitingUpload = validPhotoVersion(userId);
-  const uploaded = {
-    ...awaitingUpload,
-    id: 'ingredient-photo-version-2',
-    revision: 2,
-    workflowStatus: 'uploaded' as const
+function validPhotoVersion(
+  userId: string,
+  inventoryVersionId: string,
+  confirmedGrams = 125
+): IngredientPhotoVersion {
+  return {
+    kind: 'ingredient_photo_version',
+    id: 'ingredient-photo-version-1',
+    photoId: 'ingredient-photo-1',
+    userId,
+    revision: 1,
+    createdAt: '2026-08-19T00:03:00.000Z',
+    mediaType: 'image/jpeg',
+    workflowStatus: 'confirmed',
+    candidates: [photoCandidate],
+    confirmedCandidateId: photoCandidate.id,
+    confirmedGrams,
+    inventoryVersionId
   };
-  return [
-    awaitingUpload,
-    uploaded,
-    {
-      ...uploaded,
-      id: 'ingredient-photo-version-3',
-      revision: 3,
-      workflowStatus: 'recognized' as const,
-      candidates: [photoCandidate]
-    }
-  ];
 }
 
 async function stateWithConfirmedPhoto(): Promise<PlanningAggregateState> {
@@ -503,75 +476,16 @@ async function stateWithConfirmedPhoto(): Promise<PlanningAggregateState> {
         : item.availableGrams
     }))
   };
-  const recognized = recognizedPhotoVersions('user-a');
-  const latest = recognized[2];
-  if (latest === undefined) throw new Error('Expected recognized photo');
-  const confirmed = {
-    ...latest,
-    id: 'ingredient-photo-version-4',
-    revision: 4,
-    workflowStatus: 'confirmed' as const,
-    confirmedCandidateId: photoCandidate.id,
-    confirmedGrams,
-    inventoryVersionId: inventory.id
-  };
   return {
     ...state,
     inventories: [...state.inventories, inventory],
-    ingredientPhotoVersions: [...recognized, confirmed],
-    nextPhotoCleanupAt: confirmed.nextCleanupAt
+    ingredientPhotoVersions: [
+      validPhotoVersion('user-a', inventory.id, confirmedGrams)
+    ]
   };
 }
 
 describe('planning aggregate invariants', () => {
-  test('accepts a pending account deletion with a traceable immutable snapshot', async () => {
-    const state = await createValidState();
-    const pending = {
-      ...state,
-      accountDeletion: {
-        status: 'pending',
-        idempotencyKey: 'delete-account-0001',
-        requestFingerprint: `v2:sha256:${'a'.repeat(64)}`,
-        snapshotToken: 'snapshot-token-0001',
-        requestedAt: '2026-08-20T00:00:00.000Z',
-        privateFileIds: [
-          'cloud://env.bucket/ingredient-photos/photo-a/upload.jpg',
-          'cloud://env.bucket/ingredient-photos/photo-b/upload.jpg'
-        ]
-      }
-    } as unknown as PlanningAggregateState;
-
-    expect(() => { assertPlanningAggregateInvariants(pending, 'user-a'); }).not.toThrow();
-  });
-
-  test.each([
-    ['empty idempotency key', { idempotencyKey: '' }],
-    ['empty request fingerprint', { requestFingerprint: '' }],
-    ['empty snapshot token', { snapshotToken: '' }],
-    ['non-ISO request time', { requestedAt: '2026-08-20' }],
-    ['non-private file identifier', { privateFileIds: ['https://example.com/photo.jpg'] }],
-    [
-      'duplicate private file identifiers',
-      { privateFileIds: ['cloud://env.bucket/photo.jpg', 'cloud://env.bucket/photo.jpg'] }
-    ]
-  ] as const)('rejects pending account deletion with %s', async (_caseName, override) => {
-    const state = await createValidState();
-    const corrupt = {
-      ...state,
-      accountDeletion: {
-        status: 'pending',
-        idempotencyKey: 'delete-account-0001',
-        requestFingerprint: `v2:sha256:${'a'.repeat(64)}`,
-        snapshotToken: 'snapshot-token-0001',
-        requestedAt: '2026-08-20T00:00:00.000Z',
-        privateFileIds: ['cloud://env.bucket/ingredient-photos/photo-a/upload.jpg'],
-        ...override
-      }
-    } as unknown as PlanningAggregateState;
-
-    expectCorrupt(corrupt);
-  });
-
   test('rejects assistant pending and receipt state for the same request', async () => {
     const state = await createValidState();
     const requestFingerprint = `v2:sha256:${'a'.repeat(64)}`;
@@ -659,120 +573,36 @@ describe('planning aggregate invariants', () => {
     }
   });
 
-  test('rejects ingredient photo records owned by another user', async () => {
-    const state = await createValidState();
-    expectCorrupt({
-      ...state,
-      ingredientPhotoVersions: [validPhotoVersion('user-b')],
-      nextPhotoCleanupAt: '2026-08-19T23:00:00.000Z'
-    });
-  });
-
-  test('rejects changes to immutable ingredient photo storage identity', async () => {
-    const state = await createValidState();
-    const initial = validPhotoVersion('user-a');
-    expectCorrupt({
-      ...state,
-      ingredientPhotoVersions: [initial, {
-        ...initial,
-        id: 'ingredient-photo-version-2',
-        revision: 2,
-        workflowStatus: 'uploaded',
-        expectedCloudPath: 'ingredient-photos/ingredient-photo-1/changed.jpg'
-      }],
-      nextPhotoCleanupAt: initial.nextCleanupAt
-    });
-  });
-
-  test('rejects illegal ingredient photo workflow transitions', async () => {
-    const state = await createValidState();
-    const initial = validPhotoVersion('user-a');
-    expectCorrupt({
-      ...state,
-      ingredientPhotoVersions: [initial, {
-        ...initial,
-        id: 'ingredient-photo-version-2',
-        revision: 2,
-        workflowStatus: 'recognized',
-        candidates: [photoCandidate]
-      }],
-      nextPhotoCleanupAt: initial.nextCleanupAt
-    });
-  });
-
-  test('accepts successful recognition after a failed recognition retry', async () => {
-    const state = await createValidState();
-    const initial = validPhotoVersion('user-a');
-    const uploaded: IngredientPhotoVersion = {
-      ...initial,
-      id: 'ingredient-photo-version-2',
-      revision: 2,
-      workflowStatus: 'uploaded'
-    };
-    const failed: IngredientPhotoVersion = {
-      ...uploaded,
-      id: 'ingredient-photo-version-3',
-      revision: 3,
-      workflowStatus: 'recognition_failed',
-      recognitionFailureCode: 'no_supported_candidate'
-    };
-    const recognized: IngredientPhotoVersion = {
-      ...failed,
-      id: 'ingredient-photo-version-4',
-      revision: 4,
-      workflowStatus: 'recognized',
-      candidates: [photoCandidate],
-      recognitionFailureCode: null
-    };
-
-    expect(() => {
-      assertPlanningAggregateInvariants({
-        ...state,
-        ingredientPhotoVersions: [initial, uploaded, failed, recognized],
-        nextPhotoCleanupAt: recognized.nextCleanupAt
-      }, 'user-a');
-    }).not.toThrow();
-  });
-
-  test('rejects an initial photo cleanup time that is not exactly 23 hours after upload', async () => {
-    const state = await createValidState();
-    const photo = {
-      ...validPhotoVersion('user-a'),
-      deleteDueAt: '2026-08-19T22:00:00.000Z',
-      nextCleanupAt: '2026-08-19T22:00:00.000Z'
-    };
-    expectCorrupt({
-      ...state,
-      ingredientPhotoVersions: [photo],
-      nextPhotoCleanupAt: photo.nextCleanupAt
-    });
-  });
-
-  test('rejects normalized candidate mutation during confirmation', async () => {
+  test('rejects a local candidate confirmation owned by another user', async () => {
     const state = await stateWithConfirmedPhoto();
-    const confirmed = state.ingredientPhotoVersions[3];
-    if (confirmed === undefined) throw new Error('Expected confirmed photo');
     expectCorrupt({
       ...state,
-      ingredientPhotoVersions: state.ingredientPhotoVersions.map((photo) => (
-        photo.id === confirmed.id
-          ? { ...photo, candidates: [{ ...photoCandidate, canonicalNameZh: '被篡改食材' }] }
-          : photo
-      ))
+      ingredientPhotoVersions: state.ingredientPhotoVersions.map((photo) => ({
+        ...photo,
+        userId: 'user-b'
+      }))
     });
   });
 
-  test('rejects a confirmation that does not reference its recognized candidate', async () => {
+  test('rejects malformed fields in a confirmed normalized candidate', async () => {
     const state = await stateWithConfirmedPhoto();
-    const confirmed = state.ingredientPhotoVersions[3];
-    if (confirmed === undefined) throw new Error('Expected confirmed photo');
     expectCorrupt({
       ...state,
-      ingredientPhotoVersions: state.ingredientPhotoVersions.map((photo) => (
-        photo.id === confirmed.id
-          ? { ...photo, confirmedCandidateId: 'missing-candidate' }
-          : photo
-      ))
+      ingredientPhotoVersions: state.ingredientPhotoVersions.map((photo) => ({
+        ...photo,
+        candidates: [{ ...photoCandidate, confidence: 1.1 }]
+      }))
+    });
+  });
+
+  test('rejects a confirmation that does not reference one of its candidates', async () => {
+    const state = await stateWithConfirmedPhoto();
+    expectCorrupt({
+      ...state,
+      ingredientPhotoVersions: state.ingredientPhotoVersions.map((photo) => ({
+        ...photo,
+        confirmedCandidateId: 'missing-candidate'
+      }))
     });
   });
 
@@ -796,11 +626,8 @@ describe('planning aggregate invariants', () => {
     });
   });
 
-  test('accepts a first inventory version created by confirming into an empty inventory', async () => {
+  test('accepts a first inventory version created by local candidate confirmation', async () => {
     const state = await createValidState();
-    const recognized = recognizedPhotoVersions('user-a');
-    const latest = recognized[2];
-    if (latest === undefined) throw new Error('Expected recognized photo');
     const inventory = {
       kind: 'inventory_version' as const,
       id: 'inventory-confirmed-first',
@@ -813,78 +640,12 @@ describe('planning aggregate invariants', () => {
         availableGrams: 125
       }]
     };
-    const confirmed: IngredientPhotoVersion = {
-      ...latest,
-      id: 'ingredient-photo-version-4',
-      revision: 4,
-      createdAt: inventory.createdAt,
-      workflowStatus: 'confirmed',
-      storageStatus: 'cleanup_pending',
-      confirmedCandidateId: photoCandidate.id,
-      confirmedGrams: 125,
-      inventoryVersionId: inventory.id,
-      nextCleanupAt: inventory.createdAt
-    };
-
     expect(() => {
       assertPlanningAggregateInvariants({
         ...state,
         inventories: [inventory],
-        ingredientPhotoVersions: [...recognized, confirmed],
-        activeInventoryVersionId: inventory.id,
-        nextPhotoCleanupAt: confirmed.nextCleanupAt
-      }, 'user-a');
-    }).not.toThrow();
-  });
-
-  test('accepts confirmation as a new snapshot tuple for an existing food', async () => {
-    const state = await createValidState();
-    const previousInventory = {
-      kind: 'inventory_version' as const,
-      id: 'inventory-1',
-      userId: 'user-a',
-      version: 1,
-      createdAt: '2026-08-18T00:00:00.000Z',
-      items: [{
-        foodId: photoCandidate.foodId,
-        nutritionSnapshotId: 'snapshot-fixture-food-v0',
-        availableGrams: 40
-      }]
-    };
-    const inventory = {
-      ...previousInventory,
-      id: 'inventory-2',
-      version: 2,
-      createdAt: '2026-08-19T00:03:00.000Z',
-      items: [...previousInventory.items, {
-        foodId: photoCandidate.foodId,
-        nutritionSnapshotId: photoCandidate.nutritionSnapshotId,
-        availableGrams: 125
-      }]
-    };
-    const recognized = recognizedPhotoVersions('user-a');
-    const latest = recognized[2];
-    if (latest === undefined) throw new Error('Expected recognized photo');
-    const confirmed: IngredientPhotoVersion = {
-      ...latest,
-      id: 'ingredient-photo-version-4',
-      revision: 4,
-      createdAt: inventory.createdAt,
-      workflowStatus: 'confirmed',
-      storageStatus: 'cleanup_pending',
-      confirmedCandidateId: photoCandidate.id,
-      confirmedGrams: 125,
-      inventoryVersionId: inventory.id,
-      nextCleanupAt: inventory.createdAt
-    };
-
-    expect(() => {
-      assertPlanningAggregateInvariants({
-        ...state,
-        inventories: [previousInventory, inventory],
-        ingredientPhotoVersions: [...recognized, confirmed],
-        activeInventoryVersionId: inventory.id,
-        nextPhotoCleanupAt: confirmed.nextCleanupAt
+        ingredientPhotoVersions: [validPhotoVersion('user-a', inventory.id)],
+        activeInventoryVersionId: inventory.id
       }, 'user-a');
     }).not.toThrow();
   });
@@ -895,16 +656,14 @@ describe('planning aggregate invariants', () => {
       const state = await stateWithConfirmedPhoto();
       const previousInventory = state.inventories[0];
       const confirmedInventory = state.inventories[1];
-      const confirmed = state.ingredientPhotoVersions[3];
-      if (previousInventory === undefined || confirmedInventory === undefined || confirmed === undefined) {
-        throw new Error('Expected confirmed photo and inventory');
+      if (previousInventory === undefined || confirmedInventory === undefined) {
+        throw new Error('Expected confirmed photo inventory');
       }
       const previousAmount = previousInventory.items.find((item) => (
         item.foodId === photoCandidate.foodId
         && item.nutritionSnapshotId === photoCandidate.nutritionSnapshotId
       ));
       if (previousAmount === undefined) throw new Error('Expected previous inventory item');
-
       expectCorrupt({
         ...state,
         inventories: state.inventories.map((inventory) => (
@@ -920,16 +679,17 @@ describe('planning aggregate invariants', () => {
               }
             : inventory
         )),
-        ingredientPhotoVersions: state.ingredientPhotoVersions.map((photo) => (
-          photo.id === confirmed.id ? { ...photo, confirmedGrams } : photo
-        ))
+        ingredientPhotoVersions: state.ingredientPhotoVersions.map((photo) => ({
+          ...photo,
+          confirmedGrams
+        }))
       });
     }
   );
 
-  test('rejects rewriting confirmation fields in a later photo revision', async () => {
+  test('rejects rewriting confirmation fields in a later revision', async () => {
     const state = await stateWithConfirmedPhoto();
-    const confirmed = state.ingredientPhotoVersions[3];
+    const confirmed = state.ingredientPhotoVersions[0];
     const previousInventory = state.inventories[1];
     if (confirmed === undefined || previousInventory === undefined) {
       throw new Error('Expected confirmed photo and inventory');
@@ -946,34 +706,19 @@ describe('planning aggregate invariants', () => {
           : item.availableGrams
       }))
     };
-    const rewritten: IngredientPhotoVersion = {
-      ...confirmed,
-      id: 'ingredient-photo-version-5',
-      revision: 5,
-      createdAt: rewrittenInventory.createdAt,
-      confirmedGrams: 50,
-      inventoryVersionId: rewrittenInventory.id
-    };
-
     expectCorrupt({
       ...state,
       inventories: [...state.inventories, rewrittenInventory],
-      ingredientPhotoVersions: [...state.ingredientPhotoVersions, rewritten],
+      ingredientPhotoVersions: [...state.ingredientPhotoVersions, {
+        ...confirmed,
+        id: 'ingredient-photo-version-2',
+        revision: 2,
+        createdAt: rewrittenInventory.createdAt,
+        confirmedGrams: 50,
+        inventoryVersionId: rewrittenInventory.id
+      }],
       activeInventoryVersionId: rewrittenInventory.id
     });
-  });
-
-  test('rejects a next photo cleanup pointer that is not derived from latest revisions', async () => {
-    const state = await createValidState();
-    const corrupt = {
-      ...state,
-      ingredientPhotoVersions: [validPhotoVersion('user-a')],
-      nextPhotoCleanupAt: '2026-08-20T00:00:00.000Z'
-    };
-    expect(() => {
-      assertPlanningAggregateInvariants(corrupt, 'user-a');
-    })
-      .toThrow(CorruptPlanningStateError);
   });
 
   test('accepts an aggregate created by the real application service', async () => {

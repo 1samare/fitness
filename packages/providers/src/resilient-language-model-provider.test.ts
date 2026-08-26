@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   LanguageModelBackendError,
   type AssistantLanguageModelBackend
-} from './cloudbase-language-model-backend';
+} from './language-model-backend';
 import {
   ResilientLanguageModelProvider,
   type LanguageModelProviderObservation
@@ -27,7 +27,7 @@ function providerHarness(options: {
 }) {
   const observations = options.observations ?? [];
   const provider = new ResilientLanguageModelProvider({
-    providerId: 'cloudbase',
+    providerId: 'openai-compatible-browser-test',
     modelName: 'deepseek-v4-flash',
     backend: options.backend,
     nowMs: options.nowMs ?? (() => Date.now()),
@@ -58,7 +58,7 @@ describe('ResilientLanguageModelProvider', () => {
       requestId: 'supplier-request-1'
     });
     expect(observations).toEqual([{
-      provider: 'cloudbase',
+      provider: 'openai-compatible-browser-test',
       model: 'deepseek-v4-flash',
       requestId: 'supplier-request-1',
       repairAttempt: 0,
@@ -162,7 +162,7 @@ describe('ResilientLanguageModelProvider', () => {
   it('does not let observation failures change outcomes or circuit state', async () => {
     const backend = { generate: vi.fn().mockResolvedValue({ rawText: '{}' }) };
     const provider = new ResilientLanguageModelProvider({
-      providerId: 'cloudbase',
+      providerId: 'openai-compatible-browser-test',
       modelName: 'hunyuan-turbos-latest',
       backend,
       nowMs: () => 0,

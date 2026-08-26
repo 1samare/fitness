@@ -757,7 +757,6 @@ describe('versioned planning service', () => {
       code: 'personal_data_document_not_found'
     });
     await expect(repository.read('user-a')).resolves.toMatchObject({
-      accountDeletion: null,
       bodyProfiles: []
     });
   });

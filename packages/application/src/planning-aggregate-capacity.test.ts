@@ -81,54 +81,22 @@ describe('planning aggregate capacity', () => {
       .toThrow(AccountCapacityExceededError);
   });
 
-  test('allows an oversized legacy state to add only its pending deletion marker', async () => {
+  test('rejects every transition whose next aggregate exceeds the limit', async () => {
     const empty = await new InMemoryPlanningRepository().read('user-a');
-    const legacy = {
+    const oversized = {
       ...empty,
       assistantConversation: {
         ...empty.assistantConversation,
         recentMessages: [{
-          turnId: 'legacy-large-turn',
+          turnId: 'oversized-turn',
           role: 'user' as const,
           content: 'a'.repeat(PLANNING_AGGREGATE_MAX_UTF8_BYTES),
           createdAt: '2026-08-20T00:00:00.000Z'
         }]
       }
     } satisfies PlanningAggregateState;
-    const pending = {
-      ...legacy,
-      accountDeletion: {
-        status: 'pending' as const,
-        idempotencyKey: 'delete-account-legacy-001',
-        requestFingerprint: `v2:sha256:${'a'.repeat(64)}`,
-        snapshotToken: 'b'.repeat(64),
-        requestedAt: '2026-08-20T01:00:00.000Z',
-        privateFileIds: []
-      }
-    };
 
-    expect(() => { assertPlanningAggregateCapacityTransition(legacy, pending); }).not.toThrow();
-    expect(() => { assertPlanningAggregateCapacityTransition(legacy, {
-      ...pending,
-      bodyProfiles: [{
-        kind: 'body_profile_version',
-        id: 'unexpected-profile',
-        userId: 'user-a',
-        version: 1,
-        createdAt: '2026-08-20T01:00:00.000Z',
-        payload: {
-          ageYears: 30,
-          sexCode: 0,
-          heightCm: 175,
-          weightKg: 70,
-          healthScopeConfirmed: true,
-          nonTrainingActivity: 'light',
-          allergens: [],
-          avoidFoods: [],
-          dietPreferences: [],
-          businessTimezone: 'Asia/Shanghai'
-        }
-      }]
-    }); }).toThrow(AccountCapacityExceededError);
+    expect(() => { assertPlanningAggregateCapacityTransition(empty, oversized); })
+      .toThrow(AccountCapacityExceededError);
   });
 });

@@ -148,11 +148,7 @@ export type PlanningWriteOperation =
   | 'recordTrainingCompletion'
   | 'decideMealPlanCandidate'
   | 'retryPendingRecalculation'
-  | 'createIngredientPhotoUpload'
-  | 'registerIngredientPhotoUpload'
-  | 'recognizeIngredientPhoto'
-  | 'confirmIngredientCandidate'
-  | 'cleanupIngredientPhoto';
+  | 'confirmIngredientCandidate';
 
 type SingleResultIdempotencyRecord<TOperation extends PlanningWriteOperation> = {
   readonly operation: TOperation;
@@ -173,11 +169,7 @@ export type IdempotencyRecord =
   | SingleResultIdempotencyRecord<'recordTrainingCompletion'>
   | SingleResultIdempotencyRecord<'decideMealPlanCandidate'>
   | SingleResultIdempotencyRecord<'retryPendingRecalculation'>
-  | SingleResultIdempotencyRecord<'createIngredientPhotoUpload'>
-  | SingleResultIdempotencyRecord<'registerIngredientPhotoUpload'>
-  | SingleResultIdempotencyRecord<'recognizeIngredientPhoto'>
   | SingleResultIdempotencyRecord<'confirmIngredientCandidate'>
-  | SingleResultIdempotencyRecord<'cleanupIngredientPhoto'>
   | {
       readonly operation: 'completePlanningSetup';
       readonly key: string;
@@ -191,18 +183,8 @@ export type IdempotencyRecord =
       };
     };
 
-export interface PendingAccountDeletion {
-  readonly status: 'pending';
-  readonly idempotencyKey: string;
-  readonly requestFingerprint: string;
-  readonly snapshotToken: string;
-  readonly requestedAt: string;
-  readonly privateFileIds: readonly string[];
-}
-
 export interface PlanningAggregateState {
   readonly assistantConversation: AssistantConversationState;
-  readonly accountDeletion: PendingAccountDeletion | null;
   readonly bodyProfiles: readonly BodyProfileVersion[];
   readonly goals: readonly GoalVersion[];
   readonly trainingPlans: readonly TrainingPlanVersion[];
@@ -222,7 +204,6 @@ export interface PlanningAggregateState {
   readonly activeTrainingPlanVersionId: string | null;
   readonly activeInventoryVersionId: string | null;
   readonly activeMealPlanVersionId: string | null;
-  readonly nextPhotoCleanupAt: string | null;
 }
 
 export interface CurrentPlanningContext {

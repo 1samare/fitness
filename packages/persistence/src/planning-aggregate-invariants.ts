@@ -1,6 +1,5 @@
-import { addBusinessDays, planningAggregateStateSchema } from '@fitness/contracts';
+import { addBusinessDays } from '@fitness/contracts';
 import {
-  deriveNextPhotoCleanupAt,
   type IngredientPhotoVersion,
   type IdempotencyRecord,
   type InventoryVersion,
@@ -23,22 +22,6 @@ function corrupt(): never {
 
 function assertUnique(values: readonly string[]): void {
   if (new Set(values).size !== values.length) corrupt();
-}
-
-function assertAccountDeletion(
-  accountDeletion: PlanningAggregateState['accountDeletion']
-): void {
-  if (accountDeletion === null) return;
-  const requestedAt = Date.parse(accountDeletion.requestedAt);
-  if (
-    accountDeletion.idempotencyKey.length === 0
-    || accountDeletion.requestFingerprint.length === 0
-    || accountDeletion.snapshotToken.length === 0
-    || !Number.isFinite(requestedAt)
-    || new Date(requestedAt).toISOString() !== accountDeletion.requestedAt
-    || accountDeletion.privateFileIds.some((fileId) => !fileId.startsWith('cloud://'))
-  ) corrupt();
-  assertUnique(accountDeletion.privateFileIds);
 }
 
 function assertContiguous(versions: readonly number[]): void {
@@ -239,13 +222,7 @@ function assertIdempotencyResult(
     if (!entityIds.recalculationJobs.has(record.resultVersionId)) corrupt();
     return;
   }
-  if (
-    record.operation === 'createIngredientPhotoUpload'
-    || record.operation === 'registerIngredientPhotoUpload'
-    || record.operation === 'recognizeIngredientPhoto'
-    || record.operation === 'confirmIngredientCandidate'
-    || record.operation === 'cleanupIngredientPhoto'
-  ) {
+  if (record.operation === 'confirmIngredientCandidate') {
     if (!entityIds.ingredientPhotos.has(record.resultVersionId)) corrupt();
     return;
   }
@@ -297,19 +274,6 @@ function assertIngredientPhotoVersions(
     values.push(version);
     byPhotoId.set(version.photoId, values);
   }
-  const workflowTransitions: Readonly<Record<IngredientPhotoVersion['workflowStatus'], readonly IngredientPhotoVersion['workflowStatus'][]>> = {
-    awaiting_upload: ['awaiting_upload', 'uploaded'],
-    uploaded: ['uploaded', 'recognized', 'recognition_failed'],
-    recognized: ['recognized', 'confirmed'],
-    recognition_failed: ['recognized', 'recognition_failed'],
-    confirmed: ['confirmed']
-  };
-  const storageTransitions: Readonly<Record<IngredientPhotoVersion['storageStatus'], readonly IngredientPhotoVersion['storageStatus'][]>> = {
-    retained: ['retained', 'cleanup_pending', 'cleanup_failed', 'deleted'],
-    cleanup_pending: ['cleanup_pending', 'cleanup_failed', 'deleted'],
-    cleanup_failed: ['cleanup_failed', 'cleanup_pending', 'deleted'],
-    deleted: ['deleted']
-  };
   for (const versionsForPhoto of byPhotoId.values()) {
     const ordered = [...versionsForPhoto].sort((left, right) => left.revision - right.revision);
     assertContiguous(ordered.map((version) => version.revision));
@@ -318,90 +282,72 @@ function assertIngredientPhotoVersions(
     for (let index = 0; index < ordered.length; index += 1) {
       const version = ordered[index];
       if (version === undefined) corrupt();
-      if (index === 0) {
-        const uploadCreatedAt = Date.parse(version.uploadCreatedAt);
-        if (
-          !Number.isFinite(uploadCreatedAt)
-          || version.deleteDueAt !== new Date(uploadCreatedAt + 23 * 60 * 60 * 1_000).toISOString()
-          || version.nextCleanupAt !== version.deleteDueAt
-        ) corrupt();
-      }
+      const createdAt = Date.parse(version.createdAt);
       if (
-        version.userId !== first.userId
-        || version.uploadCreatedAt !== first.uploadCreatedAt
-        || version.deleteDueAt !== first.deleteDueAt
-        || version.expectedCloudPath !== first.expectedCloudPath
-        || version.expectedPrivateFileId !== first.expectedPrivateFileId
+        !Number.isFinite(createdAt)
+        || new Date(createdAt).toISOString() !== version.createdAt
+        || version.userId !== first.userId
         || version.mediaType !== first.mediaType
+        || version.candidates.length === 0
+        || version.candidates.length > 5
       ) corrupt();
       assertUnique(version.candidates.map((candidate) => candidate.id));
-      const confirmed = version.confirmedCandidateId === null
-        ? undefined
-        : version.candidates.find((candidate) => candidate.id === version.confirmedCandidateId);
+      if (version.candidates.some((candidate) => (
+        candidate.id.trim() === ''
+        || candidate.foodId.trim() === ''
+        || candidate.nutritionSnapshotId.trim() === ''
+        || candidate.canonicalNameZh.trim() === ''
+        || !Number.isFinite(candidate.confidence)
+        || candidate.confidence < 0
+        || candidate.confidence > 1
+      ))) corrupt();
+      const confirmed = version.candidates.find(
+        (candidate) => candidate.id === version.confirmedCandidateId
+      );
       if (
-        (version.confirmedCandidateId === null) !== (version.confirmedGrams === null)
-        || (version.confirmedCandidateId === null) !== (version.inventoryVersionId === null)
-        || (version.workflowStatus === 'confirmed') !== (confirmed !== undefined)
-        || (version.workflowStatus === 'recognition_failed')
-          !== (version.recognitionFailureCode === 'no_supported_candidate')
+        confirmed === undefined
+        || !Number.isSafeInteger(version.confirmedGrams)
+        || version.confirmedGrams <= 0
       ) corrupt();
-      if (confirmed !== undefined) {
-        const confirmedGrams = version.confirmedGrams;
-        if (
-          confirmedGrams === null
-          || !Number.isSafeInteger(confirmedGrams)
-          || confirmedGrams <= 0
-        ) corrupt();
-        const inventory = version.inventoryVersionId === null
-          ? undefined
-          : inventories.get(version.inventoryVersionId);
-        if (!inventory || inventory.userId !== version.userId || !inventory.items.some((item) => (
-          item.foodId === confirmed.foodId
-          && item.nutritionSnapshotId === confirmed.nutritionSnapshotId
-        ))) corrupt();
-        const previousInventory = [...inventories.values()].find((candidate) => (
-          candidate.userId === version.userId
-          && candidate.version === inventory.version - 1
-        ));
-        if (inventory.version > 1 && previousInventory === undefined) corrupt();
-        const priorAmounts = new Map((previousInventory?.items ?? []).map((item) => [
-          `${item.foodId}\u0000${item.nutritionSnapshotId}`,
-          item.availableGrams
-        ]));
-        const confirmedInventoryAmounts = new Map(inventory.items.map((item) => [
-          `${item.foodId}\u0000${item.nutritionSnapshotId}`,
-          item.availableGrams
-        ]));
-        for (const [identity, priorAmount] of priorAmounts) {
-          const currentAmount = confirmedInventoryAmounts.get(identity);
-          const confirmedIdentity = `${confirmed.foodId}\u0000${confirmed.nutritionSnapshotId}`;
-          const expectedAmount = identity === confirmedIdentity
-            ? priorAmount + confirmedGrams
-            : priorAmount;
-          if (currentAmount !== expectedAmount) corrupt();
-        }
-        for (const [identity, currentAmount] of confirmedInventoryAmounts) {
-          if (priorAmounts.has(identity)) continue;
-          const confirmedIdentity = `${confirmed.foodId}\u0000${confirmed.nutritionSnapshotId}`;
-          if (identity !== confirmedIdentity || currentAmount !== confirmedGrams) corrupt();
-        }
+      const confirmedGrams = version.confirmedGrams;
+      const inventory = inventories.get(version.inventoryVersionId);
+      if (!inventory || inventory.userId !== version.userId || !inventory.items.some((item) => (
+        item.foodId === confirmed.foodId
+        && item.nutritionSnapshotId === confirmed.nutritionSnapshotId
+      ))) corrupt();
+      const previousInventory = [...inventories.values()].find((candidate) => (
+        candidate.userId === version.userId
+        && candidate.version === inventory.version - 1
+      ));
+      if (inventory.version > 1 && previousInventory === undefined) corrupt();
+      const priorAmounts = new Map((previousInventory?.items ?? []).map((item) => [
+        `${item.foodId}\u0000${item.nutritionSnapshotId}`,
+        item.availableGrams
+      ]));
+      const confirmedInventoryAmounts = new Map(inventory.items.map((item) => [
+        `${item.foodId}\u0000${item.nutritionSnapshotId}`,
+        item.availableGrams
+      ]));
+      for (const [identity, priorAmount] of priorAmounts) {
+        const currentAmount = confirmedInventoryAmounts.get(identity);
+        const confirmedIdentity = `${confirmed.foodId}\u0000${confirmed.nutritionSnapshotId}`;
+        const expectedAmount = identity === confirmedIdentity
+          ? priorAmount + confirmedGrams
+          : priorAmount;
+        if (currentAmount !== expectedAmount) corrupt();
       }
-      if (version.storageStatus === 'deleted') {
-        if (version.deletedAt === null || version.nextCleanupAt !== null) corrupt();
-      } else if (version.deletedAt !== null) corrupt();
-      if ((version.storageStatus === 'cleanup_failed')
-        !== (version.lastCleanupFailureCode === 'storage_unavailable')) corrupt();
+      for (const [identity, currentAmount] of confirmedInventoryAmounts) {
+        if (priorAmounts.has(identity)) continue;
+        const confirmedIdentity = `${confirmed.foodId}\u0000${confirmed.nutritionSnapshotId}`;
+        if (identity !== confirmedIdentity || currentAmount !== confirmedGrams) corrupt();
+      }
       if (index > 0) {
         const previous = ordered[index - 1];
         if (previous === undefined
-          || !workflowTransitions[previous.workflowStatus].includes(version.workflowStatus)
-          || !storageTransitions[previous.storageStatus].includes(version.storageStatus)
-        ) corrupt();
-        if (previous.workflowStatus === 'confirmed' && (
-          version.confirmedCandidateId !== previous.confirmedCandidateId
+          || version.confirmedCandidateId !== previous.confirmedCandidateId
           || version.confirmedGrams !== previous.confirmedGrams
           || version.inventoryVersionId !== previous.inventoryVersionId
-        )) corrupt();
+        ) corrupt();
         if (previous.candidates.length > 0 && (
           previous.candidates.length !== version.candidates.length
           || previous.candidates.some((candidate) => {
@@ -665,7 +611,6 @@ export function assertPlanningAggregateInvariants(
   userId: string
 ): void {
   assertAssistantConversation(state.assistantConversation);
-  assertAccountDeletion(state.accountDeletion);
   const ownedRecords = [
     ...state.bodyProfiles,
     ...state.goals,
@@ -720,9 +665,6 @@ export function assertPlanningAggregateInvariants(
   );
   const inventories = new Map(state.inventories.map((value) => [value.id, value]));
   assertIngredientPhotoVersions(state.ingredientPhotoVersions, inventories);
-  if (deriveNextPhotoCleanupAt(state.ingredientPhotoVersions) !== state.nextPhotoCleanupAt) {
-    corrupt();
-  }
   const mealPlans = new Map(state.mealPlans.map((value) => [value.id, value]));
   const events = new Map(state.outboxEvents.map((value) => [value.eventId, value]));
   const completions = new Map(
@@ -1201,8 +1143,37 @@ export function parseAndAssertPlanningState(
   state: unknown,
   userId: string
 ): PlanningAggregateState {
-  const parsed = planningAggregateStateSchema.safeParse(state);
-  if (!parsed.success) throw new CorruptPlanningStateError();
-  assertPlanningAggregateInvariants(parsed.data, userId);
-  return parsed.data;
+  if (!isPlanningAggregateState(state)) throw new CorruptPlanningStateError();
+  try {
+    assertPlanningAggregateInvariants(state, userId);
+    return state;
+  } catch {
+    throw new CorruptPlanningStateError();
+  }
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === 'string';
+}
+
+function isPlanningAggregateState(value: unknown): value is PlanningAggregateState {
+  if (!isRecord(value) || !isRecord(value.assistantConversation)) return false;
+  const arrayFields = [
+    'bodyProfiles', 'goals', 'trainingPlans', 'dailyEnergyTargets',
+    'dailyNutritionTargets', 'inventories', 'mealPlans', 'mealPlanTargetDiffs',
+    'mealPlanDecisions', 'trainingCompletionEvents', 'recalculationJobs',
+    'ingredientPhotoVersions', 'outboxEvents', 'idempotencyRecords'
+  ];
+  if (arrayFields.some((field) => !Array.isArray(value[field]))) return false;
+  return [
+    value.activeBodyProfileVersionId,
+    value.activeGoalVersionId,
+    value.activeTrainingPlanVersionId,
+    value.activeInventoryVersionId,
+    value.activeMealPlanVersionId
+  ].every(isNullableString);
 }

@@ -1,4 +1,0 @@
-{
-  "read": "auth != null && /^ingredient-photos\\//.test(resource.path) == true && resource.openid == auth.openid",
-  "write": "auth != null && /^ingredient-photos\\//.test(resource.path) == true && resource.openid == auth.openid"
-}

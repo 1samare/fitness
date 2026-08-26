@@ -1,4 +1,0 @@
-{
-  "desc": "Fitness local phase one",
-  "rules": [{ "action": "allow", "page": "pages/planning-preview/index" }]
-}

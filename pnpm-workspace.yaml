@@ -1,4 +1,4 @@
 packages:
   - packages/*
   - data/*
-  - cloudfunctions/*
+  - apps/*
